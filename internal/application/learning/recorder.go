@@ -7,6 +7,7 @@ package learning
 
 import (
 	"context"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,9 +29,14 @@ func NewRecorder(store storage.LearningEventRepository, bus events.EventBus) *Re
 // Record fills ev's ID and OccurredAt when they're zero, appends it to the
 // store, then publishes it on the bus. The append and the publish are
 // ordered deliberately: an event is durable before anything reacts to it.
-// If Append fails, Record returns that error without publishing. If
-// Publish fails, Record still returns the error, but the appended row
-// stays — events are never rolled back once written.
+//
+// Record's durability contract: it returns an error only when the event
+// failed to become durable, i.e. when Append fails — in that case Record
+// returns without publishing. Once the event is durably appended, Record
+// always returns nil. A Publish error means a downstream reactor failed
+// to react to an already-durable event, not that the event was lost, so
+// it is logged rather than returned: producers that call Record (writing,
+// feedback, corrections) must never fail because a subscriber errored.
 func (r *Recorder) Record(ctx context.Context, ev event.LearningEvent) error {
 	if ev.ID == "" {
 		ev.ID = uuid.NewString()
@@ -42,5 +48,8 @@ func (r *Recorder) Record(ctx context.Context, ev event.LearningEvent) error {
 	if err := r.store.Append(ctx, ev); err != nil {
 		return err
 	}
-	return r.bus.Publish(ctx, ev)
+	if err := r.bus.Publish(ctx, ev); err != nil {
+		slog.Error("event publish", "type", ev.Type, "err", err)
+	}
+	return nil
 }

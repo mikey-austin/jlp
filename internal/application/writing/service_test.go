@@ -86,12 +86,17 @@ func (f *fakeDocRepo) ListVersions(_ context.Context, identity learner.IdentityI
 
 // fakeEventStore is an in-memory storage.LearningEventRepository used to
 // assert which events the writing service records, without depending on
-// postgres.
+// postgres. appendErr, when set, simulates the event store being down so
+// tests can assert Open/Autosave still succeed for the caller.
 type fakeEventStore struct {
-	events []event.LearningEvent
+	events    []event.LearningEvent
+	appendErr error
 }
 
 func (f *fakeEventStore) Append(_ context.Context, ev event.LearningEvent) error {
+	if f.appendErr != nil {
+		return f.appendErr
+	}
 	f.events = append(f.events, ev)
 	return nil
 }
@@ -215,5 +220,41 @@ func TestAutosaveCrossIdentityReturnsErrNotFound(t *testing.T) {
 	}
 	if len(store.events) != baseline {
 		t.Fatalf("a failed Autosave recorded %d new events, want 0", len(store.events)-baseline)
+	}
+}
+
+// TestOpenAndAutosaveSucceedEvenWhenEventRecordingFails asserts the
+// controller decision that a learning-event recording failure must never
+// mask a successful write: the document was created/saved regardless of
+// whether the event ledger could be appended to, so Open and Autosave
+// must still return the document with a nil error. Event loss here is an
+// observability concern (logged inside the service), not a save failure.
+func TestOpenAndAutosaveSucceedEvenWhenEventRecordingFails(t *testing.T) {
+	store := &fakeEventStore{appendErr: errors.New("event store down")}
+	rec := learning.NewRecorder(store, inprocbus.New())
+	svc := appwriting.NewService(newFakeDocRepo(), rec)
+
+	doc, err := svc.Open(context.Background(), "learner-a", "sess-1")
+	if err != nil {
+		t.Fatalf("Open returned error even though the document was created: %v", err)
+	}
+	if doc.ID == "" {
+		t.Fatal("Open did not return the created document")
+	}
+
+	saved, err := svc.Autosave(context.Background(), "learner-a", doc.ID, "昨日、映画を見た。")
+	if err != nil {
+		t.Fatalf("Autosave returned error even though the write succeeded: %v", err)
+	}
+	if saved.Content != "昨日、映画を見た。" {
+		t.Fatalf("Autosave did not return the saved content: got %q", saved.Content)
+	}
+	if saved.Version != doc.Version+1 {
+		t.Fatalf("Autosave did not return the bumped version: got %d, want %d", saved.Version, doc.Version+1)
+	}
+	// No events made it into the store — the point is that this doesn't
+	// leak into the caller's result.
+	if len(store.events) != 0 {
+		t.Fatalf("appendErr store somehow recorded %d events, want 0", len(store.events))
 	}
 }

@@ -120,18 +120,23 @@ func TestRecordPropagatesStoreErrorsWithoutPublishing(t *testing.T) {
 	}
 }
 
-func TestRecordPropagatesPublishErrorButAppendStays(t *testing.T) {
+func TestRecordAbsorbsPublishErrorAndAppendStays(t *testing.T) {
 	order := []string{}
-	wantErr := errors.New("publish exploded")
 	store := &fakeEventStore{order: &order}
-	bus := &fakeBus{order: &order, publishErr: wantErr}
+	bus := &fakeBus{order: &order, publishErr: errors.New("publish exploded")}
 	rec := learning.NewRecorder(store, bus)
 
+	// A Publish error means a downstream reactor failed, not that the
+	// event was lost — Record must not surface it to the producer that
+	// called Record.
 	err := rec.Record(context.Background(), event.LearningEvent{Type: event.TypeWritingUpdated})
-	if !errors.Is(err, wantErr) {
-		t.Fatalf("Record err = %v, want %v", err, wantErr)
+	if err != nil {
+		t.Fatalf("Record err = %v, want nil (a publish error must not fail the producer)", err)
 	}
 	if len(store.appended) != 1 {
 		t.Fatalf("appended count = %d, want 1 (the append must stick even though publish failed)", len(store.appended))
+	}
+	if len(bus.published) != 1 {
+		t.Fatalf("published count = %d, want 1 (Publish is still attempted)", len(bus.published))
 	}
 }

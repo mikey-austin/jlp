@@ -2,12 +2,14 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
@@ -116,9 +118,16 @@ func (f *fakeDocRepo) ListVersions(context.Context, learner.IdentityID, writing.
 
 // fakeEventRepo is an in-memory storage.LearningEventRepository for
 // HTTP-layer tests: identity-scoped and newest-first like the real
-// adapter.
+// adapter. It records the arguments of the last ListRecent call so tests
+// can assert the activity handler scopes correctly, and listErr, when
+// set, simulates a repository failure.
 type fakeEventRepo struct {
 	byIdentity map[learner.IdentityID][]event.LearningEvent
+	listErr    error
+
+	lastIdentity learner.IdentityID
+	lastSession  *session.ID
+	lastLimit    int
 }
 
 func newFakeEventRepo() *fakeEventRepo {
@@ -131,6 +140,12 @@ func (f *fakeEventRepo) Append(_ context.Context, ev event.LearningEvent) error 
 }
 
 func (f *fakeEventRepo) ListRecent(_ context.Context, identity learner.IdentityID, sid *session.ID, limit int) ([]event.LearningEvent, error) {
+	f.lastIdentity = identity
+	f.lastSession = sid
+	f.lastLimit = limit
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
 	all := f.byIdentity[identity]
 	out := make([]event.LearningEvent, 0, len(all))
 	for i := len(all) - 1; i >= 0; i-- {
@@ -230,5 +245,66 @@ func TestSessionsWorkspaceCrossIdentityNotFound(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/"+string(created.ID), nil))
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestSessionsActivityRendersRecentEventsScopedToCallerAndSession(t *testing.T) {
+	opts := testOptionsWithSessions()
+	sess, err := opts.Sessions.Create(context.Background(), "dev", "旅行について書く", "Diary", session.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	events := opts.Events.(*fakeEventRepo)
+	sid := sess.ID
+	now := time.Now()
+	events.byIdentity["dev"] = []event.LearningEvent{
+		{ID: "ev-1", IdentityID: "dev", SessionID: &sid, Type: event.TypeWritingCreated, OccurredAt: now},
+		{ID: "ev-2", IdentityID: "dev", SessionID: &sid, Type: event.TypeWritingUpdated, OccurredAt: now.Add(time.Minute)},
+	}
+
+	srv := NewServer(opts) // testOptions() authenticates as identity "dev"
+	h := srv.HandlerForTest()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/"+string(sess.ID)+"/activity", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="activity-list"`) {
+		t.Fatalf("body missing the activity-list wrapper: %s", body)
+	}
+	if !strings.Contains(body, string(event.TypeWritingUpdated)) {
+		t.Fatalf("body missing %q: %s", event.TypeWritingUpdated, body)
+	}
+	if !strings.Contains(body, "<li>") {
+		t.Fatalf("body missing <li> event rows: %s", body)
+	}
+
+	if events.lastIdentity != "dev" {
+		t.Fatalf("ListRecent identity = %q, want dev", events.lastIdentity)
+	}
+	if events.lastSession == nil || *events.lastSession != sess.ID {
+		t.Fatalf("ListRecent session filter = %v, want %s", events.lastSession, sess.ID)
+	}
+}
+
+func TestSessionsActivityRepositoryErrorReturns500(t *testing.T) {
+	opts := testOptionsWithSessions()
+	sess, err := opts.Sessions.Create(context.Background(), "dev", "旅行について書く", "Diary", session.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	opts.Events.(*fakeEventRepo).listErr = errors.New("db down")
+
+	srv := NewServer(opts)
+	h := srv.HandlerForTest()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/"+string(sess.ID)+"/activity", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
