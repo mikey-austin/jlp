@@ -14,6 +14,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
+	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
@@ -87,6 +88,7 @@ func main() {
 			teacherAgent,
 			recorder,
 		)
+		analyticsSvc := analytics.NewService(postgres.NewAnalyticsRepository(pool))
 
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
@@ -110,6 +112,7 @@ func main() {
 			Writing:    writingSvc,
 			Events:     eventRepo,
 			Feedback:   feedbackSvc,
+			Analytics:  analyticsSvc,
 			AI:         aiGen,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)

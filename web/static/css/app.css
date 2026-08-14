@@ -38,3 +38,11 @@ main { padding:1rem; max-width:1400px; margin:0 auto; }
 .correction footer.resolved { color:var(--muted); font-size:.9rem; text-transform:capitalize; }
 .correction[data-status="accepted"] { opacity:.6; border-left:3px solid green; }
 .correction[data-status="rejected"] { opacity:.6; border-left:3px solid var(--accent); }
+.stat-grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(140px,1fr)); gap:1rem; margin:1rem 0 1.5rem; }
+.stat-tile { border:1px solid var(--border); border-radius:.4rem; padding:1rem; text-align:center; }
+.stat-tile .stat-value { display:block; font-size:1.8rem; font-weight:700; color:var(--accent); }
+.stat-tile .stat-label { display:block; margin-top:.3rem; color:var(--muted); font-size:.85rem; }
+.error-types, .recent-sessions { list-style:none; padding:0; margin:0 0 1.5rem; }
+.error-types li, .recent-sessions li { display:flex; justify-content:space-between; padding:.4rem .2rem; border-bottom:1px solid var(--border); }
+.error-types li.empty, .recent-sessions li.empty { color:var(--muted); justify-content:flex-start; }
+.error-types .error-count { color:var(--muted); }

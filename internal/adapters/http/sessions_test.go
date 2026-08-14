@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -168,6 +169,10 @@ func testOptionsWithSessions() Options {
 	rec := learning.NewRecorder(events, inprocbus.New())
 	opts.Writing = appwriting.NewService(newFakeDocRepo(), rec)
 	opts.Events = events
+	// Zero-value stats by default; tests exercising the dashboard's
+	// content (TestHomeRenders et al.) override this with their own
+	// fakeAnalyticsRepo.
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{})
 	return opts
 }
 

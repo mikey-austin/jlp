@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,8 +10,27 @@ import (
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
+	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
+
+// fakeAnalyticsRepo is an in-memory storage.AnalyticsRepository double
+// for HTTP-layer tests: it returns whatever Statistics a test
+// configures, unconditionally (analytics doesn't need identity scoping
+// in these tests — the postgres repo's identity scoping is covered by
+// its own integration test).
+type fakeAnalyticsRepo struct {
+	stats storage.Statistics
+	err   error
+}
+
+func (f fakeAnalyticsRepo) Statistics(context.Context, learner.IdentityID) (storage.Statistics, error) {
+	return f.stats, f.err
+}
+
+var errStatistics = errors.New("statistics unavailable")
 
 func TestMain(m *testing.M) {
 	// Templates are read from web/templates relative to repo root.
@@ -73,14 +93,66 @@ func TestServerDoesNotTrustForwardedForHeader(t *testing.T) {
 	}
 }
 
+// TestHomeRenders covers the Task 14 dashboard: stat tiles built from
+// Options.Analytics, and a recent-sessions list built from
+// Options.Sessions.List.
 func TestHomeRenders(t *testing.T) {
-	srv := NewServer(testOptions())
+	opts := testOptionsWithSessions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{stats: storage.Statistics{
+		RunesWritten:         250,
+		SessionCount:         1,
+		FeedbackRequests:     3,
+		CorrectionsPresented: 4,
+		CorrectionsAccepted:  3,
+		CorrectionsRejected:  1,
+		TopErrorTypes:        []storage.ErrorTypeCount{{Type: "conjugation", Count: 3}},
+	}})
+	sess, err := opts.Sessions.Create(context.Background(), "dev", "旅行について書く", "Diary", session.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(opts)
 	rec := httptest.NewRecorder()
 	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusOK {
-		t.Fatalf("home status = %d", rec.Code)
+		t.Fatalf("home status = %d, body=%s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), "ようこそ") {
-		t.Fatalf("home body missing greeting")
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="stat-grid"`) {
+		t.Fatalf("home body missing stat-grid: %s", body)
+	}
+	if !strings.Contains(body, "250") {
+		t.Fatalf("home body missing RunesWritten tile value: %s", body)
+	}
+	if !strings.Contains(body, "75%") {
+		t.Fatalf("home body missing AcceptanceRate as a percentage (3/(3+1)=75%%): %s", body)
+	}
+	if !strings.Contains(body, "16.0") {
+		t.Fatalf("home body missing CorrectionsPer1000 (4/250*1000=16.0): %s", body)
+	}
+	if !strings.Contains(body, "conjugation") {
+		t.Fatalf("home body missing top error type: %s", body)
+	}
+	if !strings.Contains(body, "/sessions/"+string(sess.ID)) {
+		t.Fatalf("home body missing recent session link: %s", body)
+	}
+	if !strings.Contains(body, "旅行について書く") {
+		t.Fatalf("home body missing recent session title: %s", body)
+	}
+}
+
+// TestHomeStatisticsRepositoryErrorReturns500 mirrors the existing
+// activity-feed error handling (TestSessionsActivityRepositoryErrorReturns500):
+// a statistics failure must surface as 500, not a partial/blank dashboard.
+func TestHomeStatisticsRepositoryErrorReturns500(t *testing.T) {
+	opts := testOptionsWithSessions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{err: errStatistics})
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }

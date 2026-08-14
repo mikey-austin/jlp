@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -25,6 +26,9 @@ type Options struct {
 	// correction accept/reject buttons (Task 13): it wraps the Teacher
 	// agent with authorization, persistence, and learning events.
 	Feedback *feedback.Service
+	// Analytics drives the home dashboard's stat tiles and よくある間違い
+	// list (Task 14).
+	Analytics *analytics.Service
 	// AI is the always-observed structured generator (fake or Anthropic
 	// underneath). No route consumes it directly — the teacher feedback
 	// pipeline (Task 12/13) goes through Feedback above — but it's
@@ -60,10 +64,7 @@ func (s *Server) routes() http.Handler {
 	r.Handle("/static/*", fs)
 	r.Group(func(r chi.Router) {
 		r.Use(RequireIdentity(s.opts.Auth, s.opts.Identities))
-		r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-			ident, _ := IdentityFrom(r.Context())
-			Render(w, r, "home", map[string]any{"Title": "JLP", "Identity": ident})
-		})
+		r.Get("/", s.home)
 		r.Get("/sessions", s.sessionsList)
 		r.Post("/sessions", s.sessionsCreate)
 		r.Get("/sessions/{id}", s.sessionsWorkspace)
@@ -76,3 +77,40 @@ func (s *Server) routes() http.Handler {
 }
 
 func (s *Server) HandlerForTest() http.Handler { return s.Handler }
+
+// recentSessionsLimit is how many of the caller's most-recently-updated
+// sessions the dashboard links to — Sessions.List already returns them
+// newest-first, so this just truncates.
+const recentSessionsLimit = 5
+
+// home renders the Task 14 dashboard: aggregate learner statistics
+// (stat tiles + よくある間違い) plus a short list of recent sessions to
+// jump back into.
+func (s *Server) home(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+
+	stats, err := s.opts.Analytics.Statistics(r.Context(), ident.ID)
+	if err != nil {
+		http.Error(w, "could not load statistics", http.StatusInternalServerError)
+		return
+	}
+	recent, err := s.opts.Sessions.List(r.Context(), ident.ID)
+	if err != nil {
+		http.Error(w, "could not load sessions", http.StatusInternalServerError)
+		return
+	}
+	if len(recent) > recentSessionsLimit {
+		recent = recent[:recentSessionsLimit]
+	}
+
+	Render(w, r, "home", map[string]any{
+		"Title":    "JLP",
+		"Identity": ident,
+		"Stats":    stats,
+		// AcceptancePercent is precomputed here rather than in the
+		// template: html/template has no arithmetic, so the ×100 for
+		// display happens on this side of the boundary.
+		"AcceptancePercent": stats.AcceptanceRate * 100,
+		"RecentSessions":    recent,
+	})
+}
