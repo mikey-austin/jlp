@@ -239,6 +239,7 @@ func (s *Service) SetCorrectionStatus(ctx context.Context, identity learner.Iden
 	}
 	if err := s.rec.Record(ctx, event.LearningEvent{
 		IdentityID: identity,
+		SessionID:  &rec.SessionID,
 		Type:       evType,
 		Subject:    rec.ID,
 		Evidence: map[string]any{

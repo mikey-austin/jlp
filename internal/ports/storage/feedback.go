@@ -30,7 +30,11 @@ type FeedbackRecord struct {
 // CorrectionRecord is one correction offered as part of a
 // FeedbackRecord. Status starts "presented" and transitions to
 // "accepted"/"rejected" as the learner responds — see
-// FeedbackRepository.UpdateCorrectionStatus.
+// FeedbackRepository.UpdateCorrectionStatus. SessionID is only
+// populated by UpdateCorrectionStatus (via a join back to the owning
+// feedback_requests row): InsertFeedback's caller already has it on
+// the FeedbackRecord, so it isn't duplicated onto the CorrectionRecord
+// there.
 type CorrectionRecord struct {
 	ID, FeedbackID               string
 	Position                     int
@@ -38,6 +42,7 @@ type CorrectionRecord struct {
 	Type, Severity               string
 	ExplanationJA, ExplanationEN string
 	Status                       string // "presented" | "accepted" | "rejected"
+	SessionID                    session.ID
 }
 
 // FeedbackRepository persists AI feedback requests and their

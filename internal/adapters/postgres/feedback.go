@@ -13,6 +13,7 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres/sqlcgen"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -147,5 +148,6 @@ func fromUpdateCorrectionStatusRow(row sqlcgen.UpdateCorrectionStatusRow) storag
 		ExplanationJA: row.ExplanationJa,
 		ExplanationEN: row.ExplanationEn,
 		Status:        row.Status,
+		SessionID:     session.ID(uuid.UUID(row.SessionID.Bytes).String()),
 	}
 }

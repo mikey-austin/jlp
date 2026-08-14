@@ -13,6 +13,8 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
+	"github.com/mikeyaustin/jlp/internal/agent/teacher"
+	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -77,6 +79,15 @@ func main() {
 		// remembering to wrap a specific adapter.
 		aiGen := observability.NewAIObserver(innerGen, postgres.NewAIRequestRepository(pool), aiPricing())
 
+		teacherAgent := teacher.New(aiGen)
+		feedbackSvc := feedback.NewService(
+			postgres.NewSessionRepository(pool),
+			postgres.NewDocumentRepository(pool),
+			postgres.NewFeedbackRepository(pool),
+			teacherAgent,
+			recorder,
+		)
+
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
 		case "static":
@@ -98,6 +109,7 @@ func main() {
 			Sessions:   sessionsSvc,
 			Writing:    writingSvc,
 			Events:     eventRepo,
+			Feedback:   feedbackSvc,
 			AI:         aiGen,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)

@@ -2,6 +2,16 @@ window.jlp = window.jlp || {};
 // Convert a UTF-16 index (textarea selectionStart/End) to a rune offset.
 window.jlp.runeOffset = (text, utf16Index) => Array.from(text.slice(0, utf16Index)).length;
 
+window.jlp.selectionPayload = () => {
+  const ta = document.getElementById("editor");
+  return {
+    document_id: ta.dataset.docId,
+    start: window.jlp.runeOffset(ta.value, ta.selectionStart),
+    end: window.jlp.runeOffset(ta.value, ta.selectionEnd),
+    text: ta.value.slice(ta.selectionStart, ta.selectionEnd),
+  };
+};
+
 (function () {
   const ta = document.getElementById("editor");
   if (!ta) return;

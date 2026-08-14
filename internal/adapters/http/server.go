@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
@@ -20,10 +21,14 @@ type Options struct {
 	Sessions   *sessions.Service
 	Writing    *appwriting.Service
 	Events     storage.LearningEventRepository
+	// Feedback drives the workspace's フィードバックを取得 button and
+	// correction accept/reject buttons (Task 13): it wraps the Teacher
+	// agent with authorization, persistence, and learning events.
+	Feedback *feedback.Service
 	// AI is the always-observed structured generator (fake or Anthropic
-	// underneath). No route consumes it yet — that arrives with the
-	// teacher feedback pipeline (Task 12) — but it's wired through here
-	// so that task only has to add handlers, not plumbing.
+	// underneath). No route consumes it directly — the teacher feedback
+	// pipeline (Task 12/13) goes through Feedback above — but it's
+	// wired through here in case a future task needs it directly.
 	AI ai.StructuredGenerator
 }
 
@@ -63,6 +68,8 @@ func (s *Server) routes() http.Handler {
 		r.Post("/sessions", s.sessionsCreate)
 		r.Get("/sessions/{id}", s.sessionsWorkspace)
 		r.Get("/sessions/{id}/activity", s.sessionsActivity)
+		r.Post("/sessions/{id}/feedback", s.feedbackRequest)
+		r.Post("/corrections/{id}/status", s.correctionStatus)
 		r.Post("/documents/{id}", s.documentsSave)
 	})
 	return r

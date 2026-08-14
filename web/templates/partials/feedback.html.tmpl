@@ -1,0 +1,11 @@
+{{define "feedback"}}
+<div class="feedback" data-ai-request="{{.AIRequestID}}">
+  {{if not .Cards}}<p class="all-good">問題は見つかりませんでした。よく書けています！</p>{{else}}
+  <div class="diff-block">
+    <h3>修正案</h3>
+    <p class="inline-diff">{{range .DiffSpans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
+  </div>
+  <div class="cards">{{range .Cards}}{{template "correction_card" .}}{{end}}</div>
+  {{end}}
+</div>
+{{end}}

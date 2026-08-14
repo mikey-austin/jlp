@@ -18,4 +18,4 @@ UPDATE corrections c SET status = $3
 FROM feedback_requests f
 WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2
 RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
-          c.type, c.severity, c.explanation_ja, c.explanation_en, c.status;
+          c.type, c.severity, c.explanation_ja, c.explanation_en, c.status, f.session_id;

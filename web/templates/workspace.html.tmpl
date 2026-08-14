@@ -19,7 +19,14 @@
     <h3>アクティビティ</h3>
     <div id="activity" hx-get="/sessions/{{.Session.ID}}/activity" hx-trigger="load, every 30s"></div>
   </aside>
-  <section id="feedback-pane"></section>
+  <section id="feedback-pane">
+    <button id="feedback-btn" hx-post="/sessions/{{.Session.ID}}/feedback"
+            hx-target="#feedback-results" hx-swap="innerHTML"
+            hx-vals="js:{...window.jlp.selectionPayload()}">
+      フィードバックを取得</button>
+    <span class="hint">（選択なし＝全文をレビュー）</span>
+    <div id="feedback-results"></div>
+  </section>
 </div>
 <script src="/static/js/app.js" defer></script>
 {{end}}

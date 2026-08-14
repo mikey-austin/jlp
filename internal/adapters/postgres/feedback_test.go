@@ -132,6 +132,9 @@ func TestFeedbackInsertAndUpdateCorrectionStatus(t *testing.T) {
 	if updated.ExplanationJA == "" || updated.ExplanationEN == "" {
 		t.Fatal("explanation fields were not returned")
 	}
+	if updated.SessionID != sess.ID {
+		t.Fatalf("SessionID = %q, want %q (the feedback pipeline's event needs this to scope correction.accepted to a session)", updated.SessionID, sess.ID)
+	}
 
 	// The second correction is untouched.
 	untouched, err := feedback.UpdateCorrectionStatus(ctx, identityA.ID, correction2ID, "rejected")

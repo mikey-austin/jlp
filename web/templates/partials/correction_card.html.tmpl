@@ -1,0 +1,16 @@
+{{define "correction_card"}}
+<article class="correction" id="corr-{{.ID}}" data-status="{{.Status}}">
+  <header><span class="badge type">{{.Type}}</span>
+          <span class="badge sev sev-{{.Severity}}">{{.Severity}}</span></header>
+  <p class="pair"><del>{{.Original}}</del> → <ins>{{.Replacement}}</ins></p>
+  <p class="inline-diff">{{range .DiffSpans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
+  <p class="expl ja">{{.ExplanationJA}}</p>
+  <p class="expl en">{{.ExplanationEN}}</p>
+  {{if eq .Status "presented"}}<footer>
+    <button hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"accepted"}'
+            hx-target="#corr-{{.ID}}" hx-swap="outerHTML">納得した</button>
+    <button hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"rejected"}'
+            hx-target="#corr-{{.ID}}" hx-swap="outerHTML">同意しない</button>
+  </footer>{{else}}<footer class="resolved">{{.Status}}</footer>{{end}}
+</article>
+{{end}}

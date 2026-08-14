@@ -131,6 +131,7 @@ func (f *fakeFeedbackRepo) UpdateCorrectionStatus(_ context.Context, identity le
 		return storage.CorrectionRecord{}, storage.ErrNotFound
 	}
 	c.Status = status
+	c.SessionID = fb.SessionID
 	f.corrections[correctionID] = c
 	return c, nil
 }
@@ -402,6 +403,14 @@ func TestSetCorrectionStatusAccepted(t *testing.T) {
 	}
 	if last.Subject != correctionID {
 		t.Fatalf("event Subject = %q, want %q", last.Subject, correctionID)
+	}
+	// Regression: the correction.accepted event must carry the owning
+	// session so the workspace's per-session activity feed (which
+	// filters ListRecent by session ID) actually shows it — a nil
+	// SessionID here would silently vanish from every session's
+	// activity pane.
+	if last.SessionID == nil || *last.SessionID != testSessionID {
+		t.Fatalf("event SessionID = %v, want %q", last.SessionID, testSessionID)
 	}
 }
 
