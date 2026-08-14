@@ -43,11 +43,12 @@ func (o *observer) GenerateStructured(ctx context.Context, req ai.StructuredRequ
 	latency := time.Since(start)
 
 	// Stamp identity/timing onto the response regardless of success so
-	// callers (and the record below) always have them.
+	// callers (and the record below) always have them. The decorator
+	// wraps the whole call, so its own measurement is the authoritative
+	// latency — it overrides whatever (if anything) the inner generator
+	// self-reported.
 	resp.RequestID = requestID
-	if resp.Latency == 0 {
-		resp.Latency = latency
-	}
+	resp.Latency = latency
 
 	rec := storage.AIRequestRecord{
 		ID:            requestID,

@@ -22,6 +22,13 @@ import (
 const (
 	provider = "fake"
 	model    = "fake-1"
+
+	// supportedSchema is the only schema the fake provider knows how to
+	// produce. A request for anything else is a caller bug (a new
+	// capability wired up without teaching the fake provider its
+	// shape) and must fail loudly rather than silently return
+	// correction-result JSON that doesn't match what was asked for.
+	supportedSchema = "correction_result.v1"
 )
 
 type explanation struct {
@@ -55,6 +62,11 @@ func New() ai.StructuredGenerator { return &generator{} }
 func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
 	start := time.Now()
 
+	if req.SchemaName != "" && req.SchemaName != supportedSchema {
+		return ai.StructuredResponse{Provider: provider, Model: model},
+			fmt.Errorf("fakeai: schema %q not supported (only %q)", req.SchemaName, supportedSchema)
+	}
+
 	result := correctionResult{Corrections: []correction{}}
 	for _, adj := range iAdjectivePastRules {
 		if c, ok := iAdjectivePastCorrection(adj, req.User); ok {
@@ -77,7 +89,11 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 
 	payload, err := json.Marshal(result)
 	if err != nil {
-		return ai.StructuredResponse{}, fmt.Errorf("fakeai: marshal response: %w", err)
+		// Provider/Model are known regardless of outcome, so set them
+		// even here: the observability decorator's audit record must be
+		// able to say which provider/model a failed call went through.
+		return ai.StructuredResponse{Provider: provider, Model: model},
+			fmt.Errorf("fakeai: marshal response: %w", err)
 	}
 
 	return ai.StructuredResponse{

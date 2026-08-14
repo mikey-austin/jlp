@@ -143,3 +143,32 @@ func TestFakeAdapterNoMatchReturnsEmptyCorrections(t *testing.T) {
 		t.Fatalf("Corrections = %+v, want empty", got.Corrections)
 	}
 }
+
+func TestFakeAdapterUnsupportedSchemaErrors(t *testing.T) {
+	gen := New()
+	req := ai.StructuredRequest{
+		PromptName:    "some.other.capability",
+		PromptVersion: "v1",
+		System:        "system prompt",
+		User:          "hello",
+		SchemaName:    "some_other_schema.v1",
+	}
+	resp, err := gen.GenerateStructured(context.Background(), req)
+	if err == nil {
+		t.Fatal("expected error for unsupported schema name, got nil")
+	}
+	// Provider/Model are known regardless of outcome, so the caller (and
+	// the observability decorator wrapping it) can still tell which
+	// provider/model the failed call went through.
+	if resp.Provider != "fake" || resp.Model != "fake-1" {
+		t.Errorf("Provider/Model on error = %q/%q, want fake/fake-1", resp.Provider, resp.Model)
+	}
+}
+
+func TestFakeAdapterEmptySchemaNameIsAccepted(t *testing.T) {
+	// A caller that omits SchemaName gets the (only) fake response shape
+	// rather than an error — the guard only rejects an explicit mismatch.
+	if _, err := New().GenerateStructured(context.Background(), ai.StructuredRequest{User: "hello"}); err != nil {
+		t.Fatalf("GenerateStructured with empty SchemaName returned error: %v", err)
+	}
+}
