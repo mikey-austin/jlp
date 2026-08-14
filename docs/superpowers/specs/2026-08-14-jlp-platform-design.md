@@ -82,7 +82,7 @@ Alternatives rejected:
 /internal/observability/  slog setup, AI request recording
 /web/templates/           Go templates (layouts, pages, partials for HTMX)
 /web/static/              CSS, vendored htmx/alpine, PWA manifest, service worker, icons
-/db/migrations/           goose SQL migrations
+/internal/adapters/postgres/migrationsfs/  goose SQL migrations (embedded; go:embed cannot reach outside the package)
 /db/queries/              sqlc query files
 /prompts/                 versioned prompt templates (teacher.feedback.v1.md, ...)
 /schemas/                 JSON Schemas for AI contracts (CorrectionResult, ...)
@@ -103,18 +103,18 @@ not import postgres, etc.).
 |---|---|---|---|
 | `app` | Dockerfile `dev` target (golang + air) | The Go monolith, hot reload | 8080 |
 | `postgres` | postgres:17-alpine | Primary store | 5432 |
-| `caddy` | caddy:2 | Reverse proxy + forward_auth | 8443 → app |
-| `authelia` | authelia/authelia:4 | Auth (file backend, dev users) | 9091 |
+| `caddy` | caddy:2 | Reverse proxy + forward_auth (profile `auth`, via `make up-auth`) | 8443 → app |
+| `authelia` | authelia/authelia:4 | Auth — file backend, dev users (profile `auth`) | 9091 |
 | `mailpit` | axllent/mailpit | Email testing (Phase 3) | 8025 UI |
 | `mosquitto` | eclipse-mosquitto:2 | MQTT (Phase 3, profile `mqtt`) | 1883 |
 | `ollama` | ollama/ollama | Local models (profile `ollama`) | 11434 |
 | `tools` | Dockerfile `dev` target | One-shot runner: tests, lint, migrations, sqlc, seed | — |
 
-Two browser entry points, both always valid:
+Two browser entry points:
 
-- `http://localhost:8080` — app directly (static identity when `APP_AUTH_MODE=static`)
-- `https://jlp.localhost:8443` — through Caddy + Authelia (real login flow; dev user
-  `mikey` / password in `.env`, self-signed cert)
+- `http://localhost:8080` — app directly (`make up`, static identity — the default inner loop)
+- `https://jlp.localhost:8443` — through Caddy + Authelia (`make up-auth`, real login flow;
+  dev user `mikey` / password in `.env`, self-signed cert)
 
 `.env` (gitignored, `.env.example` committed) carries secrets: `ANTHROPIC_API_KEY`,
 Authelia secrets, dev user password, `DEPLOY_HOST`.
