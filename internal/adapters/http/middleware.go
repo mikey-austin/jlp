@@ -28,11 +28,12 @@ func RequireIdentity(a auth.Authenticator, repo storage.IdentityRepository) func
 				http.Error(w, "unauthorized", http.StatusUnauthorized)
 				return
 			}
-			if _, done := seen.LoadOrStore(id.ID, true); !done {
+			if _, ok := seen.Load(id.ID); !ok {
 				if err := repo.Upsert(r.Context(), id); err != nil {
 					http.Error(w, "identity error", http.StatusInternalServerError)
 					return
 				}
+				seen.Store(id.ID, true)
 			}
 			next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey, id)))
 		})

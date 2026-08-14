@@ -17,9 +17,15 @@ type fakeAuth struct {
 
 func (f fakeAuth) Authenticate(*http.Request) (learner.Identity, error) { return f.id, f.err }
 
-type fakeIdentityRepo struct{ upserts int }
+type fakeIdentityRepo struct {
+	upserts int
+	err     error
+}
 
-func (f *fakeIdentityRepo) Upsert(context.Context, learner.Identity) error { f.upserts++; return nil }
+func (f *fakeIdentityRepo) Upsert(context.Context, learner.Identity) error {
+	f.upserts++
+	return f.err
+}
 func (f *fakeIdentityRepo) Get(_ context.Context, id learner.IdentityID) (learner.Identity, error) {
 	return learner.Identity{ID: id}, nil
 }
@@ -46,5 +52,53 @@ func TestRequireIdentityRejects(t *testing.T) {
 		ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("code=%d", rec.Code)
+	}
+}
+
+func TestRequireIdentityUpsertErrorReturns500AndBlocksHandler(t *testing.T) {
+	repo := &fakeIdentityRepo{err: errors.New("db down")}
+	called := false
+	mw := RequireIdentity(fakeAuth{id: learner.Identity{ID: "dev", DisplayName: "Dev"}}, repo)
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+	}))
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("code=%d, want 500", rec.Code)
+	}
+	if called {
+		t.Fatalf("downstream handler must not be called when upsert fails")
+	}
+	if repo.upserts != 1 {
+		t.Fatalf("upserts=%d, want 1", repo.upserts)
+	}
+}
+
+func TestRequireIdentityRetriesUpsertAfterFailure(t *testing.T) {
+	repo := &fakeIdentityRepo{err: errors.New("db down")}
+	var seen learner.Identity
+	mw := RequireIdentity(fakeAuth{id: learner.Identity{ID: "dev", DisplayName: "Dev"}}, repo)
+	h := mw(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen, _ = IdentityFrom(r.Context())
+	}))
+
+	rec1 := httptest.NewRecorder()
+	h.ServeHTTP(rec1, httptest.NewRequest("GET", "/", nil))
+	if rec1.Code != http.StatusInternalServerError {
+		t.Fatalf("first request code=%d, want 500", rec1.Code)
+	}
+
+	repo.err = nil // backing store recovers
+	rec2 := httptest.NewRecorder()
+	h.ServeHTTP(rec2, httptest.NewRequest("GET", "/", nil))
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second request code=%d, want 200", rec2.Code)
+	}
+	if seen.ID != "dev" {
+		t.Fatalf("seen=%+v, want identity injected", seen)
+	}
+	if repo.upserts != 2 {
+		t.Fatalf("upserts=%d, want 2 (retried after prior failure, not poisoned)", repo.upserts)
 	}
 }
