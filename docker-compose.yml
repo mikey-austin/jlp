@@ -69,3 +69,8 @@ networks:
     ipam:
       config:
         - subnet: 172.28.5.0/24
+          # Reserve the lower half of the subnet from dynamic allocation so a
+          # container started without a static address (postgres, app,
+          # authelia, tools) can never race Caddy for its pinned 172.28.5.9
+          # (used above in APP_AUTH_TRUSTEDPROXIES as the sole trusted peer).
+          ip_range: 172.28.5.128/25

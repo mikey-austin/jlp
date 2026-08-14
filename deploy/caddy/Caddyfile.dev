@@ -3,11 +3,31 @@
 }
 
 jlp.localhost:8443 {
-	forward_auth authelia:9091 {
-		uri /api/authz/forward-auth
-		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	# Defense in depth: strip any client-supplied Remote-* headers before
+	# forward_auth runs, so a spoofed header from an authenticated (or
+	# unauthenticated) client can never reach the app, even if copy_headers'
+	# overwrite behavior ever changes.
+	#
+	# This MUST be wrapped in an explicit `route` block: Caddy's default
+	# directive order runs forward_auth *before* request_header (verified
+	# via `caddy adapt`), so outside of `route`, these deletes would run
+	# after copy_headers has already written the real, trusted values —
+	# wiping out the legitimate headers on every request, including
+	# authenticated ones. Inside `route`, directives execute in the literal
+	# order written, so the strip happens first as intended. See
+	# task-5-report.md for the empirical verification of both orderings.
+	route {
+		request_header -Remote-User
+		request_header -Remote-Groups
+		request_header -Remote-Name
+		request_header -Remote-Email
+
+		forward_auth authelia:9091 {
+			uri /api/authz/forward-auth
+			copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+		}
+		reverse_proxy app:8080
 	}
-	reverse_proxy app:8080
 }
 
 auth.jlp.localhost:8443 {
