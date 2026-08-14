@@ -67,7 +67,19 @@ func (s *Server) routes() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))
 	})
+	// /offline: the PWA shell's offline fallback page (Task 17). It sits
+	// outside the auth group like /healthz — the service worker serves it
+	// from cache with no network (and thus no session) available.
+	r.Get("/offline", s.offline)
 	fs := http.StripPrefix("/static/", http.FileServer(http.Dir("web/static")))
+	// /static/sw.js needs its own exact-path route ahead of the wildcard
+	// below so we can set Service-Worker-Allowed: / on it — without that
+	// response header, a worker served from /static/ cannot register with
+	// scope '/' (the browser would otherwise restrict it to /static/*).
+	r.Get("/static/sw.js", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Service-Worker-Allowed", "/")
+		fs.ServeHTTP(w, r)
+	})
 	r.Handle("/static/*", fs)
 	r.Group(func(r chi.Router) {
 		r.Use(RequireIdentity(s.opts.Auth, s.opts.Identities))
@@ -103,6 +115,20 @@ func (s *Server) routes() http.Handler {
 }
 
 func (s *Server) HandlerForTest() http.Handler { return s.Handler }
+
+// offline renders the PWA shell's offline fallback (Task 17). It's
+// reached two ways: directly, as an ordinary page; and by the service
+// worker's fetch handler, which serves this precached response in
+// place of a failed navigation. Either way there's no authenticated
+// identity available, so the data passed to Render omits Identity —
+// the layout's {{with .Identity}} already tolerates that (see the
+// topnav, which renders without the "who" span for unauthenticated
+// requests).
+func (s *Server) offline(w http.ResponseWriter, r *http.Request) {
+	Render(w, r, "offline", map[string]any{
+		"Title": "オフライン",
+	})
+}
 
 // recentSessionsLimit is how many of the caller's most-recently-updated
 // sessions the dashboard links to — Sessions.List already returns them

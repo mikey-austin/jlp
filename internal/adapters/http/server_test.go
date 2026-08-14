@@ -164,3 +164,37 @@ func TestHomeStatisticsRepositoryErrorReturns500(t *testing.T) {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
+
+// TestOfflineRenders covers the Task 17 PWA shell's offline fallback:
+// it must render with no authentication required (like /healthz), since
+// the service worker serves it when the network — and thus any
+// session — is unavailable.
+func TestOfflineRenders(t *testing.T) {
+	srv := NewServer(testOptions())
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/offline", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("offline status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "オフライン") {
+		t.Fatalf("offline body missing オフライン: %s", rec.Body.String())
+	}
+}
+
+// TestStaticServiceWorkerHasServiceWorkerAllowedHeader covers the
+// registration prerequisite called out in Task 17: without this header,
+// a worker served from under /static/ cannot register with scope '/'.
+func TestStaticServiceWorkerHasServiceWorkerAllowedHeader(t *testing.T) {
+	srv := NewServer(testOptions())
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/static/sw.js", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("sw.js status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get("Service-Worker-Allowed"); got != "/" {
+		t.Fatalf("Service-Worker-Allowed = %q, want \"/\"", got)
+	}
+	if !strings.Contains(rec.Body.String(), "jlp-shell-v1") {
+		t.Fatalf("sw.js body missing cache name jlp-shell-v1: %s", rec.Body.String())
+	}
+}

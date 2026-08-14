@@ -12,6 +12,15 @@ window.jlp.selectionPayload = () => {
   };
 };
 
+// PWA shell: register the service worker on every page (not just the
+// editor), scoped to the whole app so it can intercept navigations and
+// serve the offline fallback.
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/static/sw.js", { scope: "/" });
+  });
+}
+
 (function () {
   const ta = document.getElementById("editor");
   if (!ta) return;
