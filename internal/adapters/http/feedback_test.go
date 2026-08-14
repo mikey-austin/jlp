@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -23,17 +24,27 @@ import (
 )
 
 // fakeGrammarRepo is a minimal storage.GrammarRepository double for the
-// HTTP-layer tests: they exercise the feedback request/response cycle,
-// not concept-tagging persistence (that contract lives in
-// application/feedback/service_test.go), so ListConcepts returns an
-// empty candidate list and every other method panics if ever called.
+// HTTP-layer tests. ListConcepts returns the same two slugs fakeai's
+// deterministic rules actually tag (see
+// internal/application/feedback/service_test.go's
+// knownConceptsForFakeAI, which this mirrors) so a correction's tag
+// resolves the same way it would against the real catalog — needed for
+// TestCorrectionStatusAcceptedKeepsConceptChip below, which checks a
+// resolved concept chip survives an accept. Every other method panics
+// if ever called: these tests don't exercise the rest of the catalog
+// surface.
 type fakeGrammarRepo struct{}
 
 func (fakeGrammarRepo) UpsertConcepts(context.Context, []grammar.Concept) error {
 	panic("not used by feedback http tests")
 }
 
-func (fakeGrammarRepo) ListConcepts(context.Context) ([]grammar.Concept, error) { return nil, nil }
+func (fakeGrammarRepo) ListConcepts(context.Context) ([]grammar.Concept, error) {
+	return []grammar.Concept{
+		{Slug: "i-adjective-past", Name: "い-adjective past tense", JLPTLevel: 5},
+		{Slug: "particle-ni-direction", Name: "に (direction/target/time)", JLPTLevel: 5},
+	}, nil
+}
 
 func (fakeGrammarRepo) GetConcept(context.Context, string) (grammar.Concept, error) {
 	panic("not used by feedback http tests")
@@ -55,12 +66,17 @@ func (fakeGrammarRepo) CorrectionsForConcept(context.Context, learner.IdentityID
 type fakeFeedbackRepo struct {
 	feedback    map[string]storage.FeedbackRecord
 	corrections map[string]storage.CorrectionRecord
+	// concepts maps correction ID -> concept slug -> resolved, tracking
+	// every InsertCorrectionConcepts call so GetCorrectionConcepts can
+	// answer for real (needed for TestCorrectionStatusAcceptedKeepsConceptChip).
+	concepts map[string]map[string]bool
 }
 
 func newFakeFeedbackRepo() *fakeFeedbackRepo {
 	return &fakeFeedbackRepo{
 		feedback:    map[string]storage.FeedbackRecord{},
 		corrections: map[string]storage.CorrectionRecord{},
+		concepts:    map[string]map[string]bool{},
 	}
 }
 
@@ -87,11 +103,27 @@ func (f *fakeFeedbackRepo) UpdateCorrectionStatus(_ context.Context, identity le
 	return c, nil
 }
 
-// InsertCorrectionConcepts is a no-op here: the HTTP-layer tests assert
-// on rendered correction-card HTML, not persisted concept rows — that
-// contract lives in application/feedback/service_test.go.
-func (f *fakeFeedbackRepo) InsertCorrectionConcepts(_ context.Context, _ string, _ []string, _ map[string]bool) error {
+func (f *fakeFeedbackRepo) InsertCorrectionConcepts(_ context.Context, correctionID string, slugs []string, resolved map[string]bool) error {
+	if f.concepts[correctionID] == nil {
+		f.concepts[correctionID] = map[string]bool{}
+	}
+	for _, slug := range slugs {
+		f.concepts[correctionID][slug] = resolved[slug]
+	}
 	return nil
+}
+
+// GetCorrectionConcepts mirrors the real query's "resolved only,
+// slug-ascending" contract.
+func (f *fakeFeedbackRepo) GetCorrectionConcepts(_ context.Context, correctionID string) ([]string, error) {
+	var out []string
+	for slug, resolved := range f.concepts[correctionID] {
+		if resolved {
+			out = append(out, slug)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // feedbackTestServer wires a real chi router with a real
@@ -222,6 +254,48 @@ func TestFeedbackRequestThenAcceptCorrection(t *testing.T) {
 	}
 	if strings.Contains(statusRec.Body.String(), "納得した") {
 		t.Fatalf("accepted card should not still show the accept button: %s", statusRec.Body.String())
+	}
+}
+
+// TestCorrectionStatusAcceptedKeepsConceptChip pins the code-review fix
+// for correctionViewFromRecord silently dropping concept chips:
+// SetCorrectionStatus's re-rendered card (after accept/reject) must
+// still carry the concept chip a tagged correction showed on its
+// initial render, fetched back via GetCorrectionConcepts since
+// storage.CorrectionRecord itself carries no Concepts field.
+func TestCorrectionStatusAcceptedKeepsConceptChip(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, docID := feedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	form := url.Values{}
+	form.Set("document_id", docID)
+	form.Set("start", "0")
+	form.Set("end", strconv.Itoa(runeLen))
+	form.Set("text", content)
+	rec := postForm(t, h, "/sessions/"+string(sess.ID)+"/feedback", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST feedback status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `href="/grammar/i-adjective-past"`) {
+		t.Fatalf("initial card missing the i-adjective-past chip: %s", body)
+	}
+
+	correctionID := extractCorrectionID(t, body)
+
+	statusForm := url.Values{}
+	statusForm.Set("status", "accepted")
+	statusRec := postForm(t, h, "/corrections/"+correctionID+"/status", statusForm)
+	if statusRec.Code != http.StatusOK {
+		t.Fatalf("POST correction status = %d, body=%s", statusRec.Code, statusRec.Body.String())
+	}
+	statusBody := statusRec.Body.String()
+	if !strings.Contains(statusBody, `data-status="accepted"`) {
+		t.Fatalf("body missing data-status=\"accepted\": %s", statusBody)
+	}
+	if !strings.Contains(statusBody, `href="/grammar/i-adjective-past"`) {
+		t.Fatalf("accepted card lost its i-adjective-past chip: %s", statusBody)
 	}
 }
 

@@ -160,6 +160,26 @@ func (r *FeedbackRepository) InsertCorrectionConcepts(ctx context.Context, corre
 	return tx.Commit(ctx)
 }
 
+// GetCorrectionConcepts returns correctionID's RESOLVED concept slugs,
+// slug-ascending (the underlying query's ORDER BY concept_slug — there
+// is no created_at on correction_concepts to order by insertion time
+// instead). Unresolved tags are excluded, matching
+// db/queries/grammar.sql's ConceptStats/CorrectionsForConcept
+// "resolved only" convention; see the doc comment on
+// storage.FeedbackRepository.GetCorrectionConcepts for why a caller
+// (SetCorrectionStatus, re-rendering a correction card) needs this.
+func (r *FeedbackRepository) GetCorrectionConcepts(ctx context.Context, correctionID string) ([]string, error) {
+	cid, err := parseUUID(correctionID)
+	if err != nil {
+		return nil, fmt.Errorf("correction id: %w", err)
+	}
+	slugs, err := r.q.GetCorrectionConcepts(ctx, cid)
+	if err != nil {
+		return nil, err
+	}
+	return slugs, nil
+}
+
 // toOptionalUUID converts an optional canonical UUID string (empty
 // means "not set") to the nullable pgtype sqlc generates for
 // feedback_requests.ai_request_id: empty maps to an invalid (SQL NULL)

@@ -11,6 +11,33 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getCorrectionConcepts = `-- name: GetCorrectionConcepts :many
+SELECT concept_slug
+FROM correction_concepts
+WHERE correction_id = $1 AND resolved
+ORDER BY concept_slug
+`
+
+func (q *Queries) GetCorrectionConcepts(ctx context.Context, correctionID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, getCorrectionConcepts, correctionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var concept_slug string
+		if err := rows.Scan(&concept_slug); err != nil {
+			return nil, err
+		}
+		items = append(items, concept_slug)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertCorrection = `-- name: InsertCorrection :exec
 INSERT INTO corrections (
     id, feedback_request_id, position, original, replacement,

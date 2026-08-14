@@ -18,6 +18,7 @@ type wantCorrection struct {
 		JA string `json:"ja"`
 		EN string `json:"en"`
 	} `json:"explanation"`
+	Concepts []string `json:"concepts,omitempty"`
 }
 
 type wantResult struct {
@@ -134,6 +135,9 @@ func TestFakeAdapterWoIkimasuParticle(t *testing.T) {
 	}
 	if c.Severity != "incorrect" {
 		t.Errorf("Severity = %q, want %q", c.Severity, "incorrect")
+	}
+	if len(c.Concepts) != 1 || c.Concepts[0] != "particle-ni-direction" {
+		t.Errorf("Concepts = %v, want [particle-ni-direction] (must match the real catalog slug, not the retired particle-ni-destination)", c.Concepts)
 	}
 }
 

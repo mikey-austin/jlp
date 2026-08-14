@@ -248,21 +248,26 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 // candidate) is still persisted, with resolved=false, but never gets an
 // event: the learner model only reacts to concepts it can actually
 // explain via GetConcept, not to whatever string the model happened to
-// emit.
+// emit. c.Concepts is deduplicated first: a model that (redundantly)
+// tags the same concept twice on one correction must still produce
+// exactly one correction_concepts row and one event for it — Task 4's
+// weakness counts key off the event stream, and a duplicate here would
+// silently inflate them.
 func (s *Service) tagConcepts(ctx context.Context, req Request, c correction.Correction, knownSlugs map[string]bool) error {
 	if len(c.Concepts) == 0 {
 		return nil
 	}
+	slugs := dedupeSlugs(c.Concepts)
 
-	resolved := make(map[string]bool, len(c.Concepts))
-	for _, slug := range c.Concepts {
+	resolved := make(map[string]bool, len(slugs))
+	for _, slug := range slugs {
 		resolved[slug] = knownSlugs[slug]
 	}
-	if err := s.repo.InsertCorrectionConcepts(ctx, c.ID, c.Concepts, resolved); err != nil {
+	if err := s.repo.InsertCorrectionConcepts(ctx, c.ID, slugs, resolved); err != nil {
 		return fmt.Errorf("feedback: persist concepts: %w", err)
 	}
 
-	for _, slug := range c.Concepts {
+	for _, slug := range slugs {
 		if !resolved[slug] {
 			continue
 		}
@@ -281,6 +286,21 @@ func (s *Service) tagConcepts(ctx context.Context, req Request, c correction.Cor
 		}
 	}
 	return nil
+}
+
+// dedupeSlugs returns slugs with duplicates removed, preserving
+// first-occurrence order.
+func dedupeSlugs(slugs []string) []string {
+	seen := make(map[string]bool, len(slugs))
+	out := make([]string, 0, len(slugs))
+	for _, slug := range slugs {
+		if seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		out = append(out, slug)
+	}
+	return out
 }
 
 // SetCorrectionStatus records the learner's accept/reject decision on a
@@ -315,10 +335,19 @@ func (s *Service) SetCorrectionStatus(ctx context.Context, identity learner.Iden
 		return CorrectionView{}, fmt.Errorf("feedback: record %s: %w", evType, err)
 	}
 
-	return correctionViewFromRecord(rec), nil
+	// rec (from storage.CorrectionRecord) carries no Concepts field —
+	// tags live in correction_concepts, not corrections — so the
+	// re-rendered card after an accept/reject would otherwise silently
+	// drop its concept chip(s). Fetch them back explicitly.
+	concepts, err := s.repo.GetCorrectionConcepts(ctx, rec.ID)
+	if err != nil {
+		return CorrectionView{}, fmt.Errorf("feedback: get correction concepts: %w", err)
+	}
+
+	return correctionViewFromRecord(rec, concepts), nil
 }
 
-func correctionViewFromRecord(rec storage.CorrectionRecord) CorrectionView {
+func correctionViewFromRecord(rec storage.CorrectionRecord, concepts []string) CorrectionView {
 	return CorrectionView{
 		Correction: correction.Correction{
 			ID:          rec.ID,
@@ -327,6 +356,7 @@ func correctionViewFromRecord(rec storage.CorrectionRecord) CorrectionView {
 			Type:        correction.Type(rec.Type),
 			Severity:    correction.Severity(rec.Severity),
 			Explanation: correction.Explanation{JA: rec.ExplanationJA, EN: rec.ExplanationEN},
+			Concepts:    concepts,
 		},
 		Status: rec.Status,
 		Diff:   diff.Runes(rec.Original, rec.Replacement),

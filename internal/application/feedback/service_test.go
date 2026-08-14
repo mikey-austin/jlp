@@ -2,8 +2,10 @@ package feedback_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"    //nolint:depguard // fakeai/inprocbus are port-shaped test doubles; PRD §75 forbids agents/application importing real adapters, not fakes
@@ -154,6 +156,19 @@ func (f *fakeFeedbackRepo) InsertCorrectionConcepts(_ context.Context, correctio
 		f.concepts = append(f.concepts, conceptRow{CorrectionID: correctionID, Slug: slug, Resolved: resolved[slug]})
 	}
 	return nil
+}
+
+// GetCorrectionConcepts mirrors the real query's "resolved only,
+// slug-ascending" contract over f.concepts.
+func (f *fakeFeedbackRepo) GetCorrectionConcepts(_ context.Context, correctionID string) ([]string, error) {
+	var out []string
+	for _, cc := range f.concepts {
+		if cc.CorrectionID == correctionID && cc.Resolved {
+			out = append(out, cc.Slug)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 // fakeEventStore is an in-memory storage.LearningEventRepository, same
@@ -420,7 +435,7 @@ func TestRequestFeedbackUnknownConceptSlugPersistsUnresolvedWithoutEvent(t *test
 	gen := &stubConceptGen{
 		original:    "行きました",
 		replacement: "行った",
-		concept:     "totally-unknown-slug",
+		concepts:    []string{"totally-unknown-slug"},
 	}
 	h := newTestHarnessWithGenerator(gen)
 	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
@@ -454,18 +469,111 @@ func TestRequestFeedbackUnknownConceptSlugPersistsUnresolvedWithoutEvent(t *test
 	}
 }
 
+// TestRequestFeedbackDuplicateConceptSlugsDedupedToOneRowAndOneEvent
+// pins the code-review fix: a teacher response that (redundantly) tags
+// the SAME correction with the same slug twice must still persist
+// exactly one correction_concepts row and record exactly one
+// grammar.concept.encountered event for it — not two. Task 4's
+// weakness counts key off the event stream per concept, so an
+// undeduped double-tag would silently inflate them.
+func TestRequestFeedbackDuplicateConceptSlugsDedupedToOneRowAndOneEvent(t *testing.T) {
+	gen := &stubConceptGen{
+		original:    "行きました",
+		replacement: "行った",
+		concepts:    []string{"i-adjective-past", "i-adjective-past"},
+	}
+	h := newTestHarnessWithGenerator(gen)
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "昨日、公園に行きました。"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	fb, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	if len(fb.Corrections) != 1 {
+		t.Fatalf("len(Corrections) = %d, want 1: %+v", len(fb.Corrections), fb.Corrections)
+	}
+	correctionID := fb.Corrections[0].ID
+
+	// Exactly one correction_concepts row for the slug, not two.
+	if len(h.repo.concepts) != 1 {
+		t.Fatalf("persisted concept rows = %d, want 1 (deduped): %+v", len(h.repo.concepts), h.repo.concepts)
+	}
+	cc := h.repo.concepts[0]
+	if cc.CorrectionID != correctionID || cc.Slug != "i-adjective-past" || !cc.Resolved {
+		t.Fatalf("persisted concept row = %+v, want {CorrectionID:%q Slug:i-adjective-past Resolved:true}", cc, correctionID)
+	}
+
+	// Exactly one grammar.concept.encountered event, not two.
+	count := 0
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeGrammarConceptEncountered {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("recorded %d grammar.concept.encountered events, want 1 (deduped): %+v", count, h.events.events)
+	}
+}
+
+// TestSetCorrectionStatusAcceptedCarriesConceptChip pins the other
+// code-review fix: correctionViewFromRecord's Correction has no
+// Concepts (storage.CorrectionRecord carries none — tags live in
+// correction_concepts), so SetCorrectionStatus must fetch them back
+// via GetCorrectionConcepts and populate the returned CorrectionView,
+// or the correction card's concept chip silently vanishes the moment a
+// learner accepts/rejects it.
+func TestSetCorrectionStatusAcceptedCarriesConceptChip(t *testing.T) {
+	h := newTestHarness()
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	fb, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	correctionID := fb.Corrections[0].ID
+	if len(fb.Corrections[0].Concepts) == 0 {
+		t.Fatalf("precondition failed: initial correction has no concepts to carry forward: %+v", fb.Corrections[0])
+	}
+
+	view, err := h.svc.SetCorrectionStatus(context.Background(), testIdentity, correctionID, "accepted")
+	if err != nil {
+		t.Fatalf("SetCorrectionStatus returned error: %v", err)
+	}
+	if view.Status != "accepted" {
+		t.Fatalf("Status = %q, want accepted", view.Status)
+	}
+	if len(view.Concepts) != 1 || view.Concepts[0] != "i-adjective-past" {
+		t.Fatalf("view.Concepts = %v, want [i-adjective-past]", view.Concepts)
+	}
+}
+
 // stubConceptGen is a minimal ai.StructuredGenerator that always
-// returns one correction tagging the given (unvalidated) concept slug —
-// used to exercise the unknown-slug persistence path without needing
-// fakeai to know about a slug that, by construction, isn't in any real
-// catalog.
+// returns one correction tagging concepts (unvalidated, and may
+// contain duplicates — see the dedupe test above) — used to exercise
+// concept-tagging edge cases without needing fakeai to know about
+// slugs that, by construction, aren't part of its two hardcoded rules.
 type stubConceptGen struct {
-	original, replacement, concept string
+	original, replacement string
+	concepts              []string
 }
 
 func (s *stubConceptGen) GenerateStructured(_ context.Context, _ ai.StructuredRequest) (ai.StructuredResponse, error) {
-	payload := fmt.Sprintf(`{"corrections":[{"original":%q,"replacement":%q,"type":"conjugation","severity":"incorrect","explanation":{"ja":"テスト","en":"test"},"concepts":[%q]}]}`,
-		s.original, s.replacement, s.concept)
+	conceptsJSON, err := json.Marshal(s.concepts)
+	if err != nil {
+		return ai.StructuredResponse{}, err
+	}
+	payload := fmt.Sprintf(`{"corrections":[{"original":%q,"replacement":%q,"type":"conjugation","severity":"incorrect","explanation":{"ja":"テスト","en":"test"},"concepts":%s}]}`,
+		s.original, s.replacement, conceptsJSON)
 	return ai.StructuredResponse{JSON: []byte(payload), Provider: "stub", Model: "stub-1"}, nil
 }
 

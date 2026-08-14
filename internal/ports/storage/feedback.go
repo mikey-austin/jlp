@@ -60,8 +60,15 @@ type CorrectionRecord struct {
 // so a tagging bug or a stale candidate list surfaces as data rather
 // than silently vanishing. Idempotent: re-inserting the same
 // (correctionID, slug) pair is a no-op (ON CONFLICT DO NOTHING).
+// GetCorrectionConcepts reads them back — RESOLVED slugs only, in a
+// deterministic (slug-ascending) order — so a caller re-rendering a
+// correction after its status changes (SetCorrectionStatus) can carry
+// its concept chip(s) along; an unresolved tag is deliberately excluded
+// here, matching the same "only resolved counts" semantics
+// db/queries/grammar.sql's ConceptStats/CorrectionsForConcept use.
 type FeedbackRepository interface {
 	InsertFeedback(ctx context.Context, rec FeedbackRecord, corrections []CorrectionRecord) error
 	UpdateCorrectionStatus(ctx context.Context, identity learner.IdentityID, correctionID, status string) (CorrectionRecord, error)
 	InsertCorrectionConcepts(ctx context.Context, correctionID string, slugs []string, resolved map[string]bool) error
+	GetCorrectionConcepts(ctx context.Context, correctionID string) ([]string, error)
 }

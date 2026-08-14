@@ -24,3 +24,9 @@ RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
 INSERT INTO correction_concepts (correction_id, concept_slug, resolved)
 VALUES ($1, $2, $3)
 ON CONFLICT (correction_id, concept_slug) DO NOTHING;
+
+-- name: GetCorrectionConcepts :many
+SELECT concept_slug
+FROM correction_concepts
+WHERE correction_id = $1 AND resolved
+ORDER BY concept_slug;

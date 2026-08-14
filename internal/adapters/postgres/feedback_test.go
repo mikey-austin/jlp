@@ -283,6 +283,102 @@ func TestFeedbackInsertCorrectionConceptsRoundTripAndIdempotent(t *testing.T) {
 	}
 }
 
+// TestFeedbackGetCorrectionConceptsReturnsResolvedOnlySlugAscending
+// pins the code-review fix backing SetCorrectionStatus's concept-chip
+// carry-through: GetCorrectionConcepts must return ONLY resolved slugs
+// (an unresolved tag — recorded but not a real catalog concept — must
+// never surface as something a re-rendered card can link to
+// /grammar/{slug}), in slug-ascending order regardless of insertion
+// order (correction_concepts has no created_at to order by instead).
+func TestFeedbackGetCorrectionConceptsReturnsResolvedOnlySlugAscending(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	identities := NewIdentityRepository(pool)
+	identityA := learner.Identity{ID: learner.IdentityID("test-feedback-getconcepts-" + uuid.NewString()), DisplayName: "A"}
+	if err := identities.Upsert(ctx, identityA); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := NewSessionRepository(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sess := session.Session{
+		ID:         session.ID(uuid.New().String()),
+		IdentityID: identityA.ID,
+		Title:      "文法タグ取得テスト",
+		Purpose:    "Diary",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := sessions.Create(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+
+	docs := NewDocumentRepository(pool)
+	doc, _, err := docs.GetOrCreateForSession(ctx, identityA.ID, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	feedback := NewFeedbackRepository(pool)
+	feedbackID := uuid.New().String()
+	correctionID := uuid.New().String()
+	rec := storage.FeedbackRecord{
+		ID:             feedbackID,
+		IdentityID:     identityA.ID,
+		SessionID:      sess.ID,
+		DocumentID:     doc.ID,
+		SelectionStart: 0,
+		SelectionEnd:   6,
+		SelectionText:  "面白いでした",
+		CorrectedText:  "面白かったです",
+	}
+	corrections := []storage.CorrectionRecord{{
+		ID:          correctionID,
+		FeedbackID:  feedbackID,
+		Position:    0,
+		Original:    "面白いでした",
+		Replacement: "面白かったです",
+		Type:        "conjugation",
+		Severity:    "incorrect",
+		Status:      "presented",
+	}}
+	if err := feedback.InsertFeedback(ctx, rec, corrections); err != nil {
+		t.Fatal(err)
+	}
+
+	// Inserted in reverse-alphabetical order deliberately, plus one
+	// unresolved slug, so the assertion below can't pass by accident of
+	// insertion order.
+	slugs := []string{"te-form", "i-adjective-past", "no-such-slug"}
+	resolved := map[string]bool{"te-form": true, "i-adjective-past": true, "no-such-slug": false}
+	if err := feedback.InsertCorrectionConcepts(ctx, correctionID, slugs, resolved); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := feedback.GetCorrectionConcepts(ctx, correctionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"i-adjective-past", "te-form"}
+	if len(got) != len(want) {
+		t.Fatalf("GetCorrectionConcepts = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("GetCorrectionConcepts = %v, want %v", got, want)
+		}
+	}
+}
+
 type correctionConceptRow struct {
 	slug     string
 	resolved bool
