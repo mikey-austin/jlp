@@ -2,14 +2,15 @@ COMPOSE := docker compose
 TOOLS   := $(COMPOSE) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
 
-init: ## One-time setup: create .env from example
+init: ## One-time setup: create .env from example, generate Authelia dev users
 	@test -f .env || cp .env.example .env
 	@echo ".env ready — fill in secrets as needed"
+	@set -a; . ./.env; set +a; sh scripts/gen-authelia-users.sh
 
 build: ## Build all images
 	$(COMPOSE) build
@@ -17,8 +18,11 @@ build: ## Build all images
 up: ## Start the dev stack (app + postgres)
 	$(COMPOSE) up -d app
 
-down: ## Stop the stack
-	$(COMPOSE) down
+up-auth: ## Start dev stack including Caddy + Authelia (https://jlp.localhost:8443)
+	APP_AUTH_MODE=authelia $(COMPOSE) --profile auth up -d
+
+down: ## Stop the stack (including profile-gated services like Caddy/Authelia)
+	$(COMPOSE) --profile auth down
 
 restart: ## Restart the app service
 	$(COMPOSE) restart app

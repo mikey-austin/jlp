@@ -30,7 +30,12 @@ func NewServer(opts Options) *Server {
 
 func (s *Server) routes() http.Handler {
 	r := chi.NewRouter()
-	r.Use(middleware.RequestID, middleware.RealIP, middleware.Recoverer)
+	// Deliberately omit chi's middleware.RealIP: it unconditionally rewrites
+	// r.RemoteAddr from the client-supplied X-Forwarded-For/X-Real-IP header,
+	// which would let any client spoof the peer address our auth adapters use
+	// for their trusted-proxy decision (see internal/adapters/authelia). The
+	// authelia adapter must observe the true TCP peer.
+	r.Use(middleware.RequestID, middleware.Recoverer)
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{"status":"ok"}`))

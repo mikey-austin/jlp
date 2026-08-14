@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 )
 
@@ -45,6 +46,30 @@ func TestHealthz(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"ok"`) {
 		t.Fatalf("healthz body = %s", rec.Body.String())
+	}
+}
+
+func TestServerDoesNotTrustForwardedForHeader(t *testing.T) {
+	// Regression: chi's middleware.RealIP would rewrite r.RemoteAddr from a
+	// client-supplied X-Forwarded-For header, letting an untrusted caller
+	// spoof its way past the authelia adapter's peer-trust check. The server
+	// must never let X-Forwarded-For influence the trust decision.
+	authn, err := authelia.New([]string{"172.16.0.0/12"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := NewServer(Options{Addr: ":0", Auth: authn, Identities: testIdentityRepo{}})
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.RemoteAddr = "203.0.113.9:1234" // real TCP peer: untrusted, outside 172.16.0.0/12
+	req.Header.Set("X-Forwarded-For", "172.18.0.5")
+	req.Header.Set("Remote-User", "mallory")
+	req.Header.Set("Remote-Name", "Mallory Evil")
+
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("code=%d, want 401 (untrusted peer must be rejected regardless of forged X-Forwarded-For)", rec.Code)
 	}
 }
 

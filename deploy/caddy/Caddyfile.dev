@@ -1,0 +1,15 @@
+{
+	local_certs
+}
+
+jlp.localhost:8443 {
+	forward_auth authelia:9091 {
+		uri /api/authz/forward-auth
+		copy_headers Remote-User Remote-Groups Remote-Name Remote-Email
+	}
+	reverse_proxy app:8080
+}
+
+auth.jlp.localhost:8443 {
+	reverse_proxy authelia:9091
+}

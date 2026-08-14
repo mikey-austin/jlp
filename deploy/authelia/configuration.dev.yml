@@ -1,0 +1,26 @@
+theme: light
+server:
+  address: 'tcp://0.0.0.0:9091'
+log:
+  level: info
+identity_validation:
+  reset_password:
+    jwt_secret: 'insecure-dev-jwt-secret-please-never-in-prod'
+authentication_backend:
+  file:
+    path: '/config/users.yml'
+access_control:
+  default_policy: one_factor
+session:
+  secret: 'insecure-dev-session-secret-please-never-in-prod'
+  cookies:
+    - domain: 'jlp.localhost'
+      authelia_url: 'https://auth.jlp.localhost:8443'
+      default_redirection_url: 'https://jlp.localhost:8443'
+storage:
+  encryption_key: 'insecure-dev-encryption-key-32chars-x'
+  local:
+    path: '/data/db.sqlite3'
+notifier:
+  filesystem:
+    filename: '/data/notification.txt'

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
@@ -39,8 +40,11 @@ func main() {
 		case "static":
 			authn = staticauth.New(cfg.Auth.Static.ID, cfg.Auth.Static.DisplayName)
 		case "authelia":
-			slog.Error("auth", "err", "authelia mode arrives in Task 5")
-			os.Exit(1)
+			authn, err = authelia.New(cfg.Auth.TrustedProxies)
+			if err != nil {
+				slog.Error("auth", "err", err)
+				os.Exit(1)
+			}
 		default:
 			slog.Error("auth", "err", fmt.Sprintf("unknown auth mode %q", cfg.Auth.Mode))
 			os.Exit(1)

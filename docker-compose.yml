@@ -9,6 +9,11 @@ services:
     environment:
       APP_DATABASE_URL: postgres://jlp:jlp@postgres:5432/jlp?sslmode=disable
       APP_AUTH_MODE: ${APP_AUTH_MODE:-static}
+      # Caddy's fixed address on the pinned subnet below (NOT the bridge
+      # gateway 172.28.5.1, which is what direct host->published-port
+      # traffic hairpins through — see internal/adapters/authelia). Trusting
+      # the gateway too would let anyone on the host bypass Caddy entirely.
+      APP_AUTH_TRUSTEDPROXIES: 127.0.0.1/32,172.28.5.9/32
       APP_AI_PROVIDER: ${APP_AI_PROVIDER:-fake}
       APP_AI_ANTHROPIC_APIKEY: ${ANTHROPIC_API_KEY:-}
     depends_on:
@@ -35,4 +40,32 @@ services:
     environment:
       APP_DATABASE_URL: postgres://jlp:jlp@postgres:5432/jlp?sslmode=disable
 
-volumes: { pgdata: {}, gomod: {}, gocache: {} }
+  caddy:
+    image: caddy:2
+    profiles: ["auth"]
+    ports: ["8443:8443"]
+    volumes:
+      - ./deploy/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+    depends_on: [app, authelia]
+    networks:
+      default:
+        # Fixed address so the app's trusted-proxy CIDR (above) can name
+        # Caddy specifically, distinct from the bridge gateway.
+        ipv4_address: 172.28.5.9
+
+  authelia:
+    image: authelia/authelia:4
+    profiles: ["auth"]
+    volumes:
+      - ./deploy/authelia/configuration.dev.yml:/config/configuration.yml:ro
+      - ./deploy/authelia/users.dev.yml:/config/users.yml:ro
+      - autheliadata:/data
+
+volumes: { pgdata: {}, gomod: {}, gocache: {}, caddydata: {}, autheliadata: {} }
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.28.5.0/24
