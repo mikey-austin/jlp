@@ -117,28 +117,46 @@ func TestRunesSameString(t *testing.T) {
 }
 
 func TestRunesSemanticCleanup(t *testing.T) {
-	// CRITICAL: DiffCleanupSemantic must be applied to group related changes
-	// This test verifies that cleanup actually works by checking:
-	// 1. No two adjacent segments have the same Op (cleanup merges them)
-	// 2. Total segment count is reasonable
+	// CRITICAL: DiffCleanupSemantic must be applied to group related changes.
+	// Without cleanup: 6 segments (Equal/Delete/Insert/Equal/Delete/Insert pattern).
+	// With cleanup: 3 segments (cleanup merges adjacent same-Op segments and groups changes).
+	// This test uses the PRD example which clearly distinguishes fixed vs broken code.
 
-	a := "こんにちは世界"
-	b := "こんばんは世界"
+	a := "とても面白いでした"
+	b := "とても面白かったです"
 
 	result := Runes(a, b)
 
-	// Verify no adjacent segments have the same Op
-	for i := 0; i < len(result)-1; i++ {
-		if result[i].Op == result[i+1].Op {
-			t.Errorf("Runes(%q, %q) has adjacent segments with same Op at index %d: %v and %v",
-				a, b, i, result[i], result[i+1])
+	// STRONG PIN: Exact segment count must be 3 (proves cleanup is applied)
+	if len(result) != 3 {
+		t.Errorf("Runes(%q, %q) returned %d segments, want 3 (cleanup not applied or wrong): %v",
+			a, b, len(result), result)
+	}
+
+	// STRONG PIN: Exact Op sequence and text values
+	wantSegments := []Segment{
+		{Op: OpEqual, Text: "とても面白"},
+		{Op: OpDelete, Text: "いでした"},
+		{Op: OpInsert, Text: "かったです"},
+	}
+
+	for i, seg := range result {
+		if i < len(wantSegments) {
+			if seg.Op != wantSegments[i].Op {
+				t.Errorf("Runes(%q, %q) segment %d: Op = %v, want %v", a, b, i, seg.Op, wantSegments[i].Op)
+			}
+			if seg.Text != wantSegments[i].Text {
+				t.Errorf("Runes(%q, %q) segment %d: Text = %q, want %q", a, b, i, seg.Text, wantSegments[i].Text)
+			}
 		}
 	}
 
-	// Verify the result is reasonably compact (should be <= 4 segments: equal, delete, equal, insert or similar)
-	if len(result) > 4 {
-		t.Errorf("Runes(%q, %q) returned %d segments (too many, cleanup may not work): %v",
-			a, b, len(result), result)
+	// Verify no adjacent segments have the same Op (cleanup should merge them)
+	for i := 0; i < len(result)-1; i++ {
+		if result[i].Op == result[i+1].Op {
+			t.Errorf("Runes(%q, %q) has adjacent segments with same Op at index %d: %v and %v (cleanup failed)",
+				a, b, i, result[i], result[i+1])
+		}
 	}
 
 	// Verify concatenation properties still hold
