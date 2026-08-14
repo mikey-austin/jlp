@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
 
-	"github.com/mikeyaustin/jlp/internal/config"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
+	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
+	"github.com/mikeyaustin/jlp/internal/config"
 )
 
 func main() {
@@ -30,6 +32,17 @@ func main() {
 			slog.Error("server exited", "err", err)
 			os.Exit(1)
 		}
+	case "migrate":
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		if err := postgres.Migrate(context.Background(), cfg.Database.URL); err != nil {
+			slog.Error("migrate", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("migrations applied")
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)
