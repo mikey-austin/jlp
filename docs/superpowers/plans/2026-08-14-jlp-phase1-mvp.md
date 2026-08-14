@@ -19,7 +19,7 @@
 - No CDN/external assets. htmx/alpine/CSS/fonts are vendored under `web/static/`.
 - Japanese text safety: all offsets and counts are **rune-based**, never bytes, never UTF-16 units. Tests must include multi-byte Japanese strings.
 - TDD: write the failing test first, watch it fail (`make test`), implement, watch it pass. Commit at the end of every task with the given message.
-- `make test`, `make lint` must pass before any commit; `make test-integration` must pass for tasks touching adapters; `make arch-check` from Task 17 onward.
+- `make test` must pass before any commit; `make test-integration` must pass for tasks touching adapters; `make lint` and `make arch-check` apply from Task 18 (which introduces them) onward.
 - Secrets live in `.env` (gitignored). `.env.example` is committed and must stay current. `make test` must never require a live API key — the fake AI adapter and httptest-recorded responses cover everything.
 - IDs are `github.com/google/uuid` v4 strings unless a table says otherwise.
 
