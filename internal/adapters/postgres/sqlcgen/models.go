@@ -48,6 +48,12 @@ type Correction struct {
 	CreatedAt         pgtype.Timestamptz
 }
 
+type CorrectionConcept struct {
+	CorrectionID pgtype.UUID
+	ConceptSlug  string
+	Resolved     bool
+}
+
 type Document struct {
 	ID         pgtype.UUID
 	SessionID  pgtype.UUID
@@ -76,6 +82,16 @@ type FeedbackRequest struct {
 	CorrectedText  string
 	AiRequestID    pgtype.UUID
 	CreatedAt      pgtype.Timestamptz
+}
+
+type GrammarConcept struct {
+	Slug          string
+	Name          string
+	JlptLevel     int32
+	Description   string
+	Examples      []byte
+	Related       []byte
+	Prerequisites []byte
 }
 
 type Identity struct {

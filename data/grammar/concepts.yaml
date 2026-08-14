@@ -1,0 +1,771 @@
+# Curated JLPT grammar concept catalog (N5-N2), authored from standard
+# JLPT grammar reference lists (Genki, Tobira, and the official JLPT
+# grammar point lists for each level). jlpt_level uses JLPT numbering:
+# 5 = N5 (beginner) down to 1 = N1 (most advanced); this catalog spans
+# 5..2 (N5 through N2). Loaded by `jlp seed` via
+# internal/domain/grammar.LoadCatalog and GrammarRepository.UpsertConcepts
+# (see cmd/jlp/seed.go) — idempotent to re-run.
+#
+# Slugs referenced by related/prerequisites are informational cross-links
+# within this catalog, not enforced foreign keys (grammar_concepts.slug
+# is the only hard constraint — see migration 00008).
+
+# ---------------------------------------------------------------------
+# N5 (jlpt_level: 5)
+# ---------------------------------------------------------------------
+
+- slug: polite-desu-masu
+  name: "です/ます form (polite present tense)"
+  jlpt_level: 5
+  description: "The standard polite present-tense ending for nouns/adjectives (です) and verbs (ます), used in most everyday conversation with people you don't know well."
+  examples: ["私は学生です。", "毎朝コーヒーを飲みます。"]
+  related: [polite-negative-masen, past-tense-polite-mashita]
+  prerequisites: []
+
+- slug: polite-negative-masen
+  name: "ません (polite negative)"
+  jlpt_level: 5
+  description: "The negative form of ます, used to say a verb does not or will not happen."
+  examples: ["肉を食べません。", "明日は学校に行きません。"]
+  related: [polite-desu-masu]
+  prerequisites: [polite-desu-masu]
+
+- slug: past-tense-polite-mashita
+  name: "ました (polite past tense)"
+  jlpt_level: 5
+  description: "The polite past-tense ending for verbs, formed by replacing ます with ました."
+  examples: ["昨日、映画を見ました。", "先週、京都へ行きました。"]
+  related: [polite-desu-masu, past-tense-plain]
+  prerequisites: [polite-desu-masu]
+
+- slug: particle-wa-topic
+  name: "は (topic marker)"
+  jlpt_level: 5
+  description: "Marks the sentence topic — what the rest of the sentence is about. Written with the hiragana は but pronounced 'wa' when used as this particle."
+  examples: ["私は日本人です。", "これはペンです。"]
+  related: [particle-ga-subject]
+  prerequisites: []
+
+- slug: particle-ga-subject
+  name: "が (subject marker)"
+  jlpt_level: 5
+  description: "Marks the grammatical subject of a sentence, often introducing new information or answering a 'who/what' question, in contrast with the topic marker は."
+  examples: ["だれが来ましたか。田中さんが来ました。", "猫が好きです。"]
+  related: [particle-wa-topic]
+  prerequisites: []
+
+- slug: particle-wo-object
+  name: "を (direct object marker)"
+  jlpt_level: 5
+  description: "Marks the direct object of a transitive verb — the thing being acted upon."
+  examples: ["パンを食べます。", "手紙を書きます。"]
+  related: [particle-ni-direction, particle-de-location]
+  prerequisites: []
+
+- slug: particle-ni-direction
+  name: "に (direction/target/time)"
+  jlpt_level: 5
+  description: "Marks the destination of movement, the indirect object/recipient of an action, or a specific point in time."
+  examples: ["学校に行きます。", "七時に起きます。"]
+  related: [particle-e-direction, particle-de-location]
+  prerequisites: []
+
+- slug: particle-e-direction
+  name: "へ (direction, general)"
+  jlpt_level: 5
+  description: "Marks the general direction of movement, largely interchangeable with に when marking a destination but with a softer, less pinpoint nuance. Pronounced 'e' as a particle, even though the character へ is normally read 'he'."
+  examples: ["来週、大阪へ行きます。", "こちらへどうぞ。"]
+  related: [particle-ni-direction]
+  prerequisites: [particle-ni-direction]
+
+- slug: particle-de-location
+  name: "で (location of action / means)"
+  jlpt_level: 5
+  description: "Marks the place where an action happens, or the means/instrument used to perform it."
+  examples: ["図書館で勉強します。", "バスで学校に行きます。"]
+  related: [particle-ni-direction]
+  prerequisites: []
+
+- slug: particle-to-and-with
+  name: "と (and / with)"
+  jlpt_level: 5
+  description: "Connects nouns to mean 'and' (an exhaustive list), or marks the companion someone does something together with."
+  examples: ["コーヒーと紅茶を飲みます。", "友達と映画を見ます。"]
+  related: []
+  prerequisites: []
+
+- slug: particle-mo-also
+  name: "も (also / too)"
+  jlpt_level: 5
+  description: "Replaces は, が, or を to mean 'also' or 'too', adding the marked item to a set already mentioned."
+  examples: ["私は学生です。田中さんも学生です。", "りんごも好きです。"]
+  related: [particle-wa-topic]
+  prerequisites: [particle-wa-topic]
+
+- slug: particle-no-possessive
+  name: "の (possessive / noun connector)"
+  jlpt_level: 5
+  description: "Connects two nouns, most commonly to show possession (A's B) but also apposition and description."
+  examples: ["これは私の本です。", "日本語の先生です。"]
+  related: []
+  prerequisites: []
+
+- slug: particle-ka-question
+  name: "か (question marker)"
+  jlpt_level: 5
+  description: "Added to the end of a sentence to turn a statement into a yes/no or content question, replacing a question mark."
+  examples: ["これは何ですか。", "田中さんは学生ですか。"]
+  related: [polite-desu-masu]
+  prerequisites: []
+
+- slug: i-adjective-present
+  name: "い-adjective present tense"
+  jlpt_level: 5
+  description: "い-adjectives end in い and modify nouns directly or predicate a sentence on their own; the plain negative replaces the final い with くない."
+  examples: ["この本は面白いです。", "今日は寒くないです。"]
+  related: [i-adjective-past, na-adjective]
+  prerequisites: []
+
+- slug: i-adjective-past
+  name: "い-adjective past tense (〜かった)"
+  jlpt_level: 5
+  description: "The past tense of an い-adjective is formed by dropping the final い and adding かった (negative past: くなかった)."
+  examples: ["昨日はとても暑かったです。", "テストは難しくなかったです。"]
+  related: [i-adjective-present, past-tense-plain]
+  prerequisites: [i-adjective-present]
+
+- slug: na-adjective
+  name: "な-adjective conjugation"
+  jlpt_level: 5
+  description: "な-adjectives take な before a noun they modify but drop it (using だ/です instead) when predicating a sentence, and negate/past-tense through だ/です rather than their own ending."
+  examples: ["彼女はきれいな人です。", "この町は静かでした。"]
+  related: [i-adjective-present, polite-desu-masu]
+  prerequisites: []
+
+- slug: past-tense-plain
+  name: "plain past tense (〜た)"
+  jlpt_level: 5
+  description: "The plain (dictionary-style, casual) past tense of a verb, formed the same way as the て-form but with た/だ in place of て/で."
+  examples: ["昨日、映画を見た。", "去年、日本に行った。"]
+  related: [te-form, past-tense-polite-mashita]
+  prerequisites: [te-form]
+
+- slug: te-form
+  name: "て-form (〜て)"
+  jlpt_level: 5
+  description: "A connective verb form used to link clauses, make requests, and build many other grammar patterns (ている, てもいい, てください, etc.); its ending depends on which conjugation group the verb's dictionary form belongs to."
+  examples: ["朝ごはんを食べて、学校に行きます。", "ちょっと待ってください。"]
+  related: [past-tense-plain, te-form-request, te-iru-progressive]
+  prerequisites: []
+
+- slug: te-form-request
+  name: "てください (polite request)"
+  jlpt_level: 5
+  description: "て-form + ください makes a polite request or instruction for someone to do something."
+  examples: ["ここに名前を書いてください。", "少し待ってください。"]
+  related: [te-form]
+  prerequisites: [te-form]
+
+- slug: te-iru-progressive
+  name: "ている (progressive / ongoing state)"
+  jlpt_level: 5
+  description: "て-form + いる expresses an action in progress, a repeated habit, or a resulting state, depending on the verb."
+  examples: ["今、テレビを見ています。", "彼は結婚しています。"]
+  related: [te-form]
+  prerequisites: [te-form]
+
+- slug: arimasu-imasu
+  name: "あります／います (existence)"
+  jlpt_level: 5
+  description: "あります states the existence of inanimate objects (things, plants), while います states the existence of animate beings (people, animals)."
+  examples: ["机の上に本があります。", "教室に学生がいます。"]
+  related: [particle-ni-direction]
+  prerequisites: []
+
+- slug: verb-dictionary-form
+  name: "verb dictionary form (辞書形)"
+  jlpt_level: 5
+  description: "The plain, unconjugated citation form of a verb as listed in a dictionary, used in casual speech and as the base for many advanced grammar patterns."
+  examples: ["毎日、日本語を勉強する。", "図書館で本を読む。"]
+  related: [past-tense-plain]
+  prerequisites: []
+
+- slug: suki-kirai
+  name: "好き／嫌い (likes/dislikes with が)"
+  jlpt_level: 5
+  description: "好き (like) and 嫌い (dislike) are な-adjectives whose object is marked with が rather than を, even though they're often translated with an English transitive verb."
+  examples: ["私はすしが好きです。", "納豆が嫌いです。"]
+  related: [na-adjective, particle-ga-subject]
+  prerequisites: [na-adjective]
+
+- slug: counters-basic
+  name: "basic counters (〜つ、〜人、〜枚, etc.)"
+  jlpt_level: 5
+  description: "Japanese uses different counter suffixes depending on the shape or type of the thing being counted, such as 〜つ for generic small objects, 〜人 for people, and 〜枚 for flat objects."
+  examples: ["りんごを三つください。", "家族は四人です。"]
+  related: []
+  prerequisites: []
+
+- slug: demonstratives-kosoado
+  name: "こそあど demonstratives (これ・それ・あれ・どれ)"
+  jlpt_level: 5
+  description: "The これ/それ/あれ/どれ (and この/その/あの/どの) series marks 'this/that near you/that over there/which', with こ referring to something near the speaker, そ near the listener, and あ far from both."
+  examples: ["これは私の傘です。", "あの建物は図書館です。"]
+  related: []
+  prerequisites: []
+
+- slug: adjective-noun-modification
+  name: "adjective + noun modification"
+  jlpt_level: 5
+  description: "Both い-adjectives and な-adjectives (with な) can directly precede and modify a noun, unlike English where a linking verb is sometimes implied."
+  examples: ["小さい犬がいます。", "有名な歌手です。"]
+  related: [i-adjective-present, na-adjective]
+  prerequisites: [i-adjective-present, na-adjective]
+
+- slug: sentence-final-ne
+  name: "ね (sentence-final: seeking agreement)"
+  jlpt_level: 5
+  description: "Added to the end of a sentence to seek agreement or confirmation from the listener, similar to English 'right?' or 'isn't it?'."
+  examples: ["今日は暑いですね。", "この映画、面白かったですね。"]
+  related: [sentence-final-yo]
+  prerequisites: []
+
+- slug: sentence-final-yo
+  name: "よ (sentence-final: new information)"
+  jlpt_level: 5
+  description: "Added to the end of a sentence to emphasize or assert information the speaker believes the listener doesn't already know."
+  examples: ["もう十時ですよ。", "この店、安いですよ。"]
+  related: [sentence-final-ne]
+  prerequisites: []
+
+- slug: tai-form
+  name: "たい (want to do)"
+  jlpt_level: 5
+  description: "Attached to a verb's ます-stem, たい expresses the speaker's (or, in questions, the listener's) own desire to do something; it conjugates like an い-adjective."
+  examples: ["沖縄に行きたいです。", "何か飲みたいです。"]
+  related: [te-form]
+  prerequisites: []
+
+- slug: mashou-lets
+  name: "ましょう (let's / shall we)"
+  jlpt_level: 5
+  description: "Replaces the ます ending to make a suggestion or invitation to do something together, or (as ましょうか) to offer to do something for someone."
+  examples: ["一緒に昼ごはんを食べましょう。", "荷物を持ちましょうか。"]
+  related: [polite-desu-masu]
+  prerequisites: [polite-desu-masu]
+
+# ---------------------------------------------------------------------
+# N4 (jlpt_level: 4)
+# ---------------------------------------------------------------------
+
+- slug: te-mo-ii
+  name: "てもいい (permission)"
+  jlpt_level: 4
+  description: "て-form + もいい grants or asks for permission to do something — 'it's fine even if you do X'."
+  examples: ["ここで写真を撮ってもいいですか。", "先に帰ってもいいです。"]
+  related: [te-form, te-wa-ikenai]
+  prerequisites: [te-form]
+
+- slug: te-wa-ikenai
+  name: "てはいけない (prohibition)"
+  jlpt_level: 4
+  description: "て-form + はいけない states that an action is prohibited or must not be done."
+  examples: ["ここでたばこを吸ってはいけません。", "授業中に寝てはいけません。"]
+  related: [te-mo-ii]
+  prerequisites: [te-form]
+
+- slug: nakereba-narimasen
+  name: "なければなりません (obligation)"
+  jlpt_level: 4
+  description: "Attached to a verb's negative stem, なければなりません expresses that something must be done — a double-negative construction meaning 'if not X, it won't do'."
+  examples: ["宿題をしなければなりません。", "明日は早く起きなければなりません。"]
+  related: [nakute-mo-ii]
+  prerequisites: []
+
+- slug: nakute-mo-ii
+  name: "なくてもいい (no obligation)"
+  jlpt_level: 4
+  description: "Attached to a verb's negative stem, なくてもいい states that it's fine not to do something — there's no need to."
+  examples: ["今日は残業しなくてもいいです。", "心配しなくてもいいですよ。"]
+  related: [nakereba-narimasen, te-mo-ii]
+  prerequisites: []
+
+- slug: potential-form
+  name: "potential form (可能形, 〜できる／〜られる)"
+  jlpt_level: 4
+  description: "Verbs conjugate into a potential form to express ability — what one can or cannot do — either via a dedicated conjugation (Group I/II verbs) or できる for する."
+  examples: ["漢字が読めます。", "日本語で話すことができます。"]
+  related: [verb-dictionary-form]
+  prerequisites: [verb-dictionary-form]
+
+- slug: volitional-form
+  name: "volitional form (意向形, 〜よう)"
+  jlpt_level: 4
+  description: "The plain equivalent of ましょう, used to express the speaker's intention to do something or to make a casual suggestion."
+  examples: ["そろそろ行こう。", "少し休もうと思います。"]
+  related: [mashou-lets]
+  prerequisites: [mashou-lets]
+
+- slug: ba-conditional
+  name: "ば conditional"
+  jlpt_level: 4
+  description: "Attached to a verb/adjective's conditional stem, ば expresses a general or hypothetical condition — 'if X, then Y' — often used for rules, habits, and advice."
+  examples: ["薬を飲めば、よくなります。", "安ければ、買います。"]
+  related: [tara-conditional, to-conditional, nara-conditional]
+  prerequisites: []
+
+- slug: tara-conditional
+  name: "たら conditional"
+  jlpt_level: 4
+  description: "Formed from the plain past + ら, たら is the most versatile conditional, usable for hypothetical, factual, and sequential ('when X happened, then Y') conditions."
+  examples: ["雨が降ったら、行きません。", "家に着いたら、電話します。"]
+  related: [ba-conditional, to-conditional, nara-conditional]
+  prerequisites: [past-tense-plain]
+
+- slug: to-conditional
+  name: "と conditional"
+  jlpt_level: 4
+  description: "Expresses a natural or inevitable consequence — 'whenever/if X, Y always follows' — commonly used for facts, directions, and habitual outcomes, and cannot be used for the speaker's own intentions or requests."
+  examples: ["春になると、桜が咲きます。", "このボタンを押すと、電気がつきます。"]
+  related: [ba-conditional, tara-conditional]
+  prerequisites: []
+
+- slug: nara-conditional
+  name: "なら conditional"
+  jlpt_level: 4
+  description: "A conditional that responds to something already mentioned or assumed — 'if that's the case, then...' — and can also mean 'as for X' when topicalizing."
+  examples: ["京都に行くなら、清水寺がおすすめです。", "お金がないなら、貸しましょうか。"]
+  related: [ba-conditional, tara-conditional]
+  prerequisites: []
+
+- slug: passive-voice
+  name: "passive voice (受身形)"
+  jlpt_level: 4
+  description: "Verbs conjugate into a passive form to show the subject receiving an action, including the 'suffering passive' used when something happens to the speaker's detriment."
+  examples: ["財布を盗まれました。", "このビルは去年建てられました。"]
+  related: [causative-voice]
+  prerequisites: [verb-dictionary-form]
+
+- slug: causative-voice
+  name: "causative voice (使役形)"
+  jlpt_level: 4
+  description: "Verbs conjugate into a causative form to show one person making or letting another person do something."
+  examples: ["先生は学生に本を読ませました。", "子供を公園で遊ばせました。"]
+  related: [passive-voice, causative-passive]
+  prerequisites: [verb-dictionary-form]
+
+- slug: causative-passive
+  name: "causative-passive (使役受身形)"
+  jlpt_level: 4
+  description: "Combines the causative and passive forms to express being made to do something unwillingly."
+  examples: ["毎朝、母に野菜を食べさせられます。", "上司に残業させられました。"]
+  related: [causative-voice, passive-voice]
+  prerequisites: [causative-voice, passive-voice]
+
+- slug: giving-receiving-agekureaumorau
+  name: "あげる／くれる／もらう (giving and receiving)"
+  jlpt_level: 4
+  description: "あげる (give, moving away from the speaker), くれる (give, moving toward the speaker), and もらう (receive) mark the direction of a gift or favor, including favors expressed with て-form + these verbs."
+  examples: ["友達に誕生日プレゼントをあげました。", "母が晩ごはんを作ってくれました。"]
+  related: [te-form, particle-ni-direction]
+  prerequisites: [te-form]
+
+- slug: te-oku
+  name: "ておく (do in advance / leave as is)"
+  jlpt_level: 4
+  description: "て-form + おく expresses doing something in advance for future convenience, or leaving something in its current state on purpose."
+  examples: ["旅行の前に切符を買っておきます。", "窓を開けておいてください。"]
+  related: [te-form]
+  prerequisites: [te-form]
+
+- slug: te-shimau
+  name: "てしまう (completion / regret)"
+  jlpt_level: 4
+  description: "て-form + しまう emphasizes that an action is fully completed, often with a nuance of regret or something happening unintentionally."
+  examples: ["宿題を全部忘れてしまいました。", "もう食べてしまいました。"]
+  related: [te-form]
+  prerequisites: [te-form]
+
+- slug: te-miru
+  name: "てみる (try doing)"
+  jlpt_level: 4
+  description: "て-form + みる expresses trying an action to see what happens, similar to English 'try -ing'."
+  examples: ["この料理を食べてみてください。", "新しい店に行ってみました。"]
+  related: [te-form]
+  prerequisites: [te-form]
+
+- slug: sou-desu-hearsay
+  name: "そうです (hearsay: 'I heard that...')"
+  jlpt_level: 4
+  description: "Attached to a plain-form sentence, hearsay そうです reports information the speaker heard from someone else, without judging its truth."
+  examples: ["天気予報によると、明日は雨だそうです。", "田中さんは来月結婚するそうです。"]
+  related: [sou-desu-appearance, rashii]
+  prerequisites: []
+
+- slug: sou-desu-appearance
+  name: "そうです (appearance: 'looks like...')"
+  jlpt_level: 4
+  description: "Attached to a verb's ます-stem or an adjective stem, appearance そうです expresses that something looks or seems a certain way based on visual impression."
+  examples: ["このケーキはおいしそうです。", "雨が降りそうです。"]
+  related: [sou-desu-hearsay, you-desu-appearance]
+  prerequisites: []
+
+- slug: you-desu-appearance
+  name: "ようです (seems / resembles)"
+  jlpt_level: 4
+  description: "Expresses the speaker's subjective judgment that something seems to be the case, based on evidence or comparison, and can also express resemblance ('like a...')."
+  examples: ["誰もいないようです。", "彼はまるで子供のようです。"]
+  related: [sou-desu-appearance, rashii]
+  prerequisites: []
+
+- slug: rashii
+  name: "らしい (apparently / typical of)"
+  jlpt_level: 4
+  description: "Expresses that something apparently is the case based on outside information (similar to hearsay そうです but less direct), or that something is quintessentially typical of its category."
+  examples: ["彼はもう帰ったらしいです。", "今日は春らしい天気です。"]
+  related: [sou-desu-hearsay, you-desu-appearance]
+  prerequisites: []
+
+- slug: noni-although
+  name: "のに (although / even though)"
+  jlpt_level: 4
+  description: "Connects two clauses where the second is unexpected or contrary to what the first would suggest, often carrying a nuance of surprise, disappointment, or complaint."
+  examples: ["頑張ったのに、失敗しました。", "薬を飲んだのに、まだ頭が痛いです。"]
+  related: [node-because]
+  prerequisites: []
+
+- slug: node-because
+  name: "ので (because / since)"
+  jlpt_level: 4
+  description: "Attached to a plain-form clause, ので gives an objective reason or cause for the following statement, and is generally softer and more polite than から."
+  examples: ["雨が降っているので、傘を持って行きます。", "疲れたので、早く寝ます。"]
+  related: [noni-although]
+  prerequisites: []
+
+- slug: tsumori
+  name: "つもり (intention)"
+  jlpt_level: 4
+  description: "Attached to a verb's plain form, つもり expresses the speaker's (or, in questions, the listener's) intention or plan to do something."
+  examples: ["来年、留学するつもりです。", "今日は何も買わないつもりです。"]
+  related: [hazu]
+  prerequisites: []
+
+- slug: hazu
+  name: "はず (should be / expected to be)"
+  jlpt_level: 4
+  description: "Attached to a plain-form clause, はず expresses that something is expected to be true based on objective reasoning or evidence — 'it should be the case that...'."
+  examples: ["田中さんはもう着いたはずです。", "彼は忙しいはずです。"]
+  related: [tsumori, kamoshirenai]
+  prerequisites: []
+
+- slug: kamoshirenai
+  name: "かもしれない (might / possibly)"
+  jlpt_level: 4
+  description: "Attached to a plain-form clause, かもしれない expresses a weak possibility — 'it might be that...'."
+  examples: ["明日は雨かもしれません。", "彼はもう知っているかもしれません。"]
+  related: [hazu]
+  prerequisites: []
+
+- slug: koto-ga-aru-experience
+  name: "ことがある (have done before)"
+  jlpt_level: 4
+  description: "Attached to a verb's plain past form, ことがある expresses that the speaker has had the experience of doing something at least once."
+  examples: ["富士山に登ったことがあります。", "納豆を食べたことがありません。"]
+  related: [past-tense-plain]
+  prerequisites: [past-tense-plain]
+
+- slug: koto-ga-dekiru
+  name: "ことができる (ability, alternative to potential form)"
+  jlpt_level: 4
+  description: "Attached to a verb's dictionary form, ことができる expresses ability or possibility, functioning as a more formal alternative to the direct potential form."
+  examples: ["彼はピアノを弾くことができます。", "ここで写真を撮ることができます。"]
+  related: [potential-form, verb-dictionary-form]
+  prerequisites: [verb-dictionary-form]
+
+- slug: te-kara
+  name: "てから (after doing)"
+  jlpt_level: 4
+  description: "て-form + から marks that one action is done, and only afterward does the next action happen, emphasizing the sequence."
+  examples: ["宿題をしてから、テレビを見ます。", "手を洗ってから、食べましょう。"]
+  related: [te-form]
+  prerequisites: [te-form]
+
+- slug: aida-while
+  name: "間／間に (while / during)"
+  jlpt_level: 4
+  description: "間 marks an ongoing period during which something continues to happen throughout, while 間に marks a point sometime within that period when a single event occurs."
+  examples: ["子供が寝ている間、本を読みます。", "夏休みの間に、宿題を終わらせます。"]
+  related: [te-iru-progressive]
+  prerequisites: [te-iru-progressive]
+
+# ---------------------------------------------------------------------
+# N3 (jlpt_level: 3)
+# ---------------------------------------------------------------------
+
+- slug: ba-yokatta
+  name: "ばよかった (should have done)"
+  jlpt_level: 3
+  description: "The ば-conditional combined with よかった (past of いい) expresses regret that something wasn't done — 'I should have done X'."
+  examples: ["もっと早く出発すればよかったです。", "傘を持ってくればよかった。"]
+  related: [ba-conditional]
+  prerequisites: [ba-conditional]
+
+- slug: wake-da
+  name: "わけだ (it means that / no wonder)"
+  jlpt_level: 3
+  description: "Attached to a plain-form clause, わけだ draws a logical conclusion from something already stated or known — 'so that means...' or 'no wonder...'."
+  examples: ["彼は十年日本に住んでいる。だから日本語が上手なわけだ。", "今日は祝日だ。道理で人が多いわけだ。"]
+  related: [wake-ja-nai]
+  prerequisites: []
+
+- slug: wake-ja-nai
+  name: "わけではない (it's not that... / doesn't necessarily mean)"
+  jlpt_level: 3
+  description: "A partial negation meaning it's not necessarily the case that X, often used to soften a statement or correct a possible misunderstanding."
+  examples: ["嫌いなわけではないですが、あまり食べません。", "全部わかったわけではありません。"]
+  related: [wake-da]
+  prerequisites: [wake-da]
+
+- slug: tame-ni
+  name: "ために (in order to / because of)"
+  jlpt_level: 3
+  description: "Attached to a verb's dictionary form, ために marks the goal something is done for; attached to a noun with の, it marks the cause or reason behind a situation."
+  examples: ["日本語が上手になるために、毎日練習します。", "台風のために、電車が止まりました。"]
+  related: [node-because]
+  prerequisites: []
+
+- slug: you-ni-suru
+  name: "ようにする (make an effort to)"
+  jlpt_level: 3
+  description: "Attached to a verb's dictionary or negative form, ようにする expresses making a conscious effort to do (or not do) something as a habit or ongoing practice."
+  examples: ["毎日野菜を食べるようにしています。", "夜遅く食べないようにしています。"]
+  related: [you-ni-naru]
+  prerequisites: []
+
+- slug: you-ni-naru
+  name: "ようになる (come to / reach the point of)"
+  jlpt_level: 3
+  description: "Attached to a verb's dictionary or potential form, ようになる marks a gradual change of state or ability over time — 'it has come to be that...'."
+  examples: ["漢字が読めるようになりました。", "最近、よく眠れるようになりました。"]
+  related: [you-ni-suru, potential-form]
+  prerequisites: [potential-form]
+
+- slug: bakari
+  name: "ばかり (just did / only / nothing but)"
+  jlpt_level: 3
+  description: "After a verb's plain past form, ばかり means an action just finished; after a noun, it means 'only/nothing but' that thing, often with a nuance of excess."
+  examples: ["さっき昼ごはんを食べたばかりです。", "彼はゲームばかりしています。"]
+  related: [past-tense-plain]
+  prerequisites: [past-tense-plain]
+
+- slug: sai-ni
+  name: "際に (on the occasion of / when)"
+  jlpt_level: 3
+  description: "A formal equivalent of とき, marking the specific occasion or circumstance during which something is done."
+  examples: ["お申し込みの際に、身分証明書が必要です。", "ご利用の際は、こちらのボタンを押してください。"]
+  related: []
+  prerequisites: []
+
+- slug: ni-tsuite
+  name: "について (about / regarding)"
+  jlpt_level: 3
+  description: "Marks the topic that information, thought, or discussion is directed toward — 'concerning/about X'."
+  examples: ["日本の歴史について調べています。", "この問題について話し合いましょう。"]
+  related: []
+  prerequisites: []
+
+- slug: to-shite
+  name: "として (as / in the capacity of)"
+  jlpt_level: 3
+  description: "Marks the role, status, or category something is being treated or considered as."
+  examples: ["彼は先生としてここで働いています。", "この映画は名作として知られています。"]
+  related: []
+  prerequisites: []
+
+- slug: ni-yoru-to
+  name: "によると (according to)"
+  jlpt_level: 3
+  description: "Marks the source of reported information, typically paired with a sentence ending in hearsay そうです or らしい."
+  examples: ["天気予報によると、明日は晴れるそうです。", "新聞によると、事故があったらしいです。"]
+  related: [sou-desu-hearsay, rashii]
+  prerequisites: [sou-desu-hearsay]
+
+- slug: ni-taishite
+  name: "に対して (towards / in contrast to)"
+  jlpt_level: 3
+  description: "Marks the target of an attitude, action, or comparison — 'toward X' — and can also highlight a contrast between two things."
+  examples: ["子供に対して優しく話しました。", "兄は活発なのに対して、弟はおとなしいです。"]
+  related: []
+  prerequisites: []
+
+- slug: temo-even-if
+  name: "ても (even if)"
+  jlpt_level: 3
+  description: "Attached to a verb or adjective's て-form, ても expresses that the following clause holds true regardless of the preceding condition — 'even if X, still Y'."
+  examples: ["雨が降っても、試合は行われます。", "いくら高くても、買います。"]
+  related: [te-form]
+  prerequisites: [te-form]
+
+- slug: tsutsu
+  name: "つつ (while / even though, formal)"
+  jlpt_level: 3
+  description: "A literary equivalent of ながら, marking two simultaneous actions, or (as つつも) a contradiction between what one does and what one thinks."
+  examples: ["景色を見つつ、散歩しました。", "悪いと知りつつ、やめられません。"]
+  related: []
+  prerequisites: []
+
+- slug: gachi
+  name: "がち (tend to / apt to)"
+  jlpt_level: 3
+  description: "Attached to a verb's ます-stem or a noun, がち expresses a negative tendency for something to happen frequently."
+  examples: ["最近、忘れがちです。", "彼は病気がちです。"]
+  related: []
+  prerequisites: []
+
+- slug: muke-aimed-at
+  name: "向け (aimed at / geared toward)"
+  jlpt_level: 3
+  description: "Attached to a noun, 向け marks the intended audience or target group a thing is designed for."
+  examples: ["これは子供向けの本です。", "初心者向けのクラスです。"]
+  related: []
+  prerequisites: []
+
+- slug: uchi-ni
+  name: "うちに (while / before it's too late)"
+  jlpt_level: 3
+  description: "Marks a limited window of time during which something should be done, often with the nuance that the situation will change or the opportunity will pass."
+  examples: ["若いうちに、いろいろな経験をしたいです。", "熱いうちに食べてください。"]
+  related: [aida-while]
+  prerequisites: [aida-while]
+
+- slug: shika-nai
+  name: "しかない (have no choice but to / only)"
+  jlpt_level: 3
+  description: "Paired with a negative verb or noun, しか emphasizes 'only' or 'nothing but'; with a dictionary-form verb, しかない means there's no option but to do that action."
+  examples: ["お金が千円しかありません。", "こうなったら、頑張るしかありません。"]
+  related: []
+  prerequisites: []
+
+- slug: kawari-ni
+  name: "かわりに (instead of / in exchange for)"
+  jlpt_level: 3
+  description: "Marks that one thing substitutes for another, either replacing an action or person, or as a trade-off/compensation."
+  examples: ["父のかわりに、母が会議に出ました。", "手伝ってくれるかわりに、昼ごはんをおごります。"]
+  related: []
+  prerequisites: []
+
+- slug: ni-chigainai
+  name: "に違いない (must be / undoubtedly)"
+  jlpt_level: 3
+  description: "Attached to a plain-form clause, に違いない expresses strong conviction that something is certainly the case, based on available evidence."
+  examples: ["この字は田中さんが書いたに違いない。", "あの店はいつも混んでいる。人気があるに違いない。"]
+  related: [hazu, kamoshirenai]
+  prerequisites: [hazu]
+
+- slug: ippou-da
+  name: "一方だ (continuing to / only getting more)"
+  jlpt_level: 3
+  description: "Attached to a verb's dictionary form, 一方だ describes a trend that continues to intensify in one direction, usually negative."
+  examples: ["物価は上がる一方です。", "彼の病気は悪くなる一方でした。"]
+  related: []
+  prerequisites: []
+
+# ---------------------------------------------------------------------
+# N2 (jlpt_level: 2)
+# ---------------------------------------------------------------------
+
+- slug: ni-oujite
+  name: "に応じて (according to / depending on)"
+  jlpt_level: 2
+  description: "Marks that something changes or is adjusted in accordance with variation in another factor."
+  examples: ["経験に応じて、給料が決まります。", "天候に応じて、予定を変更します。"]
+  related: []
+  prerequisites: []
+
+- slug: ni-kagiri
+  name: "に限り (limited to / only in the case of)"
+  jlpt_level: 2
+  description: "Marks a special exception or condition that applies only in the stated case, often used in formal notices."
+  examples: ["本日に限り、全品二十パーセント引きです。", "会員に限り、入場できます。"]
+  related: []
+  prerequisites: []
+
+- slug: ni-kagirazu
+  name: "に限らず (not limited to)"
+  jlpt_level: 2
+  description: "Marks that a statement applies beyond just the item mentioned — 'not only X, but also more broadly'."
+  examples: ["日本に限らず、世界中で人気があります。", "学生に限らず、誰でも参加できます。"]
+  related: [ni-kagiri]
+  prerequisites: [ni-kagiri]
+
+- slug: tokoro-de
+  name: "ところで (by the way)"
+  jlpt_level: 2
+  description: "A sentence-initial conjunction used to abruptly shift to a new, often unrelated topic."
+  examples: ["ところで、来週の会議の件ですが。", "ところで、田中さんはもう来ましたか。"]
+  related: []
+  prerequisites: []
+
+- slug: ta-tokorode
+  name: "たところで (even if... it wouldn't matter)"
+  jlpt_level: 2
+  description: "Attached to a verb's plain past form, たところで expresses that even if the stated action were carried out, the result would not change — 'even if one did X, it wouldn't help'."
+  examples: ["今から急いだところで、電車には間に合わない。", "今さら謝ったところで、許してもらえないだろう。"]
+  related: [temo-even-if]
+  prerequisites: [temo-even-if, past-tense-plain]
+
+- slug: mono-no
+  name: "ものの (although / even though)"
+  jlpt_level: 2
+  description: "A somewhat formal way of connecting two clauses where the second is unexpected given the first, similar in meaning to のに but more neutral in tone."
+  examples: ["運動は体にいいとわかっているものの、なかなか続きません。", "薬を飲んだものの、熱は下がりませんでした。"]
+  related: [noni-although]
+  prerequisites: [noni-although]
+
+- slug: bekida
+  name: "べきだ (should / ought to)"
+  jlpt_level: 2
+  description: "Attached to a verb's dictionary form, べきだ expresses a strong moral or social obligation about what one should do."
+  examples: ["約束は守るべきです。", "もっと勉強するべきだったと思います。"]
+  related: [nakereba-narimasen]
+  prerequisites: []
+
+- slug: te-narimasen
+  name: "てなりません (cannot help feeling)"
+  jlpt_level: 2
+  description: "Attached to the て-form of an emotion or sensation word, てなりません expresses that a feeling is so strong the speaker cannot suppress it."
+  examples: ["国の家族のことが心配でなりません。", "彼の言葉が気になってなりません。"]
+  related: [te-form]
+  prerequisites: [te-form]
+
+- slug: zaru-wo-enai
+  name: "ざるを得ない (have no choice but to)"
+  jlpt_level: 2
+  description: "Attached to a verb's negative stem (irregular for する, which becomes せざるを得ない), ざるを得ない expresses that circumstances force one to do something one wouldn't otherwise choose."
+  examples: ["台風のため、旅行を中止せざるを得ません。", "会社の方針には従わざるを得ない。"]
+  related: [shika-nai]
+  prerequisites: []
+
+- slug: ni-hokanaranai
+  name: "にほかならない (nothing other than / precisely because of)"
+  jlpt_level: 2
+  description: "Attached to a noun, にほかならない emphatically asserts that something is precisely and only the thing stated, ruling out other explanations."
+  examples: ["彼が成功したのは努力の結果にほかならない。", "これは差別にほかならない。"]
+  related: []
+  prerequisites: []
+
+- slug: wo-tooshite
+  name: "を通して (through / throughout)"
+  jlpt_level: 2
+  description: "Marks a means or intermediary something is accomplished through, or a period of time something continues across."
+  examples: ["友達を通して、この仕事を紹介してもらいました。", "一年を通して、雨が多い地域です。"]
+  related: []
+  prerequisites: []
+
+- slug: ue-de
+  name: "上で (after doing / in the process of)"
+  jlpt_level: 2
+  description: "Attached to a verb's plain past form, or a noun + の, 上で marks a necessary step to complete before or during doing something else, often in formal procedural contexts."
+  examples: ["契約書をよく読んだ上で、サインしてください。", "資料を確認した上で、返事します。"]
+  related: []
+  prerequisites: []
