@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	"github.com/mikeyaustin/jlp/internal/application/learning"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
+	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
@@ -39,17 +42,17 @@ func sessionKey(identity learner.IdentityID, sid session.ID) string {
 	return string(identity) + "/" + string(sid)
 }
 
-func (f *fakeDocRepo) GetOrCreateForSession(_ context.Context, identity learner.IdentityID, sid session.ID) (writing.Document, error) {
+func (f *fakeDocRepo) GetOrCreateForSession(_ context.Context, identity learner.IdentityID, sid session.ID) (writing.Document, bool, error) {
 	sk := sessionKey(identity, sid)
 	if id, ok := f.bySession[sk]; ok {
-		return f.docs[docKey(identity, id)], nil
+		return f.docs[docKey(identity, id)], false, nil
 	}
 	f.nextID++
 	id := writing.DocumentID(fmt.Sprintf("doc-%d", f.nextID))
 	doc := writing.Document{ID: id, SessionID: sid, IdentityID: identity, Content: "", Version: 1}
 	f.bySession[sk] = id
 	f.docs[docKey(identity, id)] = doc
-	return doc, nil
+	return doc, true, nil
 }
 
 func (f *fakeDocRepo) Save(_ context.Context, identity learner.IdentityID, id writing.DocumentID, content string) (writing.Document, error) {
@@ -81,8 +84,33 @@ func (f *fakeDocRepo) ListVersions(_ context.Context, identity learner.IdentityI
 	return vs, nil
 }
 
+// fakeEventStore is an in-memory storage.LearningEventRepository used to
+// assert which events the writing service records, without depending on
+// postgres.
+type fakeEventStore struct {
+	events []event.LearningEvent
+}
+
+func (f *fakeEventStore) Append(_ context.Context, ev event.LearningEvent) error {
+	f.events = append(f.events, ev)
+	return nil
+}
+
+func (f *fakeEventStore) ListRecent(context.Context, learner.IdentityID, *session.ID, int) ([]event.LearningEvent, error) {
+	return f.events, nil
+}
+
+// newTestRecorder builds a real learning.Recorder over a fake store and a
+// real in-process bus, so recording behavior (append-then-publish, ID/time
+// defaulting) is exercised honestly rather than stubbed out.
+func newTestRecorder() (*learning.Recorder, *fakeEventStore) {
+	store := &fakeEventStore{}
+	return learning.NewRecorder(store, inprocbus.New()), store
+}
+
 func TestOpenCreatesDocumentOnceThenReturnsSame(t *testing.T) {
-	svc := appwriting.NewService(newFakeDocRepo())
+	rec, store := newTestRecorder()
+	svc := appwriting.NewService(newFakeDocRepo(), rec)
 
 	first, err := svc.Open(context.Background(), "learner-a", "sess-1")
 	if err != nil {
@@ -102,10 +130,37 @@ func TestOpenCreatesDocumentOnceThenReturnsSame(t *testing.T) {
 	if second.ID != first.ID {
 		t.Fatalf("Open returned a different document on second call: %q != %q", second.ID, first.ID)
 	}
+
+	// writing.created is recorded exactly once, on the call that created
+	// the document — not on the second, GetOrCreateForSession-hits-cache
+	// call.
+	var created []event.LearningEvent
+	for _, ev := range store.events {
+		if ev.Type == event.TypeWritingCreated {
+			created = append(created, ev)
+		}
+	}
+	if len(created) != 1 {
+		t.Fatalf("recorded %d writing.created events, want 1: %+v", len(created), store.events)
+	}
+	ev := created[0]
+	if ev.IdentityID != "learner-a" {
+		t.Fatalf("writing.created IdentityID = %q, want learner-a", ev.IdentityID)
+	}
+	if ev.SessionID == nil || *ev.SessionID != session.ID("sess-1") {
+		t.Fatalf("writing.created SessionID = %v, want sess-1", ev.SessionID)
+	}
+	if ev.Subject != string(first.ID) {
+		t.Fatalf("writing.created Subject = %q, want %q", ev.Subject, first.ID)
+	}
+	if ev.ID == "" || ev.OccurredAt.IsZero() {
+		t.Fatalf("writing.created event missing ID/OccurredAt: %+v", ev)
+	}
 }
 
 func TestAutosaveBumpsVersion(t *testing.T) {
-	svc := appwriting.NewService(newFakeDocRepo())
+	rec, store := newTestRecorder()
+	svc := appwriting.NewService(newFakeDocRepo(), rec)
 
 	doc, err := svc.Open(context.Background(), "learner-a", "sess-1")
 	if err != nil {
@@ -122,18 +177,43 @@ func TestAutosaveBumpsVersion(t *testing.T) {
 	if saved.Content != "昨日、映画を見た。" {
 		t.Fatalf("Content = %q, want the saved text", saved.Content)
 	}
+
+	var updated []event.LearningEvent
+	for _, ev := range store.events {
+		if ev.Type == event.TypeWritingUpdated {
+			updated = append(updated, ev)
+		}
+	}
+	if len(updated) != 1 {
+		t.Fatalf("recorded %d writing.updated events, want 1: %+v", len(updated), store.events)
+	}
+	ev := updated[0]
+	if ev.Subject != string(doc.ID) {
+		t.Fatalf("writing.updated Subject = %q, want %q", ev.Subject, doc.ID)
+	}
+	if got := ev.Evidence["rune_count"]; got != saved.RuneCount() {
+		t.Fatalf("writing.updated Evidence[rune_count] = %v, want %d", got, saved.RuneCount())
+	}
+	if got := ev.Evidence["version"]; got != saved.Version {
+		t.Fatalf("writing.updated Evidence[version] = %v, want %d", got, saved.Version)
+	}
 }
 
 func TestAutosaveCrossIdentityReturnsErrNotFound(t *testing.T) {
-	svc := appwriting.NewService(newFakeDocRepo())
+	rec, store := newTestRecorder()
+	svc := appwriting.NewService(newFakeDocRepo(), rec)
 
 	doc, err := svc.Open(context.Background(), "learner-a", "sess-1")
 	if err != nil {
 		t.Fatalf("Open returned error: %v", err)
 	}
+	baseline := len(store.events)
 
 	_, err = svc.Autosave(context.Background(), "learner-b", doc.ID, "mallory's text")
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("Autosave (cross-identity) err = %v, want storage.ErrNotFound", err)
+	}
+	if len(store.events) != baseline {
+		t.Fatalf("a failed Autosave recorded %d new events, want 0", len(store.events)-baseline)
 	}
 }

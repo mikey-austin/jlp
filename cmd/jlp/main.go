@@ -8,8 +8,10 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
+	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
+	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
@@ -38,7 +40,10 @@ func main() {
 		}
 		identities := postgres.NewIdentityRepository(pool)
 		sessionsSvc := sessions.NewService(postgres.NewSessionRepository(pool))
-		writingSvc := appwriting.NewService(postgres.NewDocumentRepository(pool))
+		eventRepo := postgres.NewLearningEventRepository(pool)
+		bus := inprocbus.New()
+		recorder := learning.NewRecorder(eventRepo, bus)
+		writingSvc := appwriting.NewService(postgres.NewDocumentRepository(pool), recorder)
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
 		case "static":
@@ -59,6 +64,7 @@ func main() {
 			Identities: identities,
 			Sessions:   sessionsSvc,
 			Writing:    writingSvc,
+			Events:     eventRepo,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

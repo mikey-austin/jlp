@@ -9,8 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
+	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
@@ -74,17 +77,17 @@ func (f *fakeDocRepo) sessionKey(identity learner.IdentityID, sid session.ID) st
 	return string(identity) + "/" + string(sid)
 }
 
-func (f *fakeDocRepo) GetOrCreateForSession(_ context.Context, identity learner.IdentityID, sid session.ID) (writing.Document, error) {
+func (f *fakeDocRepo) GetOrCreateForSession(_ context.Context, identity learner.IdentityID, sid session.ID) (writing.Document, bool, error) {
 	sk := f.sessionKey(identity, sid)
 	if id, ok := f.bySession[sk]; ok {
-		return f.docs[f.key(identity, id)], nil
+		return f.docs[f.key(identity, id)], false, nil
 	}
 	f.nextID++
 	id := writing.DocumentID(fmt.Sprintf("doc-%d", f.nextID))
 	doc := writing.Document{ID: id, SessionID: sid, IdentityID: identity, Version: 1}
 	f.bySession[sk] = id
 	f.docs[f.key(identity, id)] = doc
-	return doc, nil
+	return doc, true, nil
 }
 
 func (f *fakeDocRepo) Save(_ context.Context, identity learner.IdentityID, id writing.DocumentID, content string) (writing.Document, error) {
@@ -111,10 +114,45 @@ func (f *fakeDocRepo) ListVersions(context.Context, learner.IdentityID, writing.
 	return nil, nil
 }
 
+// fakeEventRepo is an in-memory storage.LearningEventRepository for
+// HTTP-layer tests: identity-scoped and newest-first like the real
+// adapter.
+type fakeEventRepo struct {
+	byIdentity map[learner.IdentityID][]event.LearningEvent
+}
+
+func newFakeEventRepo() *fakeEventRepo {
+	return &fakeEventRepo{byIdentity: map[learner.IdentityID][]event.LearningEvent{}}
+}
+
+func (f *fakeEventRepo) Append(_ context.Context, ev event.LearningEvent) error {
+	f.byIdentity[ev.IdentityID] = append(f.byIdentity[ev.IdentityID], ev)
+	return nil
+}
+
+func (f *fakeEventRepo) ListRecent(_ context.Context, identity learner.IdentityID, sid *session.ID, limit int) ([]event.LearningEvent, error) {
+	all := f.byIdentity[identity]
+	out := make([]event.LearningEvent, 0, len(all))
+	for i := len(all) - 1; i >= 0; i-- {
+		ev := all[i]
+		if sid != nil && (ev.SessionID == nil || *ev.SessionID != *sid) {
+			continue
+		}
+		out = append(out, ev)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 func testOptionsWithSessions() Options {
 	opts := testOptions()
 	opts.Sessions = sessions.NewService(newFakeSessionRepo())
-	opts.Writing = appwriting.NewService(newFakeDocRepo())
+	events := newFakeEventRepo()
+	rec := learning.NewRecorder(events, inprocbus.New())
+	opts.Writing = appwriting.NewService(newFakeDocRepo(), rec)
+	opts.Events = events
 	return opts
 }
 

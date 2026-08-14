@@ -70,3 +70,16 @@ func (s *Server) sessionsWorkspace(w http.ResponseWriter, r *http.Request) {
 		"Document": doc,
 	})
 }
+
+// sessionsActivity renders the last 10 learning events for the session,
+// newest first, as an htmx fragment for the workspace's context pane.
+func (s *Server) sessionsActivity(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	id := session.ID(chi.URLParam(r, "id"))
+	events, err := s.opts.Events.ListRecent(r.Context(), ident.ID, &id, 10)
+	if err != nil {
+		http.Error(w, "could not load activity", http.StatusInternalServerError)
+		return
+	}
+	RenderPartial(w, r, "activity", map[string]any{"Events": events})
+}

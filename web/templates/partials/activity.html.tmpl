@@ -1,0 +1,1 @@
+{{define "activity"}}<ul class="activity-list">{{range .Events}}<li><span class="ev-type">{{.Type}}</span> <time>{{.OccurredAt.Format "15:04"}}</time></li>{{end}}</ul>{{end}}

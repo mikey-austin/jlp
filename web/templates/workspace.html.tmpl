@@ -16,6 +16,8 @@
       {{if .Session.Profile.Tone}}<dt>Tone</dt><dd>{{.Session.Profile.Tone}}</dd>{{end}}
       {{if .Session.Profile.Register}}<dt>Register</dt><dd>{{.Session.Profile.Register}}</dd>{{end}}
     </dl>
+    <h3>アクティビティ</h3>
+    <div id="activity" hx-get="/sessions/{{.Session.ID}}/activity" hx-trigger="load, every 30s"></div>
   </aside>
   <section id="feedback-pane"></section>
 </div>

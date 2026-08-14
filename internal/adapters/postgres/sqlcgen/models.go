@@ -32,6 +32,16 @@ type Identity struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type LearningEvent struct {
+	ID         pgtype.UUID
+	IdentityID string
+	SessionID  pgtype.UUID
+	Type       string
+	Subject    string
+	Evidence   []byte
+	OccurredAt pgtype.Timestamptz
+}
+
 type Session struct {
 	ID         pgtype.UUID
 	IdentityID string

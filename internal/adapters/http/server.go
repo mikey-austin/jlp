@@ -18,6 +18,7 @@ type Options struct {
 	Identities storage.IdentityRepository
 	Sessions   *sessions.Service
 	Writing    *appwriting.Service
+	Events     storage.LearningEventRepository
 }
 
 type Server struct {
@@ -55,6 +56,7 @@ func (s *Server) routes() http.Handler {
 		r.Get("/sessions", s.sessionsList)
 		r.Post("/sessions", s.sessionsCreate)
 		r.Get("/sessions/{id}", s.sessionsWorkspace)
+		r.Get("/sessions/{id}/activity", s.sessionsActivity)
 		r.Post("/documents/{id}", s.documentsSave)
 	})
 	return r

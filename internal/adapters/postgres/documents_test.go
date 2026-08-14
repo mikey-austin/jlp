@@ -55,9 +55,12 @@ func TestDocumentGetOrCreateSaveAndVersions(t *testing.T) {
 	docs := NewDocumentRepository(pool)
 
 	// GetOrCreateForSession: first call creates an empty document at version 1.
-	doc, err := docs.GetOrCreateForSession(ctx, identityA.ID, sess.ID)
+	doc, created, err := docs.GetOrCreateForSession(ctx, identityA.ID, sess.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !created {
+		t.Fatal("fresh document: created = false, want true")
 	}
 	if doc.Version != 1 {
 		t.Fatalf("fresh document Version = %d, want 1", doc.Version)
@@ -67,10 +70,14 @@ func TestDocumentGetOrCreateSaveAndVersions(t *testing.T) {
 	}
 
 	// GetOrCreateForSession: second call returns the same document, not a
-	// new one (the unique index on session_id backs this, too).
-	again, err := docs.GetOrCreateForSession(ctx, identityA.ID, sess.ID)
+	// new one (the unique index on session_id backs this, too), and
+	// reports created = false.
+	again, created2, err := docs.GetOrCreateForSession(ctx, identityA.ID, sess.ID)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if created2 {
+		t.Fatal("second GetOrCreateForSession call: created = true, want false")
 	}
 	if again.ID != doc.ID {
 		t.Fatalf("GetOrCreateForSession returned a different document on second call: %q != %q", again.ID, doc.ID)

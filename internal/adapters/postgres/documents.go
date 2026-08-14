@@ -29,23 +29,24 @@ func NewDocumentRepository(pool *pgxpool.Pool) *DocumentRepository {
 
 // GetOrCreateForSession returns the session's single document, creating an
 // empty one (version 1) the first time the session's workspace is opened.
-func (r *DocumentRepository) GetOrCreateForSession(ctx context.Context, identity learner.IdentityID, sid session.ID) (writing.Document, error) {
+// The bool return is true only when this call created the document.
+func (r *DocumentRepository) GetOrCreateForSession(ctx context.Context, identity learner.IdentityID, sid session.ID) (writing.Document, bool, error) {
 	pgSID, err := parseUUID(string(sid))
 	if err != nil {
-		return writing.Document{}, fmt.Errorf("session id: %w", err)
+		return writing.Document{}, false, fmt.Errorf("session id: %w", err)
 	}
 
 	row, err := r.q.GetDocumentBySession(ctx, sqlcgen.GetDocumentBySessionParams{SessionID: pgSID, IdentityID: string(identity)})
 	if err == nil {
-		return fromDocumentRow(row), nil
+		return fromDocumentRow(row), false, nil
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
-		return writing.Document{}, err
+		return writing.Document{}, false, err
 	}
 
 	id, err := uuid.NewRandom()
 	if err != nil {
-		return writing.Document{}, err
+		return writing.Document{}, false, err
 	}
 	row, err = r.q.InsertDocument(ctx, sqlcgen.InsertDocumentParams{
 		ID:         pgtype.UUID{Bytes: id, Valid: true},
@@ -56,9 +57,9 @@ func (r *DocumentRepository) GetOrCreateForSession(ctx context.Context, identity
 		UpdatedAt:  pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 	})
 	if err != nil {
-		return writing.Document{}, err
+		return writing.Document{}, false, err
 	}
-	return fromDocumentRow(row), nil
+	return fromDocumentRow(row), true, nil
 }
 
 // Save persists new content, incrementing Version and appending a
