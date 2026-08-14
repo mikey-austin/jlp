@@ -78,6 +78,26 @@ func (r *LearningEventRepository) ListRecent(ctx context.Context, identity learn
 	return out, nil
 }
 
+// ListAll returns every event for identity, oldest first — the full
+// history internal/application/learnermodel needs to fold, whether for
+// one live event's trailing-window scan or a whole-identity
+// `jlp rebuild-model` replay.
+func (r *LearningEventRepository) ListAll(ctx context.Context, identity learner.IdentityID) ([]event.LearningEvent, error) {
+	rows, err := r.q.ListAllLearningEvents(ctx, string(identity))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]event.LearningEvent, 0, len(rows))
+	for _, row := range rows {
+		ev, err := fromLearningEventRow(row)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, ev)
+	}
+	return out, nil
+}
+
 // toNullableUUID converts an optional session.ID to the nullable pgtype
 // sqlc generates for the learning_events.session_id column: nil maps to
 // an invalid (SQL NULL) pgtype.UUID.

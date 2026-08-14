@@ -34,6 +34,10 @@ func (f *fakeEventStore) ListRecent(context.Context, learner.IdentityID, *sessio
 	return f.appended, nil
 }
 
+func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.LearningEvent, error) {
+	return f.appended, nil
+}
+
 // fakeBus is an in-memory events.EventBus that records Publish into the
 // same shared `order` slice as fakeEventStore.
 type fakeBus struct {

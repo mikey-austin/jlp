@@ -169,6 +169,16 @@ func (f *fakeEventRepo) ListRecent(_ context.Context, identity learner.IdentityI
 	return out, nil
 }
 
+func (f *fakeEventRepo) ListAll(_ context.Context, identity learner.IdentityID) ([]event.LearningEvent, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	all := f.byIdentity[identity]
+	out := make([]event.LearningEvent, len(all))
+	copy(out, all)
+	return out, nil
+}
+
 func testOptionsWithSessions() Options {
 	opts := testOptions()
 	opts.Sessions = sessions.NewService(newFakeSessionRepo())

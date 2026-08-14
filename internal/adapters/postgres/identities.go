@@ -38,3 +38,21 @@ func (r *IdentityRepository) Get(ctx context.Context, id learner.IdentityID) (le
 	}
 	return learner.Identity{ID: learner.IdentityID(row.ID), DisplayName: row.DisplayName, Attributes: attrs}, nil
 }
+
+// ListIdentities returns every identity, for callers — like
+// `jlp rebuild-model` — that need to act on all of them.
+func (r *IdentityRepository) ListIdentities(ctx context.Context) ([]learner.Identity, error) {
+	rows, err := r.q.ListIdentities(ctx)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]learner.Identity, 0, len(rows))
+	for _, row := range rows {
+		var attrs map[string]string
+		if err := json.Unmarshal(row.Attributes, &attrs); err != nil {
+			return nil, fmt.Errorf("identity %s attributes: %w", row.ID, err)
+		}
+		out = append(out, learner.Identity{ID: learner.IdentityID(row.ID), DisplayName: row.DisplayName, Attributes: attrs})
+	}
+	return out, nil
+}

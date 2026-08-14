@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
@@ -16,10 +17,12 @@ import (
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
+	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
+	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/observability"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
@@ -64,6 +67,18 @@ func main() {
 		bus := inprocbus.New()
 		recorder := learning.NewRecorder(eventRepo, bus)
 		writingSvc := appwriting.NewService(postgres.NewDocumentRepository(pool), recorder)
+
+		// The learner model (Task 4, PRD §13/§14/§44) reacts to every
+		// correction.presented and grammar.concept.encountered event as
+		// it's published — the same two event types Rebuild (see
+		// cmd/jlp/rebuild.go) replays wholesale through the exact same
+		// Updater.HandleEvent. Subscribe absorbs handler errors (see
+		// learning.Recorder.Record's doc comment on publish absorption),
+		// so a learner-model failure never fails the request that
+		// produced the event.
+		obsUpdater := learnermodel.NewUpdater(eventRepo, postgres.NewObservationRepository(pool), time.Now)
+		bus.Subscribe(event.TypeCorrectionPresented, obsUpdater.HandleEvent)
+		bus.Subscribe(event.TypeGrammarConceptEncountered, obsUpdater.HandleEvent)
 
 		var innerGen ai.StructuredGenerator
 		switch cfg.AI.Provider {
@@ -154,6 +169,17 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("seed complete")
+	case "rebuild-model":
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		if err := runRebuildModel(context.Background(), cfg); err != nil {
+			slog.Error("rebuild-model", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("rebuild-model complete")
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)

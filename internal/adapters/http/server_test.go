@@ -51,6 +51,7 @@ func (testIdentityRepo) Upsert(context.Context, learner.Identity) error { return
 func (testIdentityRepo) Get(_ context.Context, id learner.IdentityID) (learner.Identity, error) {
 	return learner.Identity{ID: id}, nil
 }
+func (testIdentityRepo) ListIdentities(context.Context) ([]learner.Identity, error) { return nil, nil }
 
 func testOptions() Options {
 	return Options{

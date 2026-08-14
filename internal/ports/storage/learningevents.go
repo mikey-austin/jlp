@@ -16,4 +16,11 @@ type LearningEventRepository interface {
 	// ListRecent returns up to limit events for identity, newest first. If
 	// sid is non-nil, results are further scoped to that session.
 	ListRecent(ctx context.Context, identity learner.IdentityID, sid *session.ID, limit int) ([]event.LearningEvent, error)
+	// ListAll returns every event for identity, oldest first
+	// (occurred_at ASC). Used by internal/application/learnermodel to
+	// fold an identity's whole history — the per-event weakness window
+	// scan and `jlp rebuild-model`'s full replay both need the complete,
+	// chronologically ordered stream, not just the most recent slice
+	// ListRecent bounds by limit.
+	ListAll(ctx context.Context, identity learner.IdentityID) ([]event.LearningEvent, error)
 }

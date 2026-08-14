@@ -105,6 +105,10 @@ func (f *fakeEventStore) ListRecent(context.Context, learner.IdentityID, *sessio
 	return f.events, nil
 }
 
+func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.LearningEvent, error) {
+	return f.events, nil
+}
+
 // newTestRecorder builds a real learning.Recorder over a fake store and a
 // real in-process bus, so recording behavior (append-then-publish, ID/time
 // defaulting) is exercised honestly rather than stubbed out.

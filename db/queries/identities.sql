@@ -5,3 +5,6 @@ ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, attributes 
 
 -- name: GetIdentity :one
 SELECT id, display_name, attributes, created_at FROM identities WHERE id = $1;
+
+-- name: ListIdentities :many
+SELECT id, display_name, attributes, created_at FROM identities ORDER BY id;

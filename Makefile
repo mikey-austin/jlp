@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed deploy-local deploy deploy-logs
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed rebuild-model deploy-local deploy deploy-logs
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -58,6 +58,9 @@ migrate: ## Apply database migrations
 
 seed: ## Populate a dev-friendly identity, session, and document (idempotent)
 	$(TOOLS) go run ./cmd/jlp seed
+
+rebuild-model: ## Recompute every identity's learner_observations from learning_events (safe to rerun)
+	$(TOOLS) go run ./cmd/jlp rebuild-model
 
 migrate-new: ## Create a migration (n=short_name)
 	@test -n "$(n)" || (echo "usage: make migrate-new n=add_table"; exit 1)

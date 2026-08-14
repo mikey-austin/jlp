@@ -205,6 +205,10 @@ func (f *fakeEventStore) ListRecent(context.Context, learner.IdentityID, *sessio
 	return f.events, nil
 }
 
+func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.LearningEvent, error) {
+	return f.events, nil
+}
+
 // fakeGrammarRepo is an in-memory storage.GrammarRepository: only
 // ListConcepts is exercised by the feedback pipeline (it builds the
 // teacher.feedback.v2 prompt's candidate list and the known-slug set

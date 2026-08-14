@@ -25,6 +25,35 @@ func (q *Queries) GetIdentity(ctx context.Context, id string) (Identity, error) 
 	return i, err
 }
 
+const listIdentities = `-- name: ListIdentities :many
+SELECT id, display_name, attributes, created_at FROM identities ORDER BY id
+`
+
+func (q *Queries) ListIdentities(ctx context.Context) ([]Identity, error) {
+	rows, err := q.db.Query(ctx, listIdentities)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Identity
+	for rows.Next() {
+		var i Identity
+		if err := rows.Scan(
+			&i.ID,
+			&i.DisplayName,
+			&i.Attributes,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertIdentity = `-- name: UpsertIdentity :exec
 INSERT INTO identities (id, display_name, attributes)
 VALUES ($1, $2, $3)

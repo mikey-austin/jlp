@@ -43,6 +43,7 @@ tidy               go mod tidy inside the container
 clean              Stop stack and remove volumes + build artifacts
 migrate            Apply database migrations
 seed               Populate a dev-friendly identity, session, and document (idempotent)
+rebuild-model      Recompute every identity's learner_observations from learning_events (safe to rerun)
 migrate-new        Create a migration (n=short_name)
 sqlc               Regenerate sqlc query code
 db-shell           psql into the dev database

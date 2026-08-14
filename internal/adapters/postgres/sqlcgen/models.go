@@ -101,6 +101,18 @@ type Identity struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type LearnerObservation struct {
+	ID          pgtype.UUID
+	IdentityID  string
+	Kind        string
+	SubjectType string
+	Subject     string
+	Confidence  float64
+	Evidence    []byte
+	FirstSeen   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type LearningEvent struct {
 	ID         pgtype.UUID
 	IdentityID string

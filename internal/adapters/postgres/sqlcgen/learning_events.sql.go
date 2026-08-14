@@ -39,6 +39,41 @@ func (q *Queries) AppendLearningEvent(ctx context.Context, arg AppendLearningEve
 	return err
 }
 
+const listAllLearningEvents = `-- name: ListAllLearningEvents :many
+SELECT id, identity_id, session_id, type, subject, evidence, occurred_at
+FROM learning_events
+WHERE identity_id = $1
+ORDER BY occurred_at ASC
+`
+
+func (q *Queries) ListAllLearningEvents(ctx context.Context, identityID string) ([]LearningEvent, error) {
+	rows, err := q.db.Query(ctx, listAllLearningEvents, identityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LearningEvent
+	for rows.Next() {
+		var i LearningEvent
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdentityID,
+			&i.SessionID,
+			&i.Type,
+			&i.Subject,
+			&i.Evidence,
+			&i.OccurredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listRecentLearningEvents = `-- name: ListRecentLearningEvents :many
 SELECT id, identity_id, session_id, type, subject, evidence, occurred_at
 FROM learning_events

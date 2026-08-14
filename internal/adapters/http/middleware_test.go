@@ -29,6 +29,9 @@ func (f *fakeIdentityRepo) Upsert(context.Context, learner.Identity) error {
 func (f *fakeIdentityRepo) Get(_ context.Context, id learner.IdentityID) (learner.Identity, error) {
 	return learner.Identity{ID: id}, nil
 }
+func (f *fakeIdentityRepo) ListIdentities(context.Context) ([]learner.Identity, error) {
+	return nil, nil
+}
 
 func TestRequireIdentityInjectsAndUpsertsOnce(t *testing.T) {
 	repo := &fakeIdentityRepo{}
