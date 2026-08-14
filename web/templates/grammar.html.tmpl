@@ -1,0 +1,14 @@
+{{define "content"}}<section class="grammar">
+  <h1>文法</h1>
+  <table class="sessions-table grammar-table">
+    <thead><tr><th>名前</th><th>JLPT</th><th>遭遇回数</th><th>最終確認</th></tr></thead>
+    <tbody>
+      {{range .Concepts}}<tr>
+        <td><a href="/grammar/{{.Slug}}">{{.Name}}</a></td>
+        <td><span class="chip jlpt-chip">{{.JLPTChip}}</span></td>
+        <td>{{.Encounters}}</td>
+        <td>{{if .Encounters}}{{.LastSeen.Format "2006-01-02"}}{{else}}未遭遇{{end}}</td>
+      </tr>{{else}}<tr><td colspan="4">文法コンセプトがありません</td></tr>{{end}}
+    </tbody>
+  </table>
+</section>{{end}}

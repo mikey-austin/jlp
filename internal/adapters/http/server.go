@@ -43,6 +43,11 @@ type Options struct {
 	// AIRatings backs the feedback partial's star widget and the /ai
 	// page's rating column (Task 15).
 	AIRatings storage.AIRatingRepository
+	// Grammar backs the /grammar catalog + per-concept detail pages
+	// (Task 3): ConceptStats drives the list, GetConcept and
+	// CorrectionsForConcept drive the detail page. The same repository
+	// instance Feedback's concept-tagging path uses (see main.go).
+	Grammar storage.GrammarRepository
 }
 
 type Server struct {
@@ -106,6 +111,8 @@ func (s *Server) routes() http.Handler {
 		r.Post("/documents/{id}", s.documentsSave)
 		r.Get("/ai", s.aiRequests)
 		r.Post("/ratings", s.ratingsCreate)
+		r.Get("/grammar", s.grammarList)
+		r.Get("/grammar/{slug}", s.grammarDetail)
 
 		// /api/v1: the versioned JSON API (Task 16). It shares the exact
 		// same application services as the HTML routes above — no new

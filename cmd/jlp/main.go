@@ -83,11 +83,16 @@ func main() {
 		aiGen := observability.NewAIObserver(innerGen, aiRequestRepo, aiPricing())
 
 		teacherAgent := teacher.New(aiGen)
+		// grammarRepo is shared between the feedback pipeline's
+		// concept-tagging (below) and the /grammar pages (Task 3): one
+		// stateless repository instance wrapping the same pool, not two
+		// separate constructions of the same thing.
+		grammarRepo := postgres.NewGrammarRepository(pool)
 		feedbackSvc := feedback.NewService(
 			postgres.NewSessionRepository(pool),
 			postgres.NewDocumentRepository(pool),
 			postgres.NewFeedbackRepository(pool),
-			postgres.NewGrammarRepository(pool),
+			grammarRepo,
 			teacherAgent,
 			recorder,
 		)
@@ -120,6 +125,7 @@ func main() {
 			AI:         aiGen,
 			AIRequests: aiRequestRepo,
 			AIRatings:  aiRatingRepo,
+			Grammar:    grammarRepo,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

@@ -1,0 +1,29 @@
+{{define "content"}}<section class="grammar-concept">
+  <h1>{{.Concept.Name}} <span class="chip jlpt-chip">{{.JLPTChip}}</span></h1>
+  <p class="description">{{.Concept.Description}}</p>
+
+  <h2>例文</h2>
+  <ul class="examples">
+    {{range .Concept.Examples}}<li>{{.}}</li>{{else}}<li class="empty">例文がありません</li>{{end}}
+  </ul>
+
+  {{if .Concept.Related}}<h2>関連</h2>
+  <p class="concepts">{{range .Concept.Related}}<a class="chip" href="/grammar/{{.}}">{{.}}</a>{{end}}</p>{{end}}
+
+  {{if .Concept.Prerequisites}}<h2>前提</h2>
+  <p class="concepts">{{range .Concept.Prerequisites}}<a class="chip" href="/grammar/{{.}}">{{.}}</a>{{end}}</p>{{end}}
+
+  <h2>最近の訂正</h2>
+  <table class="sessions-table corrections-table">
+    <thead><tr><th>原文</th><th>訂正</th><th>種類</th><th>重大度</th><th>状態</th></tr></thead>
+    <tbody>
+      {{range .Corrections}}<tr>
+        <td>{{.Original}}</td>
+        <td>{{.Replacement}}</td>
+        <td>{{.Type}}</td>
+        <td>{{.Severity}}</td>
+        <td>{{.Status}}</td>
+      </tr>{{else}}<tr><td colspan="5">まだ訂正がありません</td></tr>{{end}}
+    </tbody>
+  </table>
+</section>{{end}}
