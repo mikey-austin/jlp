@@ -26,6 +26,20 @@ type AiRequest struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type Correction struct {
+	ID                pgtype.UUID
+	FeedbackRequestID pgtype.UUID
+	Position          int32
+	Original          string
+	Replacement       string
+	Type              string
+	Severity          string
+	ExplanationJa     string
+	ExplanationEn     string
+	Status            string
+	CreatedAt         pgtype.Timestamptz
+}
+
 type Document struct {
 	ID         pgtype.UUID
 	SessionID  pgtype.UUID
@@ -41,6 +55,19 @@ type DocumentVersion struct {
 	Version    int32
 	Content    string
 	CreatedAt  pgtype.Timestamptz
+}
+
+type FeedbackRequest struct {
+	ID             pgtype.UUID
+	IdentityID     string
+	SessionID      pgtype.UUID
+	DocumentID     pgtype.UUID
+	SelectionStart int32
+	SelectionEnd   int32
+	SelectionText  string
+	CorrectedText  string
+	AiRequestID    pgtype.UUID
+	CreatedAt      pgtype.Timestamptz
 }
 
 type Identity struct {
