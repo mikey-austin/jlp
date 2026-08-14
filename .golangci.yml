@@ -4,19 +4,12 @@ linters:
   settings:
     depguard:
       rules:
-        # Every rule below excludes _test.go files. PRD §75 Rules 1-3 govern
-        # the *shipped* dependency graph (domain/agent/application must not
-        # depend on concrete adapters at runtime) — production code already
-        # satisfies that (see e.g. the "imports ports/ai + prompts + schemas
-        # + domain ONLY" comment on agent/teacher). Tests legitimately
-        # construct concrete port implementations (fakeai, inprocbus) as
-        # test doubles and inject them through the same constructors
-        # production wiring uses — that's the payoff of depending on
-        # interfaces, not a violation of it. Blocking that would force a
-        # duplicate mocks package for no architectural benefit, so the file
-        # scope is adjusted rather than the code moved.
+        # domain-purity applies to every file, including tests: domain has
+        # no ports to inject through, so a domain test importing an
+        # adapter would be a genuine violation, not a legitimate test
+        # double. No test files have ever been flagged by this rule.
         domain-purity:
-          files: ["**/internal/domain/**", "!**/*_test.go"]
+          files: ["**/internal/domain/**"]
           deny:
             - pkg: github.com/mikeyaustin/jlp/internal/adapters
               desc: "Rule 1/2: domain imports no adapters"
@@ -27,15 +20,26 @@ linters:
             - { pkg: net/http, desc: "Rule 2" }
             - { pkg: github.com/jackc, desc: "Rule 2" }
             - { pkg: github.com/spf13/viper, desc: "Rule 2" }
+        # agents-no-repos and application-no-adapters also apply to test
+        # files by default. The exact three test files that construct
+        # fakeai/inprocbus as port-shaped test doubles (injected through
+        # the same constructors production wiring uses) carry an inline
+        # //nolint:depguard on the specific import line rather than a
+        # blanket file exemption — see
+        # internal/agent/teacher/teacher_test.go,
+        # internal/application/feedback/service_test.go,
+        # internal/application/writing/service_test.go. Any other file
+        # under internal/agent/** or internal/application/** that imports
+        # a real adapter is still flagged.
         agents-no-repos:
-          files: ["**/internal/agent/**", "!**/*_test.go"]
+          files: ["**/internal/agent/**"]
           deny:
             - pkg: github.com/mikeyaustin/jlp/internal/adapters
               desc: "Rule 3: agents reach state only through tools/services"
             - pkg: github.com/mikeyaustin/jlp/internal/ports/storage
               desc: "Rule 3: agents must not touch repositories"
         application-no-adapters:
-          files: ["**/internal/application/**", "!**/*_test.go"]
+          files: ["**/internal/application/**"]
           deny:
             - pkg: github.com/mikeyaustin/jlp/internal/adapters
               desc: "application depends on ports, not adapters"

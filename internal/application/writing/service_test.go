@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus" //nolint:depguard // inprocbus is a port-shaped test double injected via learning.NewRecorder(..., events.EventBus); PRD §75 forbids application importing real adapters, not fakes
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/domain/event"

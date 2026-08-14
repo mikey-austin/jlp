@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"
-	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"    //nolint:depguard // fakeai/inprocbus are port-shaped test doubles; PRD §75 forbids agents/application importing real adapters, not fakes
+	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus" //nolint:depguard // see fakeai above
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	appfeedback "github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
