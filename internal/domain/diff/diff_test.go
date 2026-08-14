@@ -115,3 +115,40 @@ func TestRunesSameString(t *testing.T) {
 		})
 	}
 }
+
+func TestRunesSemanticCleanup(t *testing.T) {
+	// CRITICAL: DiffCleanupSemantic must be applied to group related changes
+	// This test verifies that cleanup actually works by checking:
+	// 1. No two adjacent segments have the same Op (cleanup merges them)
+	// 2. Total segment count is reasonable
+
+	a := "こんにちは世界"
+	b := "こんばんは世界"
+
+	result := Runes(a, b)
+
+	// Verify no adjacent segments have the same Op
+	for i := 0; i < len(result)-1; i++ {
+		if result[i].Op == result[i+1].Op {
+			t.Errorf("Runes(%q, %q) has adjacent segments with same Op at index %d: %v and %v",
+				a, b, i, result[i], result[i+1])
+		}
+	}
+
+	// Verify the result is reasonably compact (should be <= 4 segments: equal, delete, equal, insert or similar)
+	if len(result) > 4 {
+		t.Errorf("Runes(%q, %q) returned %d segments (too many, cleanup may not work): %v",
+			a, b, len(result), result)
+	}
+
+	// Verify concatenation properties still hold
+	var buf strings.Builder
+	for _, seg := range result {
+		if seg.Op != OpDelete {
+			buf.WriteString(seg.Text)
+		}
+	}
+	if result_b := buf.String(); result_b != b {
+		t.Errorf("Concatenating non-delete segments: got %q, want %q", result_b, b)
+	}
+}

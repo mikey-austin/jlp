@@ -43,6 +43,7 @@ var ErrNoMatch = errors.New("correction original not found in selection")
 
 // NewResult applies the given corrections to the selection string in order.
 // Corrections are applied left-to-right using substring matching on the remaining text.
+// The search cursor advances past each applied replacement to prevent re-matching inside the replacement.
 // Corrections whose Original text is not found are skipped.
 // Each applied correction is assigned a UUID.
 // Returns ErrNoMatch-wrapped error only if corrections were provided but none applied.
@@ -61,22 +62,28 @@ func NewResult(selection string, corrections []Correction) (Result, error) {
 	// Process corrections in order
 	applied := 0
 	remaining := selection
-	cursor := 0 // byte position in original selection
+	cursor := 0 // byte position where we've already applied corrections
+	var misses []string
 
 	for _, corr := range corrections {
-		// Find the original text in the remaining part
-		idx := strings.Index(remaining, corr.Original)
+		// Search only in the untouched tail (from cursor onwards)
+		// This prevents re-matching inside just-applied replacements
+		idx := strings.Index(remaining[cursor:], corr.Original)
 		if idx == -1 {
 			// Correction not found, skip it
+			misses = append(misses, corr.Original)
 			continue
 		}
+
+		// Adjust index to account for the cursor offset
+		idx += cursor
 
 		// Apply the correction
 		before := remaining[:idx]
 		after := remaining[idx+len(corr.Original):]
 
 		// Build the corrected version
-		correctedPart := before + corr.Replacement + after
+		remaining = before + corr.Replacement + after
 
 		// Assign a UUID to this correction
 		corrID := uuid.New().String()
@@ -86,9 +93,8 @@ func NewResult(selection string, corrections []Correction) (Result, error) {
 		appliedCorr.ID = corrID
 		result.Corrections = append(result.Corrections, appliedCorr)
 
-		// Update for next iteration
-		remaining = correctedPart
-		cursor += len(before) + len(corr.Replacement)
+		// Advance cursor past the replacement to prevent re-matching inside it
+		cursor = idx + len(corr.Replacement)
 		applied++
 	}
 
@@ -97,7 +103,7 @@ func NewResult(selection string, corrections []Correction) (Result, error) {
 
 	// Return error if no corrections were applied but some were provided
 	if applied == 0 && len(corrections) > 0 {
-		return result, fmt.Errorf("%w", ErrNoMatch)
+		return result, fmt.Errorf("no corrections matched (%v): %w", misses, ErrNoMatch)
 	}
 
 	return result, nil

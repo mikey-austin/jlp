@@ -236,3 +236,41 @@ func TestNewResultTwoIdenticalCorrectionsBindLeftToRight(t *testing.T) {
 		t.Errorf("NewResult() applied count = %d, want 2", len(result.Corrections))
 	}
 }
+
+func TestNewResultCursorAdvancesPastReplacement(t *testing.T) {
+	// CRITICAL: cursor must advance past replacement to prevent re-matching inside the replacement
+	selection := "いいですいいです"
+	corrections := []Correction{
+		{
+			Original:    "いいです",
+			Replacement: "いいですね",
+			Type:        "vocabulary",
+			Severity:    "optional",
+			Explanation: Explanation{JA: "ja", EN: "en"},
+		},
+		{
+			Original:    "いいです",
+			Replacement: "よかったです",
+			Type:        "vocabulary",
+			Severity:    "less-natural",
+			Explanation: Explanation{JA: "ja", EN: "en"},
+		},
+	}
+
+	result, err := NewResult(selection, corrections)
+	if err != nil {
+		t.Fatalf("NewResult() error = %v, want nil", err)
+	}
+
+	// First "いいです" (position 0-3) should be replaced with "いいですね"
+	// The second correction must NOT re-match the "いいです" inside "いいですね"
+	// Second "いいです" (position 6-9) should be replaced with "よかったです"
+	want := "いいですねよかったです"
+	if result.Corrected != want {
+		t.Errorf("NewResult() Corrected = %q, want %q (cursor must advance past replacement)", result.Corrected, want)
+	}
+
+	if len(result.Corrections) != 2 {
+		t.Errorf("NewResult() applied count = %d, want 2", len(result.Corrections))
+	}
+}

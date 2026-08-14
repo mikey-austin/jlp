@@ -36,7 +36,8 @@ func Runes(a, b string) []Segment {
 	diffs := dmp.DiffMain(a, b, false)
 
 	// Apply semantic cleanup to group semantically related changes
-	dmp.DiffCleanupSemantic(diffs)
+	// CRITICAL: Must capture return value as DiffCleanupSemantic may reallocate the slice
+	diffs = dmp.DiffCleanupSemantic(diffs)
 
 	// Convert diffmatchpatch.Diff to our Segment type
 	segments := make([]Segment, 0, len(diffs))
@@ -51,11 +52,9 @@ func Runes(a, b string) []Segment {
 			op = OpDelete
 		}
 
-		// Verify UTF-8 validity
+		// Verify UTF-8 validity - this should never fail with valid input
 		if !utf8.ValidString(diff.Text) {
-			// If we get broken UTF-8, we need to handle it at the rune level
-			// DiffMainRunes would be better, but let's try to salvage with rune boundaries
-			continue
+			panic("diffmatchpatch produced invalid UTF-8: " + diff.Text)
 		}
 
 		segments = append(segments, Segment{Op: op, Text: diff.Text})
