@@ -34,6 +34,13 @@ type Options struct {
 	// pipeline (Task 12/13) goes through Feedback above — but it's
 	// wired through here in case a future task needs it directly.
 	AI ai.StructuredGenerator
+	// AIRequests backs the /ai observability page's table (Task 15):
+	// the same audit-log repository the observability decorator writes
+	// through, read back here for display.
+	AIRequests storage.AIRequestRepository
+	// AIRatings backs the feedback partial's star widget and the /ai
+	// page's rating column (Task 15).
+	AIRatings storage.AIRatingRepository
 }
 
 type Server struct {
@@ -72,6 +79,8 @@ func (s *Server) routes() http.Handler {
 		r.Post("/sessions/{id}/feedback", s.feedbackRequest)
 		r.Post("/corrections/{id}/status", s.correctionStatus)
 		r.Post("/documents/{id}", s.documentsSave)
+		r.Get("/ai", s.aiRequests)
+		r.Post("/ratings", s.ratingsCreate)
 	})
 	return r
 }

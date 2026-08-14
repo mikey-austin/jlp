@@ -77,8 +77,10 @@ func main() {
 		}
 		// Every AI call is observed, whichever provider is behind it: the
 		// audit trail (latency, cost, success) must never depend on
-		// remembering to wrap a specific adapter.
-		aiGen := observability.NewAIObserver(innerGen, postgres.NewAIRequestRepository(pool), aiPricing())
+		// remembering to wrap a specific adapter. The same repository
+		// instance is read back by the /ai page (Task 15) below.
+		aiRequestRepo := postgres.NewAIRequestRepository(pool)
+		aiGen := observability.NewAIObserver(innerGen, aiRequestRepo, aiPricing())
 
 		teacherAgent := teacher.New(aiGen)
 		feedbackSvc := feedback.NewService(
@@ -89,6 +91,7 @@ func main() {
 			recorder,
 		)
 		analyticsSvc := analytics.NewService(postgres.NewAnalyticsRepository(pool))
+		aiRatingRepo := postgres.NewAIRatingRepository(pool)
 
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
@@ -114,6 +117,8 @@ func main() {
 			Feedback:   feedbackSvc,
 			Analytics:  analyticsSvc,
 			AI:         aiGen,
+			AIRequests: aiRequestRepo,
+			AIRatings:  aiRatingRepo,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

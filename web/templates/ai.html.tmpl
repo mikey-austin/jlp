@@ -1,0 +1,18 @@
+{{define "content"}}<section class="ai-requests">
+  <h1>AIリクエスト</h1>
+  <table class="sessions-table ai-table">
+    <thead><tr><th>Provider</th><th>Model</th><th>Prompt</th><th>Latency (ms)</th><th>Tokens in/out</th><th>Cost (USD)</th><th>Success</th><th>Rating</th></tr></thead>
+    <tbody>
+      {{range .Requests}}<tr>
+        <td>{{.Provider}}</td>
+        <td>{{.Model}}</td>
+        <td>{{.PromptName}} {{.PromptVersion}}</td>
+        <td>{{.LatencyMS}}</td>
+        <td>{{.InputTokens}}/{{.OutputTokens}}</td>
+        <td>{{printf "%.6f" .CostUSD}}</td>
+        <td>{{if .Success}}✓{{else}}✗{{end}}</td>
+        <td>{{if .Rating}}{{.Rating}}{{else}}—{{end}}</td>
+      </tr>{{else}}<tr><td colspan="8" class="empty">まだAIリクエストがありません</td></tr>{{end}}
+    </tbody>
+  </table>
+</section>{{end}}

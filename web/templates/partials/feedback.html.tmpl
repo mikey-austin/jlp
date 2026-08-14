@@ -7,5 +7,15 @@
   </div>
   <div class="cards">{{range .Cards}}{{template "correction_card" .}}{{end}}</div>
   {{end}}
+  {{if .AIRequestID}}
+  <div class="rating" x-data="{ score: 0 }">
+    <span>この添削はどうでしたか？</span>
+    {{/* 5 buttons; posts on click */}}
+    <template x-for="n in 5"><button type="button" class="star"
+       :class="{ on: n <= score }"
+       @click="score = n; fetch('/ratings', {method:'POST',
+          body: new URLSearchParams({ai_request_id: '{{.AIRequestID}}', rating: n})})">★</button></template>
+  </div>
+  {{end}}
 </div>
 {{end}}

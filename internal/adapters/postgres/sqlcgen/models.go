@@ -8,6 +8,14 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AiRating struct {
+	ID          pgtype.UUID
+	AiRequestID pgtype.UUID
+	IdentityID  string
+	Rating      int32
+	CreatedAt   pgtype.Timestamptz
+}
+
 type AiRequest struct {
 	ID            pgtype.UUID
 	IdentityID    string

@@ -46,3 +46,8 @@ main { padding:1rem; max-width:1400px; margin:0 auto; }
 .error-types li, .recent-sessions li { display:flex; justify-content:space-between; padding:.4rem .2rem; border-bottom:1px solid var(--border); }
 .error-types li.empty, .recent-sessions li.empty { color:var(--muted); justify-content:flex-start; }
 .error-types .error-count { color:var(--muted); }
+.rating { margin-top:1rem; display:flex; gap:.4rem; align-items:center; }
+.rating .star { border:none; background:none; font-size:1.4rem; line-height:1; padding:0; cursor:pointer; color:var(--border); }
+.rating .star.on { color:var(--accent); }
+.ai-table td, .ai-table th { white-space:nowrap; }
+.ai-table .empty { color:var(--muted); white-space:normal; }
