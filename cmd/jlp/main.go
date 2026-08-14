@@ -8,7 +8,9 @@ import (
 
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
+	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
 	"github.com/mikeyaustin/jlp/internal/config"
+	"github.com/mikeyaustin/jlp/internal/ports/auth"
 )
 
 func main() {
@@ -26,7 +28,28 @@ func main() {
 			slog.Error("config", "err", err)
 			os.Exit(1)
 		}
-		srv := httpx.NewServer(httpx.Options{Addr: fmt.Sprintf(":%d", cfg.Server.Port)})
+		pool, err := postgres.NewPool(context.Background(), cfg.Database.URL)
+		if err != nil {
+			slog.Error("database", "err", err)
+			os.Exit(1)
+		}
+		identities := postgres.NewIdentityRepository(pool)
+		var authn auth.Authenticator
+		switch cfg.Auth.Mode {
+		case "static":
+			authn = staticauth.New(cfg.Auth.Static.ID, cfg.Auth.Static.DisplayName)
+		case "authelia":
+			slog.Error("auth", "err", "authelia mode arrives in Task 5")
+			os.Exit(1)
+		default:
+			slog.Error("auth", "err", fmt.Sprintf("unknown auth mode %q", cfg.Auth.Mode))
+			os.Exit(1)
+		}
+		srv := httpx.NewServer(httpx.Options{
+			Addr:       fmt.Sprintf(":%d", cfg.Server.Port),
+			Auth:       authn,
+			Identities: identities,
+		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {
 			slog.Error("server exited", "err", err)

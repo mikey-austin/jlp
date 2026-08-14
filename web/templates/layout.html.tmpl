@@ -7,7 +7,7 @@
   <link rel="stylesheet" href="/static/css/app.css">
 </head>
 <body>
-  <header class="topbar"><a href="/" class="brand">日本語 JLP</a><nav id="topnav"></nav></header>
+  <header class="topbar"><a href="/" class="brand">日本語 JLP</a><nav id="topnav">{{with .Identity}}<span class="who">{{.DisplayName}}</span>{{end}}</nav></header>
   <main>{{template "content" .}}</main>
 </body>
 </html>{{end}}
