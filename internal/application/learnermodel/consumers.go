@@ -9,7 +9,8 @@ package learnermodel
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +32,19 @@ const (
 	quietWindow = 14 * 24 * time.Hour
 	// confidenceDivisor: Confidence = min(1, occurrences/confidenceDivisor).
 	confidenceDivisor = 5.0
+	// recomputeDebounce is how long HandleEvent waits, after the LAST
+	// classifiable event for an identity, before actually recomputing
+	// that identity's priority list. A whole feedback round publishes
+	// several events in a tight burst (feedback.requested,
+	// correction.presented per correction, grammar.concept.encountered
+	// per resolved concept — see application/feedback.Service), each
+	// synchronously through the bus on the SAME request goroutine; a
+	// naive "recompute after every event" would run the planner's full
+	// List+ListAll+ReplaceAll (with a GetConcept call per weakness) once
+	// per event, ON the request path, with cost growing with the
+	// identity's total history. Debouncing coalesces a whole burst into
+	// exactly one background Recompute. See armRecompute.
+	recomputeDebounce = 250 * time.Millisecond
 )
 
 // Updater is the bus-facing side of the learner model: NewUpdater's
@@ -41,6 +55,22 @@ type Updater struct {
 	obs     storage.ObservationRepository
 	clock   func() time.Time
 	planner *planner.Planner
+
+	// schedule implements armRecompute's per-identity debounce: a call
+	// schedule(key, d, fire) arms (or, for a key already armed,
+	// re-arms/coalesces) a timer that invokes fire once, after d has
+	// elapsed since the LAST call for that key. Injected so tests can
+	// control firing deterministically instead of racing a real
+	// 250ms timer; production uses newTimerSchedule's
+	// time.AfterFunc-based implementation, installed by NewUpdater.
+	schedule func(key string, d time.Duration, fire func())
+
+	// recomputeLocks serializes Recompute calls per identity: a debounce
+	// coalesces a BURST of events into one fire, but nothing stops two
+	// separate bursts, close enough together, from having their fires
+	// overlap in time — this ensures two goroutines can never interleave
+	// one identity's Recompute (and thus its ReplaceAll transaction).
+	recomputeLocks sync.Map // learner.IdentityID -> *sync.Mutex
 }
 
 // NewUpdater builds an Updater. clock is injectable so tests (and
@@ -52,22 +82,32 @@ type Updater struct {
 // identical windows regardless of wall-clock time (PRD §14
 // rebuildability).
 func NewUpdater(events storage.LearningEventRepository, obs storage.ObservationRepository, clock func() time.Time) *Updater {
-	return &Updater{events: events, obs: obs, clock: clock}
+	return &Updater{events: events, obs: obs, clock: clock, schedule: newTimerSchedule()}
 }
 
 // SetPlanner wires p into u: from this call on, every HandleEvent that
-// classifies (see classify) also triggers p.Recompute for the event's
-// identity, keeping the priority list (and thus the Teacher agent's
-// RecentErrors, via storage.PriorityRepository.Top) in sync with the
-// learner model as it changes. Optional — main.go's live bus consumer
-// calls this once at startup; Rebuild's own internal Updater (see
-// rebuild.go) deliberately never calls it, recomputing once at the end
-// of a full replay instead of once per historical event. A nil
-// receiver-side u.planner (the zero value) makes HandleEvent's
-// recompute step a no-op, so tests that don't care about priorities
-// need not call this at all.
+// classifies (see classify) arms a DEBOUNCED background Recompute for
+// the event's identity (see armRecompute) — HandleEvent itself never
+// blocks on it — keeping the priority list (and thus the Teacher
+// agent's RecentErrors, via storage.PriorityRepository.Top) eventually
+// in sync with the learner model as it changes. Optional — main.go's
+// live bus consumer calls this once at startup; Rebuild's own internal
+// Updater (see rebuild.go) deliberately never calls it, recomputing
+// once, synchronously, at the end of a full replay instead of once per
+// historical event. A nil receiver-side u.planner (the zero value)
+// makes HandleEvent's arm step a no-op, so tests that don't care about
+// priorities need not call this at all.
 func (u *Updater) SetPlanner(p *planner.Planner) {
 	u.planner = p
+}
+
+// SetSchedule overrides the default production debounce scheduler
+// (time.AfterFunc-based, see newTimerSchedule) — for tests that need
+// deterministic control over when a debounced Recompute actually
+// fires, instead of racing real wall-clock timers. See armRecompute's
+// doc comment for the contract schedule must satisfy.
+func (u *Updater) SetSchedule(schedule func(key string, d time.Duration, fire func())) {
+	u.schedule = schedule
 }
 
 // HandleEvent is the events.Handler registered for
@@ -79,8 +119,9 @@ func (u *Updater) SetPlanner(p *planner.Planner) {
 //  2. sweeps every existing weakness for ev.IdentityID and flips any
 //     whose subject has gone quietWindow with zero qualifying
 //     occurrences to emerging;
-//  3. if SetPlanner has wired a planner, recomputes ev.IdentityID's
-//     priority list — see SetPlanner's doc comment.
+//  3. if SetPlanner has wired a planner, ARMS a debounced background
+//     Recompute for ev.IdentityID — see armRecompute. HandleEvent
+//     itself returns immediately; it never blocks on Recompute.
 //
 // Any event type other than the two above is a no-op (defensive: only
 // those two are ever subscribed to this handler in cmd/jlp/main.go).
@@ -106,12 +147,78 @@ func (u *Updater) HandleEvent(ctx context.Context, ev event.LearningEvent) error
 		return err
 	}
 
-	if u.planner != nil {
-		if err := u.planner.Recompute(ctx, ev.IdentityID); err != nil {
-			return fmt.Errorf("learnermodel: recompute priorities: %w", err)
-		}
-	}
+	u.armRecompute(ev.IdentityID)
 	return nil
+}
+
+// armRecompute is the controller-ruled fix keeping the planner OFF the
+// request path (a synchronous Recompute per event previously meant a
+// 3-correction feedback round triggered ~6 sequential full recomputes
+// — List+ListAll+a GetConcept per weakness+ReplaceAll each — before the
+// HTTP response returned, with cost growing with total history). It's
+// a no-op when no planner is wired (see SetPlanner); otherwise it arms
+// u.schedule for identity with a recomputeDebounce delay: repeated arms
+// for the SAME identity within that window coalesce into exactly one
+// eventual runRecompute call, off HandleEvent's own call stack.
+//
+// Fire-and-forget: a process exit before a pending timer fires simply
+// leaves that identity's priority list one recompute stale — the next
+// qualifying event re-arms it, and `jlp rebuild-model` (which recomputes
+// synchronously, unconditionally, at the end of every identity's replay
+// — see rebuild.go) always recovers it. This is the same "derived,
+// rebuildable from the event log" contract the rest of the learner
+// model already has (PRD §14): the priority list is a cache of the
+// observations, not new information of its own.
+func (u *Updater) armRecompute(identity learner.IdentityID) {
+	if u.planner == nil {
+		return
+	}
+	u.schedule(string(identity), recomputeDebounce, func() {
+		u.runRecompute(identity)
+	})
+}
+
+// runRecompute performs one identity's debounced Recompute. It's
+// serialized against any other in-flight Recompute for the SAME
+// identity via a per-identity mutex (recomputeLocks) — two overlapping
+// fires must never interleave their planner.Recompute calls, which
+// would mean interleaving the underlying ReplaceAll transactions.
+// Errors are logged, never panicked: this runs on a background
+// goroutine (production: inside a time.AfterFunc callback) with no
+// caller left to hand an error back to.
+func (u *Updater) runRecompute(identity learner.IdentityID) {
+	lockAny, _ := u.recomputeLocks.LoadOrStore(identity, &sync.Mutex{})
+	lock, _ := lockAny.(*sync.Mutex)
+	lock.Lock()
+	defer lock.Unlock()
+
+	if err := u.planner.Recompute(context.Background(), identity); err != nil {
+		slog.Error("learnermodel: recompute priorities", "identity", identity, "err", err)
+	}
+}
+
+// newTimerSchedule is the production schedule implementation NewUpdater
+// installs by default: one time.AfterFunc-backed timer per key, kept in
+// a map guarded by a mutex. The first arm for a key creates the timer;
+// every later arm for the SAME key — while it's still pending, or even
+// after it has already fired once — calls Reset, which for an
+// AfterFunc timer either pushes the pending fire out by d, or (if the
+// timer had already fired) restarts it to fire again after d. Either
+// way, a burst of arms for one key collapses to exactly one fire per
+// quiet period, which is the whole point of debouncing HandleEvent's
+// recompute trigger.
+func newTimerSchedule() func(key string, d time.Duration, fire func()) {
+	var mu sync.Mutex
+	timers := map[string]*time.Timer{}
+	return func(key string, d time.Duration, fire func()) {
+		mu.Lock()
+		defer mu.Unlock()
+		if t, ok := timers[key]; ok {
+			t.Reset(d)
+			return
+		}
+		timers[key] = time.AfterFunc(d, fire)
+	}
 }
 
 // upsertWeakness (re)asserts a weakness observation for subject. It

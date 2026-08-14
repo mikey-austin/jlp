@@ -2,6 +2,7 @@ package learnermodel_test
 
 import (
 	"context"
+	"sync"
 	"testing"
 	"time"
 
@@ -14,13 +15,19 @@ import (
 
 // fakePriorityRepo captures ReplaceAll calls — enough to prove the
 // Updater/Rebuild -> planner.Planner wiring actually reaches
-// Recompute, without needing a database.
+// Recompute, without needing a database. Guarded by mu: with debounced
+// Recompute (see debounce_test.go), a production-schedule test runs
+// ReplaceAll from a real background goroutine (a time.AfterFunc
+// callback) concurrently with the test goroutine's own assertions.
 type fakePriorityRepo struct {
+	mu    sync.Mutex
 	calls int
 	last  []storage.Priority
 }
 
 func (f *fakePriorityRepo) ReplaceAll(_ context.Context, _ learner.IdentityID, ps []storage.Priority) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.calls++
 	f.last = ps
 	return nil
@@ -28,6 +35,15 @@ func (f *fakePriorityRepo) ReplaceAll(_ context.Context, _ learner.IdentityID, p
 
 func (f *fakePriorityRepo) Top(context.Context, learner.IdentityID, int) ([]storage.Priority, error) {
 	panic("not used by planner wiring tests")
+}
+
+// snapshot returns calls/last under the lock — the race-safe way test
+// goroutines should read state a background Recompute might be writing
+// concurrently.
+func (f *fakePriorityRepo) snapshot() (calls int, last []storage.Priority) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.calls, f.last
 }
 
 // panicGrammarRepo is a storage.GrammarRepository double whose
@@ -57,10 +73,12 @@ func (panicGrammarRepo) CorrectionsForConcept(context.Context, learner.IdentityI
 }
 
 // TestHandleEventTriggersPlannerRecomputeWhenWired pins the live-path
-// half of the brief's Step 3 wiring: once SetPlanner has been called,
-// every HandleEvent that classifies (a correction.presented or
-// grammar.concept.encountered event) also recomputes the identity's
-// priority list.
+// half of the brief's Step 3 wiring — now debounced (see
+// debounce_test.go for the full coalescing contract): once SetPlanner
+// has been called, HandleEvent for a classifiable event must NOT call
+// Recompute synchronously (the controller-ruled fix keeping the
+// planner off the request path), but must ARM it — Recompute runs only
+// once the (test-controlled) schedule actually fires.
 func TestHandleEventTriggersPlannerRecomputeWhenWired(t *testing.T) {
 	store := newFakeEventStore()
 	obs := newFakeObsRepo()
@@ -69,11 +87,18 @@ func TestHandleEventTriggersPlannerRecomputeWhenWired(t *testing.T) {
 
 	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
 	u.SetPlanner(p)
+	sched := newFakeSchedule()
+	u.SetSchedule(sched.schedule)
 
 	fireAll(t, u, store, correctionEvent("c1", "conjugation", "incorrect", baseTime))
 
+	if prios.calls != 0 {
+		t.Fatalf("Recompute ran %d times synchronously inside HandleEvent — it must be debounced off the request path", prios.calls)
+	}
+
+	sched.trigger(string(testIdentity))
 	if prios.calls == 0 {
-		t.Fatal("HandleEvent did not trigger planner.Recompute after a classifiable event")
+		t.Fatal("HandleEvent did not arm a debounced Recompute for a classifiable event")
 	}
 }
 
