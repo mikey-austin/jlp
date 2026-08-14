@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
@@ -66,8 +67,7 @@ func main() {
 		case "fake":
 			innerGen = fakeai.New()
 		case "anthropic":
-			slog.Error("ai", "err", "anthropic provider arrives in Task 11")
-			os.Exit(1)
+			innerGen = anthropic.New(cfg.AI.Anthropic)
 		default:
 			slog.Error("ai", "err", fmt.Sprintf("unknown ai provider %q", cfg.AI.Provider))
 			os.Exit(1)
