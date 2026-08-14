@@ -2,7 +2,7 @@ COMPOSE := docker compose
 TOOLS   := $(COMPOSE) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -36,6 +36,15 @@ ps: ## Show stack status
 test: ## Run unit + application tests (no services needed)
 	$(TOOLS) go test ./...
 
+lint: ## Run all linters (govet, staticcheck, errcheck, ineffassign, unused, depguard)
+	$(TOOLS) golangci-lint run ./...
+
+fmt: ## gofmt the whole tree
+	$(TOOLS) gofmt -w .
+
+arch-check: ## Enforce PRD §75 dependency-direction rules only (depguard)
+	$(TOOLS) golangci-lint run --enable-only depguard ./...
+
 tidy: ## go mod tidy inside the container
 	$(TOOLS) go mod tidy
 
@@ -45,6 +54,9 @@ clean: ## Stop stack and remove volumes + build artifacts
 
 migrate: ## Apply database migrations
 	$(TOOLS) go run ./cmd/jlp migrate
+
+seed: ## Populate a dev-friendly identity, session, and document (idempotent)
+	$(TOOLS) go run ./cmd/jlp seed
 
 migrate-new: ## Create a migration (n=short_name)
 	@test -n "$(n)" || (echo "usage: make migrate-new n=add_table"; exit 1)

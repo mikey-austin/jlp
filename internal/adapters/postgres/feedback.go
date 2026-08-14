@@ -53,7 +53,7 @@ func (r *FeedbackRepository) InsertFeedback(ctx context.Context, rec storage.Fee
 	if err != nil {
 		return err
 	}
-	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has succeeded
 
 	now := pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true}
 	qtx := r.q.WithTx(tx)

@@ -34,7 +34,9 @@ var errStatistics = errors.New("statistics unavailable")
 
 func TestMain(m *testing.M) {
 	// Templates are read from web/templates relative to repo root.
-	os.Chdir("../../..")
+	if err := os.Chdir("../../.."); err != nil {
+		panic(err)
+	}
 	os.Exit(m.Run())
 }
 

@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -65,7 +66,9 @@ func (s *Server) routes() http.Handler {
 	r.Use(middleware.RequestID, middleware.Recoverer)
 	r.Get("/healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"status":"ok"}`))
+		if _, err := w.Write([]byte(`{"status":"ok"}`)); err != nil {
+			slog.Error("write healthz response", "err", err)
+		}
 	})
 	// /offline: the PWA shell's offline fallback page (Task 17). It sits
 	// outside the auth group like /healthz — the service worker serves it

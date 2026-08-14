@@ -136,6 +136,17 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("migrations applied")
+	case "seed":
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		if err := runSeed(context.Background(), cfg); err != nil {
+			slog.Error("seed", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("seed complete")
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)

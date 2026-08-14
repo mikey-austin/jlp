@@ -3,6 +3,7 @@ package httpx
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -34,9 +35,11 @@ func (s *Server) documentsSave(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	if err := json.NewEncoder(w).Encode(map[string]any{
 		"version":  doc.Version,
 		"saved_at": doc.UpdatedAt.Format(time.RFC3339),
 		"runes":    doc.RuneCount(),
-	})
+	}); err != nil {
+		slog.Error("write autosave response", "err", err)
+	}
 }

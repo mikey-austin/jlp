@@ -10,7 +10,7 @@ import (
 type Op int
 
 const (
-	OpEqual  Op = iota
+	OpEqual Op = iota
 	OpInsert
 	OpDelete
 )

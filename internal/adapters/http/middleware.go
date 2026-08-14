@@ -3,6 +3,7 @@ package httpx
 import (
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -51,7 +52,9 @@ func requireIdentityError(w http.ResponseWriter, r *http.Request, status int, ms
 	if strings.HasPrefix(r.URL.Path, "/api/") {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
-		json.NewEncoder(w).Encode(map[string]string{"error": msg})
+		if err := json.NewEncoder(w).Encode(map[string]string{"error": msg}); err != nil {
+			slog.Error("write auth error response", "err", err)
+		}
 		return
 	}
 	http.Error(w, msg, status)

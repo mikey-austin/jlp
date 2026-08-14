@@ -1,0 +1,41 @@
+version: "2"
+linters:
+  enable: [depguard]
+  settings:
+    depguard:
+      rules:
+        # Every rule below excludes _test.go files. PRD §75 Rules 1-3 govern
+        # the *shipped* dependency graph (domain/agent/application must not
+        # depend on concrete adapters at runtime) — production code already
+        # satisfies that (see e.g. the "imports ports/ai + prompts + schemas
+        # + domain ONLY" comment on agent/teacher). Tests legitimately
+        # construct concrete port implementations (fakeai, inprocbus) as
+        # test doubles and inject them through the same constructors
+        # production wiring uses — that's the payoff of depending on
+        # interfaces, not a violation of it. Blocking that would force a
+        # duplicate mocks package for no architectural benefit, so the file
+        # scope is adjusted rather than the code moved.
+        domain-purity:
+          files: ["**/internal/domain/**", "!**/*_test.go"]
+          deny:
+            - pkg: github.com/mikeyaustin/jlp/internal/adapters
+              desc: "Rule 1/2: domain imports no adapters"
+            - pkg: github.com/mikeyaustin/jlp/internal/application
+              desc: "dependencies point inward"
+            - pkg: github.com/mikeyaustin/jlp/internal/ports
+              desc: "domain defines no dependencies on ports"
+            - { pkg: net/http, desc: "Rule 2" }
+            - { pkg: github.com/jackc, desc: "Rule 2" }
+            - { pkg: github.com/spf13/viper, desc: "Rule 2" }
+        agents-no-repos:
+          files: ["**/internal/agent/**", "!**/*_test.go"]
+          deny:
+            - pkg: github.com/mikeyaustin/jlp/internal/adapters
+              desc: "Rule 3: agents reach state only through tools/services"
+            - pkg: github.com/mikeyaustin/jlp/internal/ports/storage
+              desc: "Rule 3: agents must not touch repositories"
+        application-no-adapters:
+          files: ["**/internal/application/**", "!**/*_test.go"]
+          deny:
+            - pkg: github.com/mikeyaustin/jlp/internal/adapters
+              desc: "application depends on ports, not adapters"

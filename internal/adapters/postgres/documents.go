@@ -75,7 +75,7 @@ func (r *DocumentRepository) Save(ctx context.Context, identity learner.Identity
 	if err != nil {
 		return writing.Document{}, err
 	}
-	defer tx.Rollback(ctx) // no-op once Commit has succeeded
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has succeeded
 
 	qtx := r.q.WithTx(tx)
 	updated, err := qtx.UpdateDocumentContent(ctx, sqlcgen.UpdateDocumentContentParams{

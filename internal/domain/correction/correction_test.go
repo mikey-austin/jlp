@@ -16,8 +16,8 @@ func TestNewResult(t *testing.T) {
 		wantErrorContains string
 	}{
 		{
-			name:             "prd_example",
-			selection:        "昨日友達と映画を見に行って、とても面白いでした。",
+			name:      "prd_example",
+			selection: "昨日友達と映画を見に行って、とても面白いでした。",
 			corrections: []Correction{
 				{
 					Original:    "面白いでした",

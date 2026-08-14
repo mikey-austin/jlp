@@ -17,6 +17,7 @@ package httpx
 import (
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -143,7 +144,13 @@ func toStatisticsDTO(stats storage.Statistics) statisticsDTO {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	// The status is already committed by this point, so a failure here
+	// (e.g. the client disconnected mid-write) can't be turned into a
+	// different HTTP response — log it and move on, matching Render's
+	// treatment of a post-header ExecuteTemplate failure.
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		slog.Error("write json response", "err", err)
+	}
 }
 
 // writeAPIError writes the API's uniform {"error":"..."} shape.
