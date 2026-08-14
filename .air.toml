@@ -1,0 +1,10 @@
+root = "."
+tmp_dir = "tmp"
+[build]
+cmd = "go build -o ./tmp/jlp ./cmd/jlp"
+bin = "./tmp/jlp"
+args_bin = ["serve"]
+include_ext = ["go", "tmpl", "css", "js", "json", "sql", "md"]
+exclude_dir = ["tmp", "docs", "deploy"]
+[log]
+main_only = true

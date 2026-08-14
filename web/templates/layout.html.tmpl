@@ -1,0 +1,13 @@
+{{define "layout"}}<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{.Title}} — JLP</title>
+  <link rel="stylesheet" href="/static/css/app.css">
+</head>
+<body>
+  <header class="topbar"><a href="/" class="brand">日本語 JLP</a><nav id="topnav"></nav></header>
+  <main>{{template "content" .}}</main>
+</body>
+</html>{{end}}

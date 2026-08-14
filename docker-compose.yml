@@ -1,0 +1,38 @@
+services:
+  app:
+    build: { context: ., target: dev }
+    ports: ["8080:8080"]
+    volumes:
+      - .:/src
+      - gomod:/go/pkg/mod
+      - gocache:/root/.cache/go-build
+    environment:
+      APP_DATABASE_URL: postgres://jlp:jlp@postgres:5432/jlp?sslmode=disable
+      APP_AUTH_MODE: ${APP_AUTH_MODE:-static}
+      APP_AI_PROVIDER: ${APP_AI_PROVIDER:-fake}
+      APP_AI_ANTHROPIC_APIKEY: ${ANTHROPIC_API_KEY:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  postgres:
+    image: postgres:17-alpine
+    environment: { POSTGRES_USER: jlp, POSTGRES_PASSWORD: jlp, POSTGRES_DB: jlp }
+    ports: ["5432:5432"]
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jlp"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  tools:
+    build: { context: ., target: dev }
+    profiles: ["tools"]
+    volumes:
+      - .:/src
+      - gomod:/go/pkg/mod
+      - gocache:/root/.cache/go-build
+    environment:
+      APP_DATABASE_URL: postgres://jlp:jlp@postgres:5432/jlp?sslmode=disable
+
+volumes: { pgdata: {}, gomod: {}, gocache: {} }

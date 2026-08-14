@@ -1,0 +1,6 @@
+:root { --bg:#ffffff; --fg:#1a1a1a; --accent:#b7282e; --muted:#666; --border:#ddd;
+        font-family: "Hiragino Sans","Noto Sans JP",system-ui,sans-serif; }
+* { box-sizing:border-box; } body { margin:0; background:var(--bg); color:var(--fg); }
+.topbar { display:flex; gap:1rem; align-items:center; padding:.5rem 1rem; border-bottom:1px solid var(--border); }
+.brand { font-weight:700; color:var(--accent); text-decoration:none; }
+main { padding:1rem; max-width:1400px; margin:0 auto; }
