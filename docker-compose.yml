@@ -7,6 +7,10 @@ services:
       - gomod:/go/pkg/mod
       - gocache:/root/.cache/go-build
     environment:
+      # The bind-mounted repo is owned by the host user while the container
+      # runs as root, so git inside the container refuses to read .git
+      # (safe.directory) and `go build` would hard-fail on VCS stamping.
+      GOFLAGS: -buildvcs=false
       APP_DATABASE_URL: postgres://jlp:jlp@postgres:5432/jlp?sslmode=disable
       APP_AUTH_MODE: ${APP_AUTH_MODE:-static}
       # Caddy's fixed address on the pinned subnet below (NOT the bridge
@@ -45,6 +49,7 @@ services:
       - gomod:/go/pkg/mod
       - gocache:/root/.cache/go-build
     environment:
+      GOFLAGS: -buildvcs=false # see app service note
       APP_DATABASE_URL: postgres://jlp:jlp@postgres:5432/jlp?sslmode=disable
 
   caddy:
