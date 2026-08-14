@@ -81,6 +81,23 @@ func (s *Server) routes() http.Handler {
 		r.Post("/documents/{id}", s.documentsSave)
 		r.Get("/ai", s.aiRequests)
 		r.Post("/ratings", s.ratingsCreate)
+
+		// /api/v1: the versioned JSON API (Task 16). It shares the exact
+		// same application services as the HTML routes above — no new
+		// application-layer code — proving HTMX isn't the domain boundary
+		// (PRD §38). It sits inside this same auth group so RequireIdentity
+		// covers it too; see middleware.go for how that middleware emits
+		// JSON 401s for paths under /api/ instead of the HTML routes'
+		// plain-text body.
+		r.Route("/api/v1", func(r chi.Router) {
+			r.Get("/sessions", s.apiSessionsList)
+			r.Post("/sessions", s.apiSessionsCreate)
+			r.Get("/sessions/{id}", s.apiSessionsGet)
+			r.Post("/sessions/{id}/feedback", s.apiFeedbackRequest)
+			r.Post("/corrections/{id}/status", s.apiCorrectionStatus)
+			r.Get("/learner/statistics", s.apiLearnerStatistics)
+			r.Post("/ratings", s.apiRatingsCreate)
+		})
 	})
 	return r
 }
