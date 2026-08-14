@@ -75,7 +75,7 @@ func TestAnalyticsStatisticsScopedToIdentity(t *testing.T) {
 		{ID: corrAcceptedID, FeedbackID: feedbackAID, Position: 0, Original: "a", Replacement: "b", Type: "conjugation", Severity: "incorrect", Status: "presented"},
 		{ID: corrPresentedID, FeedbackID: feedbackAID, Position: 1, Original: "c", Replacement: "d", Type: "conjugation", Severity: "unnatural", Status: "presented"},
 	}
-	if err := feedback.InsertFeedback(ctx, recA, corrsA); err != nil {
+	if err := feedback.InsertFeedback(ctx, recA, corrsA, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := feedback.UpdateCorrectionStatus(ctx, identityA.ID, corrAcceptedID, "accepted"); err != nil {
@@ -107,7 +107,7 @@ func TestAnalyticsStatisticsScopedToIdentity(t *testing.T) {
 		{ID: corrB2, FeedbackID: feedbackBID, Position: 1, Original: "c", Replacement: "d", Type: "particle", Severity: "incorrect", Status: "presented"},
 		{ID: corrB3, FeedbackID: feedbackBID, Position: 2, Original: "e", Replacement: "f", Type: "particle", Severity: "incorrect", Status: "presented"},
 	}
-	if err := feedback.InsertFeedback(ctx, recB, corrsB); err != nil {
+	if err := feedback.InsertFeedback(ctx, recB, corrsB, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := feedback.UpdateCorrectionStatus(ctx, identityB.ID, corrB1, "rejected"); err != nil {

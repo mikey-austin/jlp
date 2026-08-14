@@ -45,30 +45,44 @@ type CorrectionRecord struct {
 	SessionID                    session.ID
 }
 
+// ConceptTag is one grammar-concept tag a correction carries (Phase 2
+// Task 2). Resolved reports whether Slug was found in the
+// GrammarRepository catalog at tag-time — an unknown slug is still
+// persisted (Resolved=false), never dropped, so a tagging bug or a
+// stale candidate list surfaces as data rather than silently
+// vanishing. The caller (application/feedback.Service) is responsible
+// for deduplicating a correction's tagged slugs before building
+// ConceptTags — InsertFeedback writes exactly what it's given, one row
+// per entry.
+type ConceptTag struct {
+	Slug     string
+	Resolved bool
+}
+
 // FeedbackRepository persists AI feedback requests and their
-// corrections. InsertFeedback writes a FeedbackRecord and its
-// corrections atomically (one tx): a review the learner sees always
-// has a durable trace, never one without the other.
+// corrections. InsertFeedback writes a FeedbackRecord, its
+// corrections, AND their concept tags atomically — all in ONE
+// transaction, never split across separate calls: a review the
+// learner sees always has a durable trace, and a failure partway
+// through (say, a concept row hitting a constraint) must roll back the
+// feedback_requests/corrections rows too, not leave them committed
+// while the client sees an error and retries under fresh IDs (which
+// would otherwise double-count concept encounters downstream). concepts
+// is keyed by correction ID — corrections[i].ID — with one []ConceptTag
+// per correction that has any; a correction absent from the map (or
+// present with an empty slice) simply gets no correction_concepts rows.
 // UpdateCorrectionStatus re-checks identity via a join to
 // feedback_requests, mirroring the other repositories' identity-scoped
 // access control, so one learner can never mutate another's
-// correction. InsertCorrectionConcepts persists a correction's
-// grammar-concept tags (Phase 2 Task 2): slugs is every concept the
-// teacher agent tagged the correction with, resolved reports per-slug
-// whether it was found in the GrammarRepository catalog at tag-time —
-// an unknown slug is still recorded (resolved=false), never dropped,
-// so a tagging bug or a stale candidate list surfaces as data rather
-// than silently vanishing. Idempotent: re-inserting the same
-// (correctionID, slug) pair is a no-op (ON CONFLICT DO NOTHING).
-// GetCorrectionConcepts reads them back — RESOLVED slugs only, in a
-// deterministic (slug-ascending) order — so a caller re-rendering a
-// correction after its status changes (SetCorrectionStatus) can carry
-// its concept chip(s) along; an unresolved tag is deliberately excluded
-// here, matching the same "only resolved counts" semantics
-// db/queries/grammar.sql's ConceptStats/CorrectionsForConcept use.
+// correction. GetCorrectionConcepts reads concept tags back — RESOLVED
+// slugs only, in a deterministic (slug-ascending) order — so a caller
+// re-rendering a correction after its status changes
+// (SetCorrectionStatus) can carry its concept chip(s) along; an
+// unresolved tag is deliberately excluded here, matching the same
+// "only resolved counts" semantics db/queries/grammar.sql's
+// ConceptStats/CorrectionsForConcept use.
 type FeedbackRepository interface {
-	InsertFeedback(ctx context.Context, rec FeedbackRecord, corrections []CorrectionRecord) error
+	InsertFeedback(ctx context.Context, rec FeedbackRecord, corrections []CorrectionRecord, concepts map[string][]ConceptTag) error
 	UpdateCorrectionStatus(ctx context.Context, identity learner.IdentityID, correctionID, status string) (CorrectionRecord, error)
-	InsertCorrectionConcepts(ctx context.Context, correctionID string, slugs []string, resolved map[string]bool) error
 	GetCorrectionConcepts(ctx context.Context, correctionID string) ([]string, error)
 }

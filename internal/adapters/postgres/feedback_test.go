@@ -105,7 +105,7 @@ func TestFeedbackInsertAndUpdateCorrectionStatus(t *testing.T) {
 		},
 	}
 
-	if err := feedback.InsertFeedback(ctx, rec, corrections); err != nil {
+	if err := feedback.InsertFeedback(ctx, rec, corrections, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -170,13 +170,17 @@ func TestFeedbackInsertAndUpdateCorrectionStatus(t *testing.T) {
 	}
 }
 
-// TestFeedbackInsertCorrectionConceptsRoundTripAndIdempotent pins Phase
-// 2 Task 2's Step 3: InsertCorrectionConcepts writes one row per slug —
-// resolved=true for a known slug, resolved=false for an unknown one,
-// per the resolved map the caller supplies — and re-inserting the same
-// (correction_id, concept_slug) pairs is a no-op (ON CONFLICT DO
-// NOTHING), not a duplicate-row error.
-func TestFeedbackInsertCorrectionConceptsRoundTripAndIdempotent(t *testing.T) {
+// TestFeedbackInsertFeedbackPersistsConceptsAtomicallyAndIdempotently
+// pins Phase 2 Task 2's concept-tagging persistence, now folded into
+// InsertFeedback's single transaction (fix round 3, Finding 2) rather
+// than a separate InsertCorrectionConcepts call: passing concepts
+// alongside rec/corrections in ONE InsertFeedback call writes one
+// correction_concepts row per (correction, slug) pair — resolved=true
+// for a known slug, resolved=false for an unknown one — and a
+// duplicate (correction, slug) pair WITHIN that same concepts argument
+// is a no-op (ON CONFLICT DO NOTHING), not a duplicate-row error or a
+// failure of the whole call.
+func TestFeedbackInsertFeedbackPersistsConceptsAtomicallyAndIdempotently(t *testing.T) {
 	ctx := context.Background()
 	url := testURL(t)
 	if err := Migrate(ctx, url); err != nil {
@@ -239,13 +243,18 @@ func TestFeedbackInsertCorrectionConceptsRoundTripAndIdempotent(t *testing.T) {
 		ExplanationEN: "い-adjectives form the past tense with 〜かった.",
 		Status:        "presented",
 	}}
-	if err := feedback.InsertFeedback(ctx, rec, corrections); err != nil {
-		t.Fatal(err)
+	concepts := map[string][]storage.ConceptTag{
+		correctionID: {
+			{Slug: "i-adjective-past", Resolved: true},
+			{Slug: "no-such-slug", Resolved: false},
+			// Deliberately duplicated: proves ON CONFLICT DO NOTHING
+			// swallows a repeated (correction, slug) pair even within
+			// the SAME InsertFeedback call, rather than erroring the
+			// whole transaction out.
+			{Slug: "i-adjective-past", Resolved: true},
+		},
 	}
-
-	slugs := []string{"i-adjective-past", "no-such-slug"}
-	resolved := map[string]bool{"i-adjective-past": true, "no-such-slug": false}
-	if err := feedback.InsertCorrectionConcepts(ctx, correctionID, slugs, resolved); err != nil {
+	if err := feedback.InsertFeedback(ctx, rec, corrections, concepts); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,7 +263,7 @@ func TestFeedbackInsertCorrectionConceptsRoundTripAndIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if len(rows) != 2 {
-		t.Fatalf("correction_concepts rows = %d, want 2: %+v", len(rows), rows)
+		t.Fatalf("correction_concepts rows = %d, want 2 (duplicate collapsed): %+v", len(rows), rows)
 	}
 	got := map[string]bool{}
 	for _, r := range rows {
@@ -266,20 +275,130 @@ func TestFeedbackInsertCorrectionConceptsRoundTripAndIdempotent(t *testing.T) {
 	if resolvedVal, ok := got["no-such-slug"]; !ok || resolvedVal {
 		t.Fatalf("no-such-slug row: present=%v resolved=%v, want present resolved=false", ok, resolvedVal)
 	}
+}
 
-	// Re-inserting the same pairs (ON CONFLICT DO NOTHING) must not
-	// duplicate rows or error, even with a different resolved value —
-	// the existing row wins, confirming idempotency rather than upsert
-	// semantics.
-	if err := feedback.InsertCorrectionConcepts(ctx, correctionID, slugs, resolved); err != nil {
-		t.Fatalf("re-insert of the same pairs returned an error, want idempotent no-op: %v", err)
+// TestFeedbackInsertFeedbackFailureRollsBackAlreadyPersistedConcepts
+// pins fix round 3's Finding 2 at the database level: concept tags are
+// no longer written in a separate transaction after
+// feedback_requests/corrections commit — they're part of the SAME
+// InsertFeedback transaction. A concepts row can no longer independently
+// violate a constraint by design (correction_id is always derived from
+// the correction actually being inserted right then, so its FK can
+// never dangle, and a duplicate (correction, slug) pair within one call
+// is swallowed by ON CONFLICT DO NOTHING rather than erroring) — which
+// is itself proof the fix closed the gap it targeted. So this test
+// forces a real, later failure in the SAME transaction (a second
+// correction reusing the first correction's ID, a corrections PK
+// violation) and asserts that the FIRST correction's already-inserted
+// concept row — which would have been happily committed under the OLD,
+// separate-transaction design — is rolled back along with everything
+// else: no feedback_requests row, no corrections row, no
+// correction_concepts row survives.
+func TestFeedbackInsertFeedbackFailureRollsBackAlreadyPersistedConcepts(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
 	}
-	rowsAgain, err := selectCorrectionConcepts(ctx, pool, correctionID)
+	pool, err := NewPool(ctx, url)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(rowsAgain) != 2 {
-		t.Fatalf("after re-insert, correction_concepts rows = %d, want still 2 (idempotent)", len(rowsAgain))
+	defer pool.Close()
+
+	identities := NewIdentityRepository(pool)
+	identityA := learner.Identity{ID: learner.IdentityID("test-feedback-rollback-" + uuid.NewString()), DisplayName: "A"}
+	if err := identities.Upsert(ctx, identityA); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := NewSessionRepository(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sess := session.Session{
+		ID:         session.ID(uuid.New().String()),
+		IdentityID: identityA.ID,
+		Title:      "ロールバックテスト",
+		Purpose:    "Diary",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := sessions.Create(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+
+	docs := NewDocumentRepository(pool)
+	doc, _, err := docs.GetOrCreateForSession(ctx, identityA.ID, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	feedback := NewFeedbackRepository(pool)
+	feedbackID := uuid.New().String()
+	correctionID := uuid.New().String()
+	rec := storage.FeedbackRecord{
+		ID:             feedbackID,
+		IdentityID:     identityA.ID,
+		SessionID:      sess.ID,
+		DocumentID:     doc.ID,
+		SelectionStart: 0,
+		SelectionEnd:   6,
+		SelectionText:  "面白いでした",
+		CorrectedText:  "面白かったです",
+	}
+	corrections := []storage.CorrectionRecord{
+		{
+			ID:          correctionID,
+			FeedbackID:  feedbackID,
+			Position:    0,
+			Original:    "面白いでした",
+			Replacement: "面白かったです",
+			Type:        "conjugation",
+			Severity:    "incorrect",
+			Status:      "presented",
+		},
+		{
+			// Reuses correctionID: corrections.id is a primary key, so
+			// this second InsertCorrection call fails with a PK
+			// violation AFTER the first correction (and its concept
+			// row, inserted between the two InsertCorrection calls)
+			// already succeeded within this same, still-uncommitted
+			// transaction.
+			ID:          correctionID,
+			FeedbackID:  feedbackID,
+			Position:    1,
+			Original:    "とても",
+			Replacement: "非常に",
+			Type:        "style",
+			Severity:    "optional",
+			Status:      "presented",
+		},
+	}
+	concepts := map[string][]storage.ConceptTag{
+		correctionID: {{Slug: "i-adjective-past", Resolved: true}},
+	}
+
+	if err := feedback.InsertFeedback(ctx, rec, corrections, concepts); err == nil {
+		t.Fatal("expected an error from the duplicate correction ID PK violation, got nil")
+	}
+
+	var feedbackCount, correctionCount, conceptCount int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM feedback_requests WHERE id = $1`, feedbackID).Scan(&feedbackCount); err != nil {
+		t.Fatal(err)
+	}
+	if feedbackCount != 0 {
+		t.Fatalf("feedback_requests row count = %d, want 0 (the whole transaction must have rolled back)", feedbackCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM corrections WHERE id = $1`, correctionID).Scan(&correctionCount); err != nil {
+		t.Fatal(err)
+	}
+	if correctionCount != 0 {
+		t.Fatalf("corrections row count = %d, want 0 (the whole transaction must have rolled back)", correctionCount)
+	}
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM correction_concepts WHERE correction_id = $1`, correctionID).Scan(&conceptCount); err != nil {
+		t.Fatal(err)
+	}
+	if conceptCount != 0 {
+		t.Fatalf("correction_concepts row count = %d, want 0 (the first correction's already-inserted concept row must have rolled back too, not been left committed under the old separate-transaction design)", conceptCount)
 	}
 }
 
@@ -351,16 +470,17 @@ func TestFeedbackGetCorrectionConceptsReturnsResolvedOnlySlugAscending(t *testin
 		Severity:    "incorrect",
 		Status:      "presented",
 	}}
-	if err := feedback.InsertFeedback(ctx, rec, corrections); err != nil {
-		t.Fatal(err)
-	}
-
 	// Inserted in reverse-alphabetical order deliberately, plus one
 	// unresolved slug, so the assertion below can't pass by accident of
 	// insertion order.
-	slugs := []string{"te-form", "i-adjective-past", "no-such-slug"}
-	resolved := map[string]bool{"te-form": true, "i-adjective-past": true, "no-such-slug": false}
-	if err := feedback.InsertCorrectionConcepts(ctx, correctionID, slugs, resolved); err != nil {
+	concepts := map[string][]storage.ConceptTag{
+		correctionID: {
+			{Slug: "te-form", Resolved: true},
+			{Slug: "i-adjective-past", Resolved: true},
+			{Slug: "no-such-slug", Resolved: false},
+		},
+	}
+	if err := feedback.InsertFeedback(ctx, rec, corrections, concepts); err != nil {
 		t.Fatal(err)
 	}
 

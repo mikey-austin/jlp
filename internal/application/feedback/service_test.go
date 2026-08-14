@@ -105,8 +105,17 @@ func (f *fakeDocRepo) ListVersions(_ context.Context, identity learner.IdentityI
 type fakeFeedbackRepo struct {
 	feedback    map[string]storage.FeedbackRecord   // key: feedback ID
 	corrections map[string]storage.CorrectionRecord // key: correction ID
-	concepts    []conceptRow                        // every InsertCorrectionConcepts call, flattened
-	insertErr   error
+	concepts    []conceptRow                        // every persisted (correction, slug, resolved) tuple, flattened
+	// insertErr fails InsertFeedback outright, before anything is
+	// written — simulates the transaction never starting/committing.
+	insertErr error
+	// conceptInsertErr fails InsertFeedback ONLY when concepts is
+	// non-empty, still writing nothing — simulates a same-transaction
+	// rollback triggered specifically by the concept rows (a
+	// correction_concepts constraint violation, say), proving the whole
+	// InsertFeedback call is atomic and not "corrections committed,
+	// concepts best-effort."
+	conceptInsertErr error
 }
 
 func newFakeFeedbackRepo() *fakeFeedbackRepo {
@@ -116,13 +125,24 @@ func newFakeFeedbackRepo() *fakeFeedbackRepo {
 	}
 }
 
-func (f *fakeFeedbackRepo) InsertFeedback(_ context.Context, rec storage.FeedbackRecord, corrections []storage.CorrectionRecord) error {
+// InsertFeedback mirrors the real repository's single-transaction
+// contract (see storage.FeedbackRepository's doc comment): rec,
+// corrections, and concepts are written together or none of them are.
+func (f *fakeFeedbackRepo) InsertFeedback(_ context.Context, rec storage.FeedbackRecord, corrections []storage.CorrectionRecord, concepts map[string][]storage.ConceptTag) error {
 	if f.insertErr != nil {
 		return f.insertErr
+	}
+	if f.conceptInsertErr != nil && len(concepts) > 0 {
+		return f.conceptInsertErr
 	}
 	f.feedback[rec.ID] = rec
 	for _, c := range corrections {
 		f.corrections[c.ID] = c
+	}
+	for correctionID, tags := range concepts {
+		for _, tag := range tags {
+			f.concepts = append(f.concepts, conceptRow{CorrectionID: correctionID, Slug: tag.Slug, Resolved: tag.Resolved})
+		}
 	}
 	return nil
 }
@@ -142,20 +162,13 @@ func (f *fakeFeedbackRepo) UpdateCorrectionStatus(_ context.Context, identity le
 	return c, nil
 }
 
-// conceptRow is one InsertCorrectionConcepts call recorded by
-// fakeFeedbackRepo, letting tests assert exactly which
-// (correction, slug, resolved) tuples were persisted.
+// conceptRow is one persisted (correction, slug, resolved) tuple,
+// letting tests assert exactly what InsertFeedback's concepts argument
+// contained.
 type conceptRow struct {
 	CorrectionID string
 	Slug         string
 	Resolved     bool
-}
-
-func (f *fakeFeedbackRepo) InsertCorrectionConcepts(_ context.Context, correctionID string, slugs []string, resolved map[string]bool) error {
-	for _, slug := range slugs {
-		f.concepts = append(f.concepts, conceptRow{CorrectionID: correctionID, Slug: slug, Resolved: resolved[slug]})
-	}
-	return nil
 }
 
 // GetCorrectionConcepts mirrors the real query's "resolved only,
@@ -517,6 +530,124 @@ func TestRequestFeedbackDuplicateConceptSlugsDedupedToOneRowAndOneEvent(t *testi
 	}
 	if count != 1 {
 		t.Fatalf("recorded %d grammar.concept.encountered events, want 1 (deduped): %+v", count, h.events.events)
+	}
+}
+
+// TestRequestFeedbackInitialViewCarriesOnlyDedupedResolvedConcepts pins
+// the fix-round-3 Finding 1: the initial CorrectionView.Concepts (built
+// straight off the AI result, before this fix) could disagree with the
+// view SetCorrectionStatus later rebuilds from GetCorrectionConcepts —
+// the initial one showed raw, untriaged slugs (unresolved ones that
+// 404 at /grammar/{slug}, and pre-dedup duplicates), the later one
+// showed deduped/resolved-only ones. resolveConceptTags is now the
+// single source of truth for both: a teacher response tagging one
+// correction with an unresolved slug AND a resolved slug tagged twice
+// must produce an initial view carrying exactly the deduped, resolved
+// slug — nothing else.
+func TestRequestFeedbackInitialViewCarriesOnlyDedupedResolvedConcepts(t *testing.T) {
+	gen := &stubConceptGen{
+		original:    "行きました",
+		replacement: "行った",
+		concepts:    []string{"totally-unknown-slug", "i-adjective-past", "i-adjective-past"},
+	}
+	h := newTestHarnessWithGenerator(gen)
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "昨日、公園に行きました。"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	fb, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	if len(fb.Corrections) != 1 {
+		t.Fatalf("len(Corrections) = %d, want 1: %+v", len(fb.Corrections), fb.Corrections)
+	}
+	cv := fb.Corrections[0]
+
+	// The initial view: exactly the deduped, resolved slug — never the
+	// unresolved one, never a duplicate.
+	if len(cv.Concepts) != 1 || cv.Concepts[0] != "i-adjective-past" {
+		t.Fatalf("initial view Concepts = %v, want exactly [i-adjective-past]", cv.Concepts)
+	}
+
+	// Both slugs are still persisted (nothing silently dropped from the
+	// data) — one resolved, one not, and the duplicate collapsed to one
+	// row per slug.
+	if len(h.repo.concepts) != 2 {
+		t.Fatalf("persisted concept rows = %d, want 2: %+v", len(h.repo.concepts), h.repo.concepts)
+	}
+	got := map[string]bool{}
+	for _, cc := range h.repo.concepts {
+		if cc.CorrectionID != cv.ID {
+			t.Fatalf("persisted concept row for wrong correction: %+v, want CorrectionID %q", cc, cv.ID)
+		}
+		got[cc.Slug] = cc.Resolved
+	}
+	if resolved, ok := got["i-adjective-past"]; !ok || !resolved {
+		t.Fatalf("i-adjective-past row: present=%v resolved=%v, want present resolved=true", ok, resolved)
+	}
+	if resolved, ok := got["totally-unknown-slug"]; !ok || resolved {
+		t.Fatalf("totally-unknown-slug row: present=%v resolved=%v, want present resolved=false", ok, resolved)
+	}
+
+	// Exactly one grammar.concept.encountered event — for the resolved
+	// slug only, and only once despite the duplicate tag.
+	count := 0
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeGrammarConceptEncountered {
+			count++
+			if ev.Subject != "i-adjective-past" {
+				t.Fatalf("grammar.concept.encountered Subject = %q, want i-adjective-past", ev.Subject)
+			}
+		}
+	}
+	if count != 1 {
+		t.Fatalf("recorded %d grammar.concept.encountered events, want 1", count)
+	}
+}
+
+// TestRequestFeedbackConceptPersistFailureLeavesNothingCommitted pins
+// fix-round-3 Finding 2: concept tags used to persist in a SEPARATE
+// transaction, run per-correction AFTER InsertFeedback (and its
+// feedback.requested event) had already committed — so a failure
+// specifically in the concepts write left feedback_requests/corrections
+// durably committed while the client saw a 500 and (typically) retried
+// under freshly-generated IDs, double-counting concept encounters
+// downstream. Now concepts are part of InsertFeedback's single
+// transaction: a failure anywhere in that call — simulated here via
+// conceptInsertErr, which only fires when concepts is non-empty, the
+// same shape a real correction_concepts constraint violation deep in
+// the same tx would take — must leave NOTHING committed: no feedback
+// record, no corrections, no concept rows, and (since RequestFeedback
+// returns before ever calling Record) no events either.
+func TestRequestFeedbackConceptPersistFailureLeavesNothingCommitted(t *testing.T) {
+	h := newTestHarness() // fakeai on とても面白いでした tags i-adjective-past, so concepts is non-empty
+	h.repo.conceptInsertErr = errors.New("boom: correction_concepts constraint violation")
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err == nil {
+		t.Fatal("expected an error when concept persistence fails, got nil")
+	}
+	if len(h.repo.feedback) != 0 {
+		t.Fatalf("persisted feedback count = %d, want 0 (whole insert must roll back)", len(h.repo.feedback))
+	}
+	if len(h.repo.corrections) != 0 {
+		t.Fatalf("persisted corrections count = %d, want 0 (whole insert must roll back)", len(h.repo.corrections))
+	}
+	if len(h.repo.concepts) != 0 {
+		t.Fatalf("persisted concept rows = %d, want 0", len(h.repo.concepts))
+	}
+	if len(h.events.events) != 0 {
+		t.Fatalf("recorded %d events, want 0 (nothing should be recorded when persistence fails)", len(h.events.events))
 	}
 }
 

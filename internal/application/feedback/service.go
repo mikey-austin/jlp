@@ -162,6 +162,20 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 
 	feedbackID := uuid.New().String()
 	corrRecords := make([]storage.CorrectionRecord, 0, len(result.Corrections))
+	// conceptTags (keyed by correction ID) is what InsertFeedback
+	// persists to correction_concepts, in the SAME transaction as
+	// feedback_requests/corrections; resolvedConcepts (also keyed by
+	// correction ID) is the deduped, RESOLVED-only subset — the single
+	// source of truth this function uses for BOTH the initial
+	// CorrectionView.Concepts the caller sees and which slugs get a
+	// grammar.concept.encountered event below. Computing both here,
+	// before InsertFeedback, means the view can never show a concept
+	// SetCorrectionStatus's later GetCorrectionConcepts-backed view
+	// wouldn't also show (an unresolved or duplicate slug), and vice
+	// versa — one codepath decides "what counts as this correction's
+	// concepts," not two.
+	conceptTags := make(map[string][]storage.ConceptTag, len(result.Corrections))
+	resolvedConcepts := make(map[string][]string, len(result.Corrections))
 	for i, c := range result.Corrections {
 		corrRecords = append(corrRecords, storage.CorrectionRecord{
 			ID:            c.ID,
@@ -175,6 +189,11 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 			ExplanationEN: c.Explanation.EN,
 			Status:        "presented",
 		})
+		if len(c.Concepts) > 0 {
+			tags, resolved := resolveConceptTags(c.Concepts, knownSlugs)
+			conceptTags[c.ID] = tags
+			resolvedConcepts[c.ID] = resolved
+		}
 	}
 
 	feedbackRec := storage.FeedbackRecord{
@@ -188,7 +207,7 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		CorrectedText:  result.Corrected,
 		AIRequestID:    resp.RequestID,
 	}
-	if err := s.repo.InsertFeedback(ctx, feedbackRec, corrRecords); err != nil {
+	if err := s.repo.InsertFeedback(ctx, feedbackRec, corrRecords, conceptTags); err != nil {
 		return Feedback{}, fmt.Errorf("feedback: persist: %w", err)
 	}
 
@@ -221,12 +240,42 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 			return Feedback{}, fmt.Errorf("feedback: record %s: %w", event.TypeCorrectionPresented, err)
 		}
 
-		if err := s.tagConcepts(ctx, req, c, knownSlugs); err != nil {
-			return Feedback{}, err
+		// One grammar.concept.encountered event per RESOLVED slug — a
+		// slug the teacher tagged that isn't in knownSlugs (a
+		// hallucinated or stale candidate) was still persisted above
+		// (resolved=false), but never gets an event: the learner model
+		// only reacts to concepts it can actually explain via
+		// GetConcept, not to whatever string the model happened to
+		// emit. Recorder errors here stay hard-fail, same as every
+		// other event in this method.
+		for _, slug := range resolvedConcepts[c.ID] {
+			if err := s.rec.Record(ctx, event.LearningEvent{
+				IdentityID: req.Identity,
+				SessionID:  &req.SessionID,
+				Type:       event.TypeGrammarConceptEncountered,
+				Subject:    slug,
+				Evidence: map[string]any{
+					"correction_id": c.ID,
+					"type":          string(c.Type),
+					"severity":      string(c.Severity),
+				},
+			}); err != nil {
+				return Feedback{}, fmt.Errorf("feedback: record %s: %w", event.TypeGrammarConceptEncountered, err)
+			}
 		}
 
+		// cv is a copy of c with Concepts narrowed to resolvedConcepts:
+		// the raw c.Concepts from the AI result can contain unresolved
+		// slugs (which 404 at /grammar/{slug}) and pre-dedup duplicates —
+		// exactly the mismatch SetCorrectionStatus's
+		// GetCorrectionConcepts-backed view would NOT have shown. Using
+		// resolvedConcepts here instead of c.Concepts keeps the initial
+		// view and the post-accept/reject view in agreement about what
+		// a correction's concepts are.
+		cv := c
+		cv.Concepts = resolvedConcepts[c.ID]
 		views = append(views, CorrectionView{
-			Correction: c,
+			Correction: cv,
 			Status:     "presented",
 			Diff:       diff.Runes(c.Original, c.Replacement),
 		})
@@ -242,50 +291,26 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 	}, nil
 }
 
-// tagConcepts persists c's grammar-concept tags (if any) and records
-// one grammar.concept.encountered event per RESOLVED slug — a slug the
-// teacher tagged that isn't in knownSlugs (a hallucinated or stale
-// candidate) is still persisted, with resolved=false, but never gets an
-// event: the learner model only reacts to concepts it can actually
-// explain via GetConcept, not to whatever string the model happened to
-// emit. c.Concepts is deduplicated first: a model that (redundantly)
-// tags the same concept twice on one correction must still produce
-// exactly one correction_concepts row and one event for it — Task 4's
-// weakness counts key off the event stream, and a duplicate here would
-// silently inflate them.
-func (s *Service) tagConcepts(ctx context.Context, req Request, c correction.Correction, knownSlugs map[string]bool) error {
-	if len(c.Concepts) == 0 {
-		return nil
-	}
-	slugs := dedupeSlugs(c.Concepts)
-
-	resolved := make(map[string]bool, len(slugs))
-	for _, slug := range slugs {
-		resolved[slug] = knownSlugs[slug]
-	}
-	if err := s.repo.InsertCorrectionConcepts(ctx, c.ID, slugs, resolved); err != nil {
-		return fmt.Errorf("feedback: persist concepts: %w", err)
-	}
-
-	for _, slug := range slugs {
-		if !resolved[slug] {
-			continue
-		}
-		if err := s.rec.Record(ctx, event.LearningEvent{
-			IdentityID: req.Identity,
-			SessionID:  &req.SessionID,
-			Type:       event.TypeGrammarConceptEncountered,
-			Subject:    slug,
-			Evidence: map[string]any{
-				"correction_id": c.ID,
-				"type":          string(c.Type),
-				"severity":      string(c.Severity),
-			},
-		}); err != nil {
-			return fmt.Errorf("feedback: record %s: %w", event.TypeGrammarConceptEncountered, err)
+// resolveConceptTags dedupes slugs (first-occurrence order) and
+// classifies each against knownSlugs, returning both the full set of
+// storage.ConceptTag rows to persist (resolved and unresolved alike —
+// see storage.FeedbackRepository's doc comment on why an unknown slug
+// is still recorded) and the subset that resolved, in the same order.
+// Callers must treat the second return value as the single source of
+// truth for "this correction's concepts" — never use the raw, un-deduped,
+// unfiltered slug list a caller happened to be given.
+func resolveConceptTags(slugs []string, knownSlugs map[string]bool) (tags []storage.ConceptTag, resolved []string) {
+	deduped := dedupeSlugs(slugs)
+	tags = make([]storage.ConceptTag, 0, len(deduped))
+	resolved = make([]string, 0, len(deduped))
+	for _, slug := range deduped {
+		ok := knownSlugs[slug]
+		tags = append(tags, storage.ConceptTag{Slug: slug, Resolved: ok})
+		if ok {
+			resolved = append(resolved, slug)
 		}
 	}
-	return nil
+	return tags, resolved
 }
 
 // dedupeSlugs returns slugs with duplicates removed, preserving

@@ -170,7 +170,7 @@ func TestGrammarConceptStatsCrossIdentityIsolation(t *testing.T) {
 	corrsB := []storage.CorrectionRecord{
 		{ID: correctionBID, FeedbackID: feedbackBID, Position: 0, Original: "a", Replacement: "b", Type: "conjugation", Severity: "incorrect", Status: "presented"},
 	}
-	if err := feedback.InsertFeedback(ctx, recB, corrsB); err != nil {
+	if err := feedback.InsertFeedback(ctx, recB, corrsB, nil); err != nil {
 		t.Fatal(err)
 	}
 

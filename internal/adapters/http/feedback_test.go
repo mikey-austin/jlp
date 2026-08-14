@@ -67,8 +67,8 @@ type fakeFeedbackRepo struct {
 	feedback    map[string]storage.FeedbackRecord
 	corrections map[string]storage.CorrectionRecord
 	// concepts maps correction ID -> concept slug -> resolved, tracking
-	// every InsertCorrectionConcepts call so GetCorrectionConcepts can
-	// answer for real (needed for TestCorrectionStatusAcceptedKeepsConceptChip).
+	// every concept tag InsertFeedback was given so GetCorrectionConcepts
+	// can answer for real (needed for TestCorrectionStatusAcceptedKeepsConceptChip).
 	concepts map[string]map[string]bool
 }
 
@@ -80,10 +80,21 @@ func newFakeFeedbackRepo() *fakeFeedbackRepo {
 	}
 }
 
-func (f *fakeFeedbackRepo) InsertFeedback(_ context.Context, rec storage.FeedbackRecord, corrections []storage.CorrectionRecord) error {
+// InsertFeedback mirrors the real repository's single-transaction
+// contract: rec, corrections, and concepts (keyed by correction ID) are
+// written together.
+func (f *fakeFeedbackRepo) InsertFeedback(_ context.Context, rec storage.FeedbackRecord, corrections []storage.CorrectionRecord, concepts map[string][]storage.ConceptTag) error {
 	f.feedback[rec.ID] = rec
 	for _, c := range corrections {
 		f.corrections[c.ID] = c
+	}
+	for correctionID, tags := range concepts {
+		if f.concepts[correctionID] == nil {
+			f.concepts[correctionID] = map[string]bool{}
+		}
+		for _, tag := range tags {
+			f.concepts[correctionID][tag.Slug] = tag.Resolved
+		}
 	}
 	return nil
 }
@@ -101,16 +112,6 @@ func (f *fakeFeedbackRepo) UpdateCorrectionStatus(_ context.Context, identity le
 	c.SessionID = fb.SessionID
 	f.corrections[correctionID] = c
 	return c, nil
-}
-
-func (f *fakeFeedbackRepo) InsertCorrectionConcepts(_ context.Context, correctionID string, slugs []string, resolved map[string]bool) error {
-	if f.concepts[correctionID] == nil {
-		f.concepts[correctionID] = map[string]bool{}
-	}
-	for _, slug := range slugs {
-		f.concepts[correctionID][slug] = resolved[slug]
-	}
-	return nil
 }
 
 // GetCorrectionConcepts mirrors the real query's "resolved only,

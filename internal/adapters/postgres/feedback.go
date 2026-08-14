@@ -26,12 +26,18 @@ func NewFeedbackRepository(pool *pgxpool.Pool) *FeedbackRepository {
 	return &FeedbackRepository{pool: pool, q: sqlcgen.New(pool)}
 }
 
-// InsertFeedback writes rec and its corrections in one transaction —
-// the same WithTx pattern DocumentRepository.Save uses — so a
-// feedback_requests row and its corrections rows always land together,
-// or neither does: a review the learner sees always has a durable
-// trace of every correction it offered.
-func (r *FeedbackRepository) InsertFeedback(ctx context.Context, rec storage.FeedbackRecord, corrections []storage.CorrectionRecord) error {
+// InsertFeedback writes rec, its corrections, AND their concept tags
+// (concepts, keyed by correction ID) in ONE transaction — the same
+// WithTx pattern DocumentRepository.Save uses — so a feedback_requests
+// row, its corrections rows, and their correction_concepts rows always
+// land together, or none of them do. This atomicity is load-bearing,
+// not just tidy: concept tagging used to run as a separate transaction
+// after this one committed, so a failure there left feedback_requests
+// and corrections durably committed while the client saw an error and
+// (typically) retried under freshly-generated IDs — silently
+// double-counting concept encounters downstream. Folding concepts into
+// this same tx means a failure anywhere rolls back everything.
+func (r *FeedbackRepository) InsertFeedback(ctx context.Context, rec storage.FeedbackRecord, corrections []storage.CorrectionRecord, concepts map[string][]storage.ConceptTag) error {
 	id, err := parseUUID(rec.ID)
 	if err != nil {
 		return fmt.Errorf("feedback id: %w", err)
@@ -92,6 +98,16 @@ func (r *FeedbackRepository) InsertFeedback(ctx context.Context, rec storage.Fee
 		}); err != nil {
 			return err
 		}
+
+		for _, tag := range concepts[c.ID] {
+			if err := qtx.InsertCorrectionConcept(ctx, sqlcgen.InsertCorrectionConceptParams{
+				CorrectionID: cid,
+				ConceptSlug:  tag.Slug,
+				Resolved:     tag.Resolved,
+			}); err != nil {
+				return fmt.Errorf("correction %s concept %q: %w", c.ID, tag.Slug, err)
+			}
+		}
 	}
 
 	return tx.Commit(ctx)
@@ -120,44 +136,6 @@ func (r *FeedbackRepository) UpdateCorrectionStatus(ctx context.Context, identit
 		return storage.CorrectionRecord{}, err
 	}
 	return fromUpdateCorrectionStatusRow(row), nil
-}
-
-// InsertCorrectionConcepts writes one correction_concepts row per slug
-// in slugs, in one transaction (the same WithTx pattern InsertFeedback
-// above uses). resolved[slug] decides that row's resolved column: true
-// for a slug the caller has already checked against the
-// GrammarRepository catalog, false for an unknown one — the row is
-// still written either way, never silently dropped (see the
-// storage.FeedbackRepository doc comment on InsertCorrectionConcepts).
-// The underlying query is `ON CONFLICT (correction_id, concept_slug)
-// DO NOTHING`, so re-running this for the same correction is a no-op,
-// not a duplicate-row error.
-func (r *FeedbackRepository) InsertCorrectionConcepts(ctx context.Context, correctionID string, slugs []string, resolved map[string]bool) error {
-	if len(slugs) == 0 {
-		return nil
-	}
-	cid, err := parseUUID(correctionID)
-	if err != nil {
-		return fmt.Errorf("correction id: %w", err)
-	}
-
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has succeeded
-
-	qtx := r.q.WithTx(tx)
-	for _, slug := range slugs {
-		if err := qtx.InsertCorrectionConcept(ctx, sqlcgen.InsertCorrectionConceptParams{
-			CorrectionID: cid,
-			ConceptSlug:  slug,
-			Resolved:     resolved[slug],
-		}); err != nil {
-			return fmt.Errorf("concept %q: %w", slug, err)
-		}
-	}
-	return tx.Commit(ctx)
 }
 
 // GetCorrectionConcepts returns correctionID's RESOLVED concept slugs,
