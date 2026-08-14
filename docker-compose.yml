@@ -62,7 +62,10 @@ services:
         ipv4_address: 172.28.5.9
 
   authelia:
-    image: authelia/authelia:4
+    # Pinned to the same 4.39 minor as deploy/compose.prod.yml (parity
+    # between dev and prod) rather than the floating :4 tag — see that
+    # file's comment for why.
+    image: authelia/authelia:4.39
     profiles: ["auth"]
     volumes:
       - ./deploy/authelia/configuration.dev.yml:/config/configuration.yml:ro

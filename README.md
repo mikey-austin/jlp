@@ -48,6 +48,9 @@ sqlc               Regenerate sqlc query code
 db-shell           psql into the dev database
 test-integration   Adapter tests against compose services
 vendor-js          Vendor pinned htmx + alpine into web/static/js
+deploy-local       Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
+deploy             Deploy to $(DEPLOY_HOST) over SSH (set in .env)
+deploy-logs        Tail remote app logs
 ```
 
 Every command goes through `make` and runs inside containers — there is
@@ -99,6 +102,38 @@ the `/ai` page).
 
   `make test` always uses the fake provider regardless of `.env` — a
   live key is never required to run the test suite.
+
+## Deploying
+
+The production stack (`deploy/compose.prod.yml`) is a separate compose
+project (`jlp-prod`) from the dev stack above — a distroless app image,
+Caddy terminating TLS, and Authelia forward-auth, all fronting Postgres.
+It runs the same way whether you're verifying it locally or deploying to
+a real host:
+
+```sh
+sh scripts/gen-prod-secrets.sh          # Authelia JWT/session/storage secrets + one login user
+cp deploy/.env.prod.example deploy/.env.prod   # fill in JLP_DOMAIN, POSTGRES_PASSWORD, etc.
+make deploy-local                       # builds, starts, migrates, waits for /healthz
+```
+
+`make deploy-local` verifies the full production stack on your own
+machine at **https://localhost:8444** (self-signed cert — click
+through the browser warning). It runs alongside the dev stack without
+colliding: distinct compose project, network subnet, and volumes.
+
+To deploy to a real host instead, set `DEPLOY_HOST` (a docker-context-style
+`user@host`) in `.env`, then:
+
+```sh
+make deploy         # builds, starts, and migrates over DOCKER_HOST=ssh://$DEPLOY_HOST
+make deploy-logs    # tail the remote app service's logs
+```
+
+`gen-prod-secrets.sh` is idempotent — rerunning it (e.g. as part of a
+later `make deploy-local`) never rotates secrets out from under a
+running stack unless `FORCE=1` is set. `deploy/.env.prod` is gitignored
+and must never be committed.
 
 ## Architecture
 

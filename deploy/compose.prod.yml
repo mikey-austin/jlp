@@ -74,7 +74,11 @@ services:
         ipv4_address: 172.31.5.9
 
   authelia:
-    image: authelia/authelia:4
+    # Pinned to the 4.39 minor (not the floating :4 tag) so a new
+    # major/minor release can't silently change behavior on redeploy —
+    # e.g. v4.40 drops the `expand-env` config filter this stack's
+    # configuration.prod.yml still relies on (see task-19-report.md).
+    image: authelia/authelia:4.39
     restart: unless-stopped
     environment:
       JLP_DOMAIN: ${JLP_DOMAIN}

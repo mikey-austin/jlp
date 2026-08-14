@@ -75,8 +75,8 @@ test-integration: ## Adapter tests against compose services
 	$(TOOLS) go test -tags integration ./internal/adapters/...
 
 vendor-js: ## Vendor pinned htmx + alpine into web/static/js
-	$(TOOLS) sh -c "curl -fsSL https://unpkg.com/htmx.org@2/dist/htmx.min.js -o web/static/js/htmx.min.js && \
-	                curl -fsSL https://unpkg.com/alpinejs@3/dist/cdn.min.js -o web/static/js/alpine.min.js"
+	$(TOOLS) sh -c "curl -fsSL https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js -o web/static/js/htmx.min.js && \
+	                curl -fsSL https://unpkg.com/alpinejs@3.16.1/dist/cdn.min.js -o web/static/js/alpine.min.js"
 
 deploy-local: ## Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
 	$(PROD_COMPOSE) build
