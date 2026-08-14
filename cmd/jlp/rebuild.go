@@ -8,6 +8,7 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
+	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/config"
 )
 
@@ -29,6 +30,9 @@ func runRebuildModel(ctx context.Context, cfg config.Config) error {
 	identityRepo := postgres.NewIdentityRepository(pool)
 	eventRepo := postgres.NewLearningEventRepository(pool)
 	obsRepo := postgres.NewObservationRepository(pool)
+	grammarRepo := postgres.NewGrammarRepository(pool)
+	prioRepo := postgres.NewPriorityRepository(pool)
+	p := planner.NewPlanner(obsRepo, eventRepo, grammarRepo, prioRepo, time.Now)
 
 	identities, err := identityRepo.ListIdentities(ctx)
 	if err != nil {
@@ -36,7 +40,7 @@ func runRebuildModel(ctx context.Context, cfg config.Config) error {
 	}
 
 	for _, id := range identities {
-		if err := learnermodel.Rebuild(ctx, id.ID, eventRepo, obsRepo, time.Now); err != nil {
+		if err := learnermodel.Rebuild(ctx, id.ID, eventRepo, obsRepo, time.Now, p); err != nil {
 			return fmt.Errorf("rebuild-model: identity %s: %w", id.ID, err)
 		}
 		slog.Info("rebuild-model: identity rebuilt", "identity", id.ID)

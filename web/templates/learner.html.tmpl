@@ -1,0 +1,30 @@
+{{define "content"}}<section class="learner">
+  <h1>学習</h1>
+
+  <h2>優先項目</h2>
+  <table class="sessions-table priorities-table">
+    <thead><tr><th>対象</th><th>種類</th><th>スコア</th><th>理由</th></tr></thead>
+    <tbody>
+      {{range .Priorities}}<tr>
+        <td>{{.Subject}}</td>
+        <td>{{.SubjectType}}</td>
+        <td>{{printf "%.1f" .Score}}</td>
+        <td>{{.Reason}}</td>
+      </tr>{{else}}<tr><td colspan="4">優先項目がありません</td></tr>{{end}}
+    </tbody>
+  </table>
+
+  <h2>観察</h2>
+  <table class="sessions-table observations-table">
+    <thead><tr><th>対象</th><th>種類</th><th>状態</th><th>信頼度</th><th>最終更新</th></tr></thead>
+    <tbody>
+      {{range .Observations}}<tr>
+        <td>{{.Subject}}</td>
+        <td>{{.SubjectType}}</td>
+        <td>{{.Kind}}</td>
+        <td>{{percent .Confidence}}%</td>
+        <td>{{.UpdatedAt.Format "2006-01-02"}}</td>
+      </tr>{{else}}<tr><td colspan="5">観察がありません</td></tr>{{end}}
+    </tbody>
+  </table>
+</section>{{end}}

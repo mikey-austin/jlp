@@ -19,6 +19,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
+	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
@@ -68,6 +69,20 @@ func main() {
 		recorder := learning.NewRecorder(eventRepo, bus)
 		writingSvc := appwriting.NewService(postgres.NewDocumentRepository(pool), recorder)
 
+		// grammarRepo is shared between the planner's JLPT-weight lookups
+		// (below), the feedback pipeline's concept-tagging, and the
+		// /grammar pages: one stateless repository instance wrapping the
+		// same pool, not several separate constructions of the same thing.
+		grammarRepo := postgres.NewGrammarRepository(pool)
+		obsRepo := postgres.NewObservationRepository(pool)
+		prioRepo := postgres.NewPriorityRepository(pool)
+		// The heuristic teaching planner (Task 5, PRD §16) turns the
+		// learner model's observations into the ranked, explainable
+		// priority list feedback.Service.RequestFeedback reads back via
+		// Top(5) to fill the Teacher prompt's RecentErrors — closing the
+		// adapt loop.
+		teachingPlanner := planner.NewPlanner(obsRepo, eventRepo, grammarRepo, prioRepo, time.Now)
+
 		// The learner model (Task 4, PRD §13/§14/§44) reacts to every
 		// correction.presented and grammar.concept.encountered event as
 		// it's published — the same two event types Rebuild (see
@@ -75,8 +90,11 @@ func main() {
 		// Updater.HandleEvent. Subscribe absorbs handler errors (see
 		// learning.Recorder.Record's doc comment on publish absorption),
 		// so a learner-model failure never fails the request that
-		// produced the event.
-		obsUpdater := learnermodel.NewUpdater(eventRepo, postgres.NewObservationRepository(pool), time.Now)
+		// produced the event. SetPlanner wires the planner in so every
+		// observation change also recomputes priorities (see
+		// consumers.go's SetPlanner doc comment).
+		obsUpdater := learnermodel.NewUpdater(eventRepo, obsRepo, time.Now)
+		obsUpdater.SetPlanner(teachingPlanner)
 		bus.Subscribe(event.TypeCorrectionPresented, obsUpdater.HandleEvent)
 		bus.Subscribe(event.TypeGrammarConceptEncountered, obsUpdater.HandleEvent)
 
@@ -98,16 +116,12 @@ func main() {
 		aiGen := observability.NewAIObserver(innerGen, aiRequestRepo, aiPricing())
 
 		teacherAgent := teacher.New(aiGen)
-		// grammarRepo is shared between the feedback pipeline's
-		// concept-tagging (below) and the /grammar pages (Task 3): one
-		// stateless repository instance wrapping the same pool, not two
-		// separate constructions of the same thing.
-		grammarRepo := postgres.NewGrammarRepository(pool)
 		feedbackSvc := feedback.NewService(
 			postgres.NewSessionRepository(pool),
 			postgres.NewDocumentRepository(pool),
 			postgres.NewFeedbackRepository(pool),
 			grammarRepo,
+			prioRepo,
 			teacherAgent,
 			recorder,
 		)
@@ -129,18 +143,20 @@ func main() {
 			os.Exit(1)
 		}
 		srv := httpx.NewServer(httpx.Options{
-			Addr:       fmt.Sprintf(":%d", cfg.Server.Port),
-			Auth:       authn,
-			Identities: identities,
-			Sessions:   sessionsSvc,
-			Writing:    writingSvc,
-			Events:     eventRepo,
-			Feedback:   feedbackSvc,
-			Analytics:  analyticsSvc,
-			AI:         aiGen,
-			AIRequests: aiRequestRepo,
-			AIRatings:  aiRatingRepo,
-			Grammar:    grammarRepo,
+			Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
+			Auth:         authn,
+			Identities:   identities,
+			Sessions:     sessionsSvc,
+			Writing:      writingSvc,
+			Events:       eventRepo,
+			Feedback:     feedbackSvc,
+			Analytics:    analyticsSvc,
+			AI:           aiGen,
+			AIRequests:   aiRequestRepo,
+			AIRatings:    aiRatingRepo,
+			Grammar:      grammarRepo,
+			Priorities:   prioRepo,
+			Observations: obsRepo,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

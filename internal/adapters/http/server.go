@@ -48,6 +48,17 @@ type Options struct {
 	// CorrectionsForConcept drive the detail page. The same repository
 	// instance Feedback's concept-tagging path uses (see main.go).
 	Grammar storage.GrammarRepository
+	// Priorities backs the /learner page's priority table and the
+	// /api/v1/learner/priorities API (Task 5): Top(N) — the same
+	// repository instance the planner writes through and Feedback reads
+	// Top(5) from to fill the Teacher prompt's RecentErrors (see
+	// main.go).
+	Priorities storage.PriorityRepository
+	// Observations backs the /learner page's observations list (Task 5):
+	// the raw learnermodel.Observation rows the planner scores into
+	// Priorities — shown alongside the priority table so a learner can
+	// see both the current read AND what it's derived from.
+	Observations storage.ObservationRepository
 }
 
 type Server struct {
@@ -113,6 +124,7 @@ func (s *Server) routes() http.Handler {
 		r.Post("/ratings", s.ratingsCreate)
 		r.Get("/grammar", s.grammarList)
 		r.Get("/grammar/{slug}", s.grammarDetail)
+		r.Get("/learner", s.learnerPage)
 
 		// /api/v1: the versioned JSON API (Task 16). It shares the exact
 		// same application services as the HTML routes above — no new
@@ -128,6 +140,7 @@ func (s *Server) routes() http.Handler {
 			r.Post("/sessions/{id}/feedback", s.apiFeedbackRequest)
 			r.Post("/corrections/{id}/status", s.apiCorrectionStatus)
 			r.Get("/learner/statistics", s.apiLearnerStatistics)
+			r.Get("/learner/priorities", s.apiLearnerPriorities)
 			r.Post("/ratings", s.apiRatingsCreate)
 		})
 	})

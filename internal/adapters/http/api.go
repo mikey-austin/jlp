@@ -365,6 +365,45 @@ func (s *Server) apiLearnerStatistics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, toStatisticsDTO(stats))
 }
 
+// priorityDTO mirrors storage.Priority's teaching-relevant fields in
+// snake_case — Task 5's brief pins this exact shape for
+// GET /api/v1/learner/priorities. IdentityID and UpdatedAt are omitted:
+// the caller already knows who they are (every /api/v1 route is
+// identity-scoped) and the page has no use for the bookkeeping
+// timestamp.
+type priorityDTO struct {
+	SubjectType string  `json:"subject_type"`
+	Subject     string  `json:"subject"`
+	Score       float64 `json:"score"`
+	Reason      string  `json:"reason"`
+}
+
+func toPriorityDTO(p storage.Priority) priorityDTO {
+	return priorityDTO{
+		SubjectType: p.SubjectType,
+		Subject:     p.Subject,
+		Score:       p.Score,
+		Reason:      p.Reason,
+	}
+}
+
+// apiLearnerPriorities handles GET /api/v1/learner/priorities: the same
+// storage.PriorityRepository.Top(N) the /learner page's table and
+// feedback.Service's RecentErrors both read from.
+func (s *Server) apiLearnerPriorities(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	top, err := s.opts.Priorities.Top(r.Context(), ident.ID, learnerPriorityLimit)
+	if err != nil {
+		writeAPIError(w, http.StatusInternalServerError, "could not load priorities")
+		return
+	}
+	dtos := make([]priorityDTO, 0, len(top))
+	for _, p := range top {
+		dtos = append(dtos, toPriorityDTO(p))
+	}
+	writeJSON(w, http.StatusOK, dtos)
+}
+
 // ratingCreateRequest is the JSON body POST /api/v1/ratings expects.
 type ratingCreateRequest struct {
 	AIRequestID string `json:"ai_request_id"`

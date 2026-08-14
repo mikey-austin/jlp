@@ -411,6 +411,58 @@ func TestAPILearnerStatisticsReturnsDerivedFields(t *testing.T) {
 	}
 }
 
+// TestAPILearnerPrioritiesReturnsSnakeCaseRows covers GET
+// /api/v1/learner/priorities: the brief's pinned response shape —
+// []{subject_type, subject, score, reason} — over the same
+// storage.PriorityRepository.Top the /learner HTML page's table uses.
+func TestAPILearnerPrioritiesReturnsSnakeCaseRows(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Priorities.(*fakeLearnerPriorityRepo).top = []storage.Priority{
+		{SubjectType: "concept", Subject: "i-adjective-past", Score: 7.5, Reason: "recurring weakness: 5 occurrences in 30d"},
+		{SubjectType: "correction-type", Subject: "conjugation", Score: 1.0, Reason: "recurring weakness: 3 occurrences in 30d"},
+	}
+	srv := NewServer(opts)
+	h := srv.HandlerForTest()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/learner/priorities", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got []struct {
+		SubjectType string  `json:"subject_type"`
+		Subject     string  `json:"subject"`
+		Score       float64 `json:"score"`
+		Reason      string  `json:"reason"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("could not decode response %s: %v", rec.Body.String(), err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(rows) = %d, want 2: %+v", len(got), got)
+	}
+	if got[0].SubjectType != "concept" || got[0].Subject != "i-adjective-past" || got[0].Score != 7.5 || got[0].Reason != "recurring weakness: 5 occurrences in 30d" {
+		t.Errorf("rows[0] = %+v, want {concept i-adjective-past 7.5 \"recurring weakness: 5 occurrences in 30d\"}", got[0])
+	}
+	if got[1].SubjectType != "correction-type" || got[1].Subject != "conjugation" {
+		t.Errorf("rows[1] = %+v, want SubjectType correction-type, Subject conjugation", got[1])
+	}
+}
+
+func TestAPILearnerPrioritiesRepositoryErrorReturns500(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Priorities.(*fakeLearnerPriorityRepo).topErr = context.DeadlineExceeded
+	srv := NewServer(opts)
+	h := srv.HandlerForTest()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/v1/learner/priorities", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
 // TestAPIRatingsCreateReturnsNoContent mirrors the HTML route's rating
 // widget contract over JSON: a valid rating returns 204 with no body.
 func TestAPIRatingsCreateReturnsNoContent(t *testing.T) {

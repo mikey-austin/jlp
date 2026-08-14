@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"    //nolint:depguard // fakeai/inprocbus are port-shaped test doubles; PRD §75 forbids agents/application importing real adapters, not fakes
@@ -239,6 +240,27 @@ func (f *fakeGrammarRepo) CorrectionsForConcept(context.Context, learner.Identit
 	panic("not used by feedback service tests")
 }
 
+// fakePriorityRepo is an in-memory storage.PriorityRepository double:
+// a test sets rows directly (via the top field) rather than needing a
+// real planner.Recompute to populate them — these tests are about the
+// feedback pipeline consuming Top(5), not about scoring itself (see
+// internal/application/planner's own tests for that).
+type fakePriorityRepo struct {
+	top []storage.Priority
+}
+
+func (f *fakePriorityRepo) ReplaceAll(context.Context, learner.IdentityID, []storage.Priority) error {
+	panic("not used by feedback service tests")
+}
+
+func (f *fakePriorityRepo) Top(_ context.Context, _ learner.IdentityID, limit int) ([]storage.Priority, error) {
+	out := f.top
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 // knownConceptsForFakeAI mirrors the two concept slugs
 // internal/adapters/fakeai tags corrections with (i-adjective-past,
 // particle-ni-direction), so the default test harness's candidate list
@@ -260,12 +282,13 @@ const testDocID = writing.DocumentID("doc-1")
 // bus — the same "real collaborators, fake edges" shape
 // application/writing/service_test.go uses.
 type testHarness struct {
-	svc      *appfeedback.Service
-	sessions *fakeSessionRepo
-	docs     *fakeDocRepo
-	repo     *fakeFeedbackRepo
-	grammar  *fakeGrammarRepo
-	events   *fakeEventStore
+	svc        *appfeedback.Service
+	sessions   *fakeSessionRepo
+	docs       *fakeDocRepo
+	repo       *fakeFeedbackRepo
+	grammar    *fakeGrammarRepo
+	events     *fakeEventStore
+	priorities *fakePriorityRepo
 }
 
 // newTestHarness wires the default harness over fakeai — its
@@ -284,11 +307,12 @@ func newTestHarnessWithGenerator(gen ai.StructuredGenerator) *testHarness {
 	docs := newFakeDocRepo()
 	repo := newFakeFeedbackRepo()
 	grammarRepo := &fakeGrammarRepo{concepts: knownConceptsForFakeAI()}
+	priorities := &fakePriorityRepo{}
 	events := &fakeEventStore{}
 	rec := learning.NewRecorder(events, inprocbus.New())
 	t := teacher.New(gen)
-	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, t, rec)
-	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events}
+	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, t, rec)
+	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events, priorities: priorities}
 }
 
 func (h *testHarness) putSession(s session.Session) {
@@ -689,6 +713,81 @@ func TestSetCorrectionStatusAcceptedCarriesConceptChip(t *testing.T) {
 	}
 	if len(view.Concepts) != 1 || view.Concepts[0] != "i-adjective-past" {
 		t.Fatalf("view.Concepts = %v, want [i-adjective-past]", view.Concepts)
+	}
+}
+
+// capturingGen is a minimal ai.StructuredGenerator that records the
+// last ai.StructuredRequest it was asked to generate — letting a test
+// inspect the RENDERED prompt (System/User strings), not just the
+// domain-level ReviewInput that produced it — and returns one fixed,
+// schema-valid correction so RequestFeedback can complete normally.
+type capturingGen struct {
+	lastReq ai.StructuredRequest
+}
+
+func (c *capturingGen) GenerateStructured(_ context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
+	c.lastReq = req
+	payload := `{"corrections":[{"original":"面白いでした","replacement":"面白かったです","type":"conjugation","severity":"incorrect","explanation":{"ja":"テスト","en":"test"},"concepts":["i-adjective-past"]}]}`
+	return ai.StructuredResponse{JSON: []byte(payload), Provider: "stub", Model: "stub-1"}, nil
+}
+
+// TestRequestFeedbackRecentErrorsReachRenderedPrompt is Phase 2 Task
+// 5's closing-the-adapt-loop pin (PRD §16): a top priority seeded into
+// the PriorityRepository must actually reach the rendered
+// teacher.feedback.v2 USER prompt the AI generator receives — not just
+// the in-memory ReviewInput.RecentErrors slice, which the v1 prompt
+// bug could have silently dropped. Captured via a stub generator, per
+// the brief's Step 3.
+func TestRequestFeedbackRecentErrorsReachRenderedPrompt(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.priorities.top = []storage.Priority{
+		{
+			SubjectType: "concept", Subject: "i-adjective-past", Score: 7.5,
+			Reason: "recurring weakness: 5 occurrences in 30d (persistence 1.67), 2 in last 7d (recency 3), value 1.50 (N5 concept, weight 2)",
+		},
+	}
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+
+	wantLine := "i-adjective-past (concept weakness, score 7.5): recurring weakness: 5 occurrences in 30d"
+	if !strings.Contains(gen.lastReq.User, wantLine) {
+		t.Fatalf("rendered prompt User = %q, missing the priority line %q", gen.lastReq.User, wantLine)
+	}
+	if gen.lastReq.PromptVersion != "v2" {
+		t.Fatalf("PromptVersion = %q, want v2 (the version whose user template renders RecentErrors)", gen.lastReq.PromptVersion)
+	}
+}
+
+// TestRequestFeedbackNoPrioritiesOmitsRecentErrorsSection: an identity
+// with no priorities yet must render a prompt with no RecentErrors
+// section at all (the v2 template's {{if .RecentErrors}} guard), not an
+// empty-but-present one.
+func TestRequestFeedbackNoPrioritiesOmitsRecentErrorsSection(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	if strings.Contains(gen.lastReq.User, "recurring problem areas") {
+		t.Fatalf("rendered prompt User unexpectedly contains the RecentErrors section header with no priorities seeded: %q", gen.lastReq.User)
 	}
 }
 

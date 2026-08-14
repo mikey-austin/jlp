@@ -86,7 +86,7 @@ func TestRebuildIsByteIdenticalToLiveProcessing(t *testing.T) {
 	}
 	rebuildObs := newFakeObsRepo()
 	rebuildClock := baseTime.Add(365 * 24 * time.Hour)
-	if err := applearnermodel.Rebuild(ctx, testIdentity, rebuildStore, rebuildObs, func() time.Time { return rebuildClock }); err != nil {
+	if err := applearnermodel.Rebuild(ctx, testIdentity, rebuildStore, rebuildObs, func() time.Time { return rebuildClock }, nil); err != nil {
 		t.Fatalf("Rebuild: %v", err)
 	}
 

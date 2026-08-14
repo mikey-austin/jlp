@@ -28,6 +28,11 @@ import (
 // to review it.
 const contextWindow = 200
 
+// recentErrorsLimit caps how many of the learner's top priorities feed
+// the Teacher prompt's RecentErrors — PRD §16's adapt loop: enough to
+// steer severity/emphasis without crowding out the rest of the prompt.
+const recentErrorsLimit = 5
+
 // ErrInvalidSelection is returned when Request's Start/End don't
 // satisfy 0 <= Start <= End <= len(document runes).
 var ErrInvalidSelection = errors.New("feedback: invalid selection range")
@@ -37,16 +42,24 @@ var ErrInvalidSelection = errors.New("feedback: invalid selection range")
 var ErrInvalidStatus = errors.New(`feedback: status must be "accepted" or "rejected"`)
 
 type Service struct {
-	sessions storage.SessionRepository
-	docs     storage.DocumentRepository
-	repo     storage.FeedbackRepository
-	grammar  storage.GrammarRepository
-	teacher  *teacher.Agent
-	rec      *learning.Recorder
+	sessions   storage.SessionRepository
+	docs       storage.DocumentRepository
+	repo       storage.FeedbackRepository
+	grammar    storage.GrammarRepository
+	priorities storage.PriorityRepository
+	teacher    *teacher.Agent
+	rec        *learning.Recorder
 }
 
-func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, t *teacher.Agent, rec *learning.Recorder) *Service {
-	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, teacher: t, rec: rec}
+// NewService wires the feedback pipeline. priorities feeds the Teacher
+// prompt's RecentErrors (see RequestFeedback below) — the service reads
+// storage.PriorityRepository.Top directly rather than taking a
+// *planner.Planner, deliberately keeping the planner's own Recompute
+// off the request path: priorities are kept fresh by the learnermodel
+// Updater (see that package's SetPlanner) reacting to the PRECEDING
+// request's events, not recomputed synchronously on every review.
+func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, t *teacher.Agent, rec *learning.Recorder) *Service {
+	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, teacher: t, rec: rec}
 }
 
 // Request asks for AI feedback on a slice of a document. Start/End are
@@ -147,13 +160,17 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		knownSlugs[c.Slug] = true
 	}
 
+	recentErrors, err := s.recentErrors(ctx, req.Identity)
+	if err != nil {
+		return Feedback{}, fmt.Errorf("feedback: list priorities: %w", err)
+	}
+
 	result, resp, err := s.teacher.ReviewWriting(ctx, teacher.ReviewInput{
-		Identity:  req.Identity,
-		Session:   sess,
-		Selection: selectionText,
-		Context:   contextText,
-		// RecentErrors intentionally left empty in the Phase 1 MVP;
-		// Phase 2 fills this from weakness statistics.
+		Identity:          req.Identity,
+		Session:           sess,
+		Selection:         selectionText,
+		Context:           contextText,
+		RecentErrors:      recentErrors,
 		ConceptCandidates: conceptCandidates,
 	})
 	if err != nil {
@@ -386,6 +403,27 @@ func correctionViewFromRecord(rec storage.CorrectionRecord, concepts []string) C
 		Status: rec.Status,
 		Diff:   diff.Runes(rec.Original, rec.Replacement),
 	}
+}
+
+// recentErrors formats identity's top priorities (PRD §16's heuristic
+// teaching planner — internal/application/planner keeps
+// storage.PriorityRepository current) as the human-readable lines the
+// teacher.feedback.v2 prompt's RecentErrors range renders directly
+// into the system context ("weigh these when deciding severity"). A
+// learner with no priorities yet (the common case for a brand-new
+// identity, or before the learner model has flagged anything) gets an
+// empty slice — the prompt template already tolerates that via
+// {{if .RecentErrors}}.
+func (s *Service) recentErrors(ctx context.Context, identity learner.IdentityID) ([]string, error) {
+	top, err := s.priorities.Top(ctx, identity, recentErrorsLimit)
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]string, 0, len(top))
+	for _, p := range top {
+		lines = append(lines, fmt.Sprintf("%s (%s weakness, score %.1f): %s", p.Subject, p.SubjectType, p.Score, p.Reason))
+	}
+	return lines, nil
 }
 
 // windowContext returns the substring of runes covering [start,end]

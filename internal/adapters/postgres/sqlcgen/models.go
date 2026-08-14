@@ -113,6 +113,15 @@ type LearnerObservation struct {
 	UpdatedAt   pgtype.Timestamptz
 }
 
+type LearnerPriority struct {
+	IdentityID  string
+	SubjectType string
+	Subject     string
+	Score       float64
+	Reason      string
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type LearningEvent struct {
 	ID         pgtype.UUID
 	IdentityID string

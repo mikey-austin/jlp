@@ -9,10 +9,12 @@ package learnermodel
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
@@ -35,9 +37,10 @@ const (
 // result is subscribed to correction.presented and
 // grammar.concept.encountered via HandleEvent (an events.Handler).
 type Updater struct {
-	events storage.LearningEventRepository
-	obs    storage.ObservationRepository
-	clock  func() time.Time
+	events  storage.LearningEventRepository
+	obs     storage.ObservationRepository
+	clock   func() time.Time
+	planner *planner.Planner
 }
 
 // NewUpdater builds an Updater. clock is injectable so tests (and
@@ -52,6 +55,21 @@ func NewUpdater(events storage.LearningEventRepository, obs storage.ObservationR
 	return &Updater{events: events, obs: obs, clock: clock}
 }
 
+// SetPlanner wires p into u: from this call on, every HandleEvent that
+// classifies (see classify) also triggers p.Recompute for the event's
+// identity, keeping the priority list (and thus the Teacher agent's
+// RecentErrors, via storage.PriorityRepository.Top) in sync with the
+// learner model as it changes. Optional — main.go's live bus consumer
+// calls this once at startup; Rebuild's own internal Updater (see
+// rebuild.go) deliberately never calls it, recomputing once at the end
+// of a full replay instead of once per historical event. A nil
+// receiver-side u.planner (the zero value) makes HandleEvent's
+// recompute step a no-op, so tests that don't care about priorities
+// need not call this at all.
+func (u *Updater) SetPlanner(p *planner.Planner) {
+	u.planner = p
+}
+
 // HandleEvent is the events.Handler registered for
 // correction.presented and grammar.concept.encountered. It:
 //  1. classifies ev into a (SubjectType, Subject) pair and recomputes
@@ -60,7 +78,9 @@ func NewUpdater(events storage.LearningEventRepository, obs storage.ObservationR
 //     weaknessThreshold, it upserts a weakness observation;
 //  2. sweeps every existing weakness for ev.IdentityID and flips any
 //     whose subject has gone quietWindow with zero qualifying
-//     occurrences to emerging.
+//     occurrences to emerging;
+//  3. if SetPlanner has wired a planner, recomputes ev.IdentityID's
+//     priority list — see SetPlanner's doc comment.
 //
 // Any event type other than the two above is a no-op (defensive: only
 // those two are ever subscribed to this handler in cmd/jlp/main.go).
@@ -82,7 +102,16 @@ func (u *Updater) HandleEvent(ctx context.Context, ev event.LearningEvent) error
 		}
 	}
 
-	return u.sweep(ctx, ev.IdentityID, all, ev.OccurredAt)
+	if err := u.sweep(ctx, ev.IdentityID, all, ev.OccurredAt); err != nil {
+		return err
+	}
+
+	if u.planner != nil {
+		if err := u.planner.Recompute(ctx, ev.IdentityID); err != nil {
+			return fmt.Errorf("learnermodel: recompute priorities: %w", err)
+		}
+	}
+	return nil
 }
 
 // upsertWeakness (re)asserts a weakness observation for subject. It

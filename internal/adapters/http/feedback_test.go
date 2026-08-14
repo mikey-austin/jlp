@@ -58,6 +58,20 @@ func (fakeGrammarRepo) CorrectionsForConcept(context.Context, learner.IdentityID
 	panic("not used by feedback http tests")
 }
 
+// fakePriorityRepo is a minimal storage.PriorityRepository double for
+// the feedback HTTP-layer tests: they exercise the review pipeline, not
+// the planner, so Top always answers empty (no priorities seeded) and
+// ReplaceAll is never expected to be called from this path.
+type fakePriorityRepo struct{}
+
+func (fakePriorityRepo) ReplaceAll(context.Context, learner.IdentityID, []storage.Priority) error {
+	panic("not used by feedback http tests")
+}
+
+func (fakePriorityRepo) Top(context.Context, learner.IdentityID, int) ([]storage.Priority, error) {
+	return nil, nil
+}
+
 // fakeFeedbackRepo is an in-memory storage.FeedbackRepository for
 // HTTP-layer tests, mirroring the identity-scoped join
 // application/feedback/service_test.go's double performs: a
@@ -146,7 +160,7 @@ func feedbackTestServer(t *testing.T, content string) (http.Handler, session.Ses
 	opts.Sessions = sessions.NewService(sessionRepo)
 	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
-	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, teacher.New(fakeai.New()), rec)
+	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teacher.New(fakeai.New()), rec)
 
 	sess, err := opts.Sessions.Create(context.Background(), "dev", "日記", "Diary", session.Profile{
 		TeacherMode:         "teacher",
