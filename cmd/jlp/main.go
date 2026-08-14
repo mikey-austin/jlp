@@ -1,9 +1,11 @@
 package main
 
 import (
+	"fmt"
 	"log/slog"
 	"os"
 
+	"github.com/mikeyaustin/jlp/internal/config"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 )
 
@@ -17,8 +19,13 @@ func main() {
 
 	switch cmd {
 	case "serve":
-		srv := httpx.NewServer(httpx.Options{Addr: ":8080"})
-		slog.Info("listening", "addr", ":8080")
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		srv := httpx.NewServer(httpx.Options{Addr: fmt.Sprintf(":%d", cfg.Server.Port)})
+		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {
 			slog.Error("server exited", "err", err)
 			os.Exit(1)

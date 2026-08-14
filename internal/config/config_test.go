@@ -1,0 +1,50 @@
+package config
+
+import "testing"
+
+func TestDefaults(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Port != 8080 || cfg.Auth.Mode != "static" || cfg.AI.Provider != "fake" {
+		t.Fatalf("unexpected defaults: %+v", cfg)
+	}
+	if cfg.Auth.Static.ID != "dev" {
+		t.Fatalf("static identity default: %+v", cfg.Auth.Static)
+	}
+}
+
+func TestEnvOverrides(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_SERVER_PORT", "9999")
+	t.Setenv("APP_AI_PROVIDER", "anthropic")
+	t.Setenv("APP_AI_ANTHROPIC_APIKEY", "sk-test")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Server.Port != 9999 || cfg.AI.Anthropic.APIKey != "sk-test" {
+		t.Fatalf("overrides not applied: %+v", cfg)
+	}
+}
+
+func TestValidation(t *testing.T) {
+	cases := map[string]map[string]string{
+		"missing db url":            {"APP_DATABASE_URL": ""},
+		"bad auth mode":             {"APP_DATABASE_URL": "postgres://x", "APP_AUTH_MODE": "oauth"},
+		"anthropic without key":     {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "anthropic"},
+		"unknown ai provider":       {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "hal9000"},
+	}
+	for name, env := range cases {
+		t.Run(name, func(t *testing.T) {
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			if _, err := Load(); err == nil {
+				t.Fatal("expected validation error")
+			}
+		})
+	}
+}
