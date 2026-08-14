@@ -8,6 +8,23 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Document struct {
+	ID         pgtype.UUID
+	SessionID  pgtype.UUID
+	IdentityID string
+	Content    string
+	Version    int32
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type DocumentVersion struct {
+	ID         int64
+	DocumentID pgtype.UUID
+	Version    int32
+	Content    string
+	CreatedAt  pgtype.Timestamptz
+}
+
 type Identity struct {
 	ID          string
 	DisplayName string

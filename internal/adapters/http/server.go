@@ -7,6 +7,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -16,6 +17,7 @@ type Options struct {
 	Auth       auth.Authenticator
 	Identities storage.IdentityRepository
 	Sessions   *sessions.Service
+	Writing    *appwriting.Service
 }
 
 type Server struct {
@@ -53,6 +55,7 @@ func (s *Server) routes() http.Handler {
 		r.Get("/sessions", s.sessionsList)
 		r.Post("/sessions", s.sessionsCreate)
 		r.Get("/sessions/{id}", s.sessionsWorkspace)
+		r.Post("/documents/{id}", s.documentsSave)
 	})
 	return r
 }

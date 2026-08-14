@@ -1,5 +1,10 @@
 {{define "content"}}<div class="workspace">
-  <section id="editor-pane">（エディタは次のタスクで）</section>
+  <section id="editor-pane">
+    <textarea id="editor" lang="ja" spellcheck="false" data-doc-id="{{.Document.ID}}"
+              placeholder="ここに日本語で書いてください…">{{.Document.Content}}</textarea>
+    <div class="editor-status"><span id="save-state" data-state="saved">保存済み</span>
+         <span id="rune-count">{{.Document.RuneCount}}</span>字</div>
+  </section>
   <aside id="context-pane">
     <h2>{{.Session.Title}}</h2>
     <dl>
@@ -13,4 +18,6 @@
     </dl>
   </aside>
   <section id="feedback-pane"></section>
-</div>{{end}}
+</div>
+<script src="/static/js/app.js" defer></script>
+{{end}}

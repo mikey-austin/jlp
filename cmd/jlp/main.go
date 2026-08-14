@@ -11,6 +11,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
 )
@@ -37,6 +38,7 @@ func main() {
 		}
 		identities := postgres.NewIdentityRepository(pool)
 		sessionsSvc := sessions.NewService(postgres.NewSessionRepository(pool))
+		writingSvc := appwriting.NewService(postgres.NewDocumentRepository(pool))
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
 		case "static":
@@ -56,6 +58,7 @@ func main() {
 			Auth:       authn,
 			Identities: identities,
 			Sessions:   sessionsSvc,
+			Writing:    writingSvc,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

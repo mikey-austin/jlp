@@ -58,9 +58,15 @@ func (s *Server) sessionsWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load session", http.StatusInternalServerError)
 		return
 	}
+	doc, err := s.opts.Writing.Open(r.Context(), ident.ID, sess.ID)
+	if err != nil {
+		http.Error(w, "could not load document", http.StatusInternalServerError)
+		return
+	}
 	Render(w, r, "workspace", map[string]any{
 		"Title":    sess.Title,
 		"Identity": ident,
 		"Session":  sess,
+		"Document": doc,
 	})
 }

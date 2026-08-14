@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -9,8 +10,10 @@ import (
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/domain/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -51,9 +54,67 @@ func (f *fakeSessionRepo) List(_ context.Context, identity learner.IdentityID) (
 	return out, nil
 }
 
+// fakeDocRepo is an in-memory storage.DocumentRepository for HTTP-layer
+// tests, identity-scoped like the real adapter.
+type fakeDocRepo struct {
+	bySession map[string]writing.DocumentID
+	docs      map[string]writing.Document
+	nextID    int
+}
+
+func newFakeDocRepo() *fakeDocRepo {
+	return &fakeDocRepo{bySession: map[string]writing.DocumentID{}, docs: map[string]writing.Document{}}
+}
+
+func (f *fakeDocRepo) key(identity learner.IdentityID, id writing.DocumentID) string {
+	return string(identity) + "/" + string(id)
+}
+
+func (f *fakeDocRepo) sessionKey(identity learner.IdentityID, sid session.ID) string {
+	return string(identity) + "/" + string(sid)
+}
+
+func (f *fakeDocRepo) GetOrCreateForSession(_ context.Context, identity learner.IdentityID, sid session.ID) (writing.Document, error) {
+	sk := f.sessionKey(identity, sid)
+	if id, ok := f.bySession[sk]; ok {
+		return f.docs[f.key(identity, id)], nil
+	}
+	f.nextID++
+	id := writing.DocumentID(fmt.Sprintf("doc-%d", f.nextID))
+	doc := writing.Document{ID: id, SessionID: sid, IdentityID: identity, Version: 1}
+	f.bySession[sk] = id
+	f.docs[f.key(identity, id)] = doc
+	return doc, nil
+}
+
+func (f *fakeDocRepo) Save(_ context.Context, identity learner.IdentityID, id writing.DocumentID, content string) (writing.Document, error) {
+	k := f.key(identity, id)
+	doc, ok := f.docs[k]
+	if !ok {
+		return writing.Document{}, storage.ErrNotFound
+	}
+	doc.Content = content
+	doc.Version++
+	f.docs[k] = doc
+	return doc, nil
+}
+
+func (f *fakeDocRepo) Get(_ context.Context, identity learner.IdentityID, id writing.DocumentID) (writing.Document, error) {
+	doc, ok := f.docs[f.key(identity, id)]
+	if !ok {
+		return writing.Document{}, storage.ErrNotFound
+	}
+	return doc, nil
+}
+
+func (f *fakeDocRepo) ListVersions(context.Context, learner.IdentityID, writing.DocumentID, int) ([]writing.Document, error) {
+	return nil, nil
+}
+
 func testOptionsWithSessions() Options {
 	opts := testOptions()
 	opts.Sessions = sessions.NewService(newFakeSessionRepo())
+	opts.Writing = appwriting.NewService(newFakeDocRepo())
 	return opts
 }
 
@@ -91,8 +152,8 @@ func TestSessionsCreateThenListShowsNewSession(t *testing.T) {
 	if recWorkspace.Code != http.StatusOK {
 		t.Fatalf("GET %s status = %d, body=%s", loc, recWorkspace.Code, recWorkspace.Body.String())
 	}
-	if !strings.Contains(recWorkspace.Body.String(), "エディタは次のタスクで") {
-		t.Fatalf("workspace body missing editor placeholder: %s", recWorkspace.Body.String())
+	if !strings.Contains(recWorkspace.Body.String(), `id="editor"`) {
+		t.Fatalf("workspace body missing editor textarea: %s", recWorkspace.Body.String())
 	}
 	if !strings.Contains(recWorkspace.Body.String(), "旅行について書く") {
 		t.Fatalf("workspace body missing session title: %s", recWorkspace.Body.String())

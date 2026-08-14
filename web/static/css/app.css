@@ -11,5 +11,9 @@ main { padding:1rem; max-width:1400px; margin:0 auto; }
 .session-form label { display:flex; flex-direction:column; gap:.2rem; font-size:.9rem; }
 .workspace { display:grid; grid-template-columns: 1fr 300px; gap:1rem; }
 #editor-pane { grid-column:1; grid-row:1; border:1px solid var(--border); padding:1rem; min-height:320px; }
+#editor { width:100%; min-height:60vh; font-size:1.1rem; line-height:1.9; }
+.editor-status { display:flex; gap:.5rem; align-items:center; margin-top:.4rem; color:var(--muted); font-size:.9rem; }
+#save-state[data-state="dirty"] { color:var(--accent); }
+#save-state[data-state="error"] { color:var(--accent); font-weight:700; }
 #context-pane { grid-column:2; grid-row:1; border:1px solid var(--border); padding:1rem; }
 #feedback-pane { grid-column:1 / -1; grid-row:2; border:1px solid var(--border); padding:1rem; min-height:120px; }
