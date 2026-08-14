@@ -2,7 +2,7 @@ COMPOSE := docker compose
 TOOLS   := $(COMPOSE) run --rm tools
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -60,3 +60,7 @@ db-shell: ## psql into the dev database
 test-integration: ## Adapter tests against compose services
 	$(COMPOSE) up -d postgres
 	$(TOOLS) go test -tags integration ./internal/adapters/...
+
+vendor-js: ## Vendor pinned htmx + alpine into web/static/js
+	$(TOOLS) sh -c "curl -fsSL https://unpkg.com/htmx.org@2/dist/htmx.min.js -o web/static/js/htmx.min.js && \
+	                curl -fsSL https://unpkg.com/alpinejs@3/dist/cdn.min.js -o web/static/js/alpine.min.js"

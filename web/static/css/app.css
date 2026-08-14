@@ -4,3 +4,12 @@
 .topbar { display:flex; gap:1rem; align-items:center; padding:.5rem 1rem; border-bottom:1px solid var(--border); }
 .brand { font-weight:700; color:var(--accent); text-decoration:none; }
 main { padding:1rem; max-width:1400px; margin:0 auto; }
+#topnav { display:flex; gap:1rem; align-items:center; margin-left:auto; }
+.sessions-table { border-collapse:collapse; width:100%; margin-bottom:1.5rem; }
+.sessions-table th, .sessions-table td { text-align:left; padding:.4rem .6rem; border-bottom:1px solid var(--border); }
+.session-form { display:flex; flex-direction:column; gap:.6rem; max-width:28rem; }
+.session-form label { display:flex; flex-direction:column; gap:.2rem; font-size:.9rem; }
+.workspace { display:grid; grid-template-columns: 1fr 300px; gap:1rem; }
+#editor-pane { grid-column:1; grid-row:1; border:1px solid var(--border); padding:1rem; min-height:320px; }
+#context-pane { grid-column:2; grid-row:1; border:1px solid var(--border); padding:1rem; }
+#feedback-pane { grid-column:1 / -1; grid-row:2; border:1px solid var(--border); padding:1rem; min-height:120px; }

@@ -14,3 +14,13 @@ type Identity struct {
 	Attributes  []byte
 	CreatedAt   pgtype.Timestamptz
 }
+
+type Session struct {
+	ID         pgtype.UUID
+	IdentityID string
+	Title      string
+	Purpose    string
+	Profile    []byte
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}

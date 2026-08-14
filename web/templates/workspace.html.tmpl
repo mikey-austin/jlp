@@ -1,0 +1,16 @@
+{{define "content"}}<div class="workspace">
+  <section id="editor-pane">（エディタは次のタスクで）</section>
+  <aside id="context-pane">
+    <h2>{{.Session.Title}}</h2>
+    <dl>
+      <dt>目的</dt><dd>{{.Session.Purpose}}</dd>
+      <dt>Teacher mode</dt><dd>{{.Session.Profile.TeacherMode}}</dd>
+      <dt>Explanation language</dt><dd>{{.Session.Profile.ExplanationLanguage}}</dd>
+      <dt>Strictness</dt><dd>{{.Session.Profile.Strictness}}</dd>
+      {{if .Session.Profile.Audience}}<dt>Audience</dt><dd>{{.Session.Profile.Audience}}</dd>{{end}}
+      {{if .Session.Profile.Tone}}<dt>Tone</dt><dd>{{.Session.Profile.Tone}}</dd>{{end}}
+      {{if .Session.Profile.Register}}<dt>Register</dt><dd>{{.Session.Profile.Register}}</dd>{{end}}
+    </dl>
+  </aside>
+  <section id="feedback-pane"></section>
+</div>{{end}}

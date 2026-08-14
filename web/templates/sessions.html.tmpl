@@ -1,0 +1,52 @@
+{{define "content"}}<section class="sessions">
+  <h1>セッション</h1>
+  <table class="sessions-table">
+    <thead><tr><th>タイトル</th><th>目的</th><th>更新</th></tr></thead>
+    <tbody>
+      {{range .Sessions}}<tr><td><a href="/sessions/{{.ID}}">{{.Title}}</a></td><td>{{.Purpose}}</td><td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td></tr>{{else}}<tr><td colspan="3">セッションがありません</td></tr>{{end}}
+    </tbody>
+  </table>
+
+  <h2>新規セッション</h2>
+  <form method="post" action="/sessions" class="session-form">
+    <label>タイトル
+      <input type="text" name="title" required>
+    </label>
+    <label>目的
+      <select name="purpose">
+        <option value="Blog post">Blog post</option>
+        <option value="Message to friend">Message to friend</option>
+        <option value="Diary">Diary</option>
+        <option value="Formal email">Formal email</option>
+        <option value="Casual conversation practice">Casual conversation practice</option>
+        <option value="Business Japanese">Business Japanese</option>
+        <option value="Creative writing">Creative writing</option>
+        <option value="JLPT practice">JLPT practice</option>
+        <option value="Tutor preparation">Tutor preparation</option>
+      </select>
+    </label>
+    <label>Teacher mode
+      <select name="teacher_mode">
+        <option value="teacher">teacher</option>
+        <option value="strict-corrector">strict-corrector</option>
+        <option value="naturalness-coach">naturalness-coach</option>
+        <option value="socratic">socratic</option>
+      </select>
+    </label>
+    <label>Explanation language
+      <select name="explanation_language">
+        <option value="ja">ja</option>
+        <option value="en">en</option>
+        <option value="both" selected>both</option>
+      </select>
+    </label>
+    <label>Strictness
+      <select name="strictness">
+        <option value="lenient">lenient</option>
+        <option value="balanced" selected>balanced</option>
+        <option value="strict">strict</option>
+      </select>
+    </label>
+    <button type="submit">作成</button>
+  </form>
+</section>{{end}}

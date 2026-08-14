@@ -6,6 +6,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -14,6 +15,7 @@ type Options struct {
 	Addr       string
 	Auth       auth.Authenticator
 	Identities storage.IdentityRepository
+	Sessions   *sessions.Service
 }
 
 type Server struct {
@@ -48,6 +50,9 @@ func (s *Server) routes() http.Handler {
 			ident, _ := IdentityFrom(r.Context())
 			Render(w, r, "home", map[string]any{"Title": "JLP", "Identity": ident})
 		})
+		r.Get("/sessions", s.sessionsList)
+		r.Post("/sessions", s.sessionsCreate)
+		r.Get("/sessions/{id}", s.sessionsWorkspace)
 	})
 	return r
 }
