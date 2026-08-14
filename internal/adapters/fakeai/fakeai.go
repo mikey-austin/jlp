@@ -83,7 +83,7 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 				JA: "移動を表す「行きます」は目的地に「に」を使います。「を」は使いません。",
 				EN: "行きます (\"to go\") marks its destination with に, not を.",
 			},
-			Concepts: []string{"particle-ni-destination"},
+			Concepts: []string{"particle-ni-direction"},
 		})
 	}
 

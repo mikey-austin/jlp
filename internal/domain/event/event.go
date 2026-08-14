@@ -12,12 +12,13 @@ import (
 type Type string
 
 const (
-	TypeWritingCreated      Type = "writing.created"
-	TypeWritingUpdated      Type = "writing.updated"
-	TypeFeedbackRequested   Type = "feedback.requested"
-	TypeCorrectionPresented Type = "correction.presented"
-	TypeCorrectionAccepted  Type = "correction.accepted"
-	TypeCorrectionRejected  Type = "correction.rejected"
+	TypeWritingCreated            Type = "writing.created"
+	TypeWritingUpdated            Type = "writing.updated"
+	TypeFeedbackRequested         Type = "feedback.requested"
+	TypeCorrectionPresented       Type = "correction.presented"
+	TypeCorrectionAccepted        Type = "correction.accepted"
+	TypeCorrectionRejected        Type = "correction.rejected"
+	TypeGrammarConceptEncountered Type = "grammar.concept.encountered"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

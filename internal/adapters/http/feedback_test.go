@@ -16,10 +16,36 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
+	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
+
+// fakeGrammarRepo is a minimal storage.GrammarRepository double for the
+// HTTP-layer tests: they exercise the feedback request/response cycle,
+// not concept-tagging persistence (that contract lives in
+// application/feedback/service_test.go), so ListConcepts returns an
+// empty candidate list and every other method panics if ever called.
+type fakeGrammarRepo struct{}
+
+func (fakeGrammarRepo) UpsertConcepts(context.Context, []grammar.Concept) error {
+	panic("not used by feedback http tests")
+}
+
+func (fakeGrammarRepo) ListConcepts(context.Context) ([]grammar.Concept, error) { return nil, nil }
+
+func (fakeGrammarRepo) GetConcept(context.Context, string) (grammar.Concept, error) {
+	panic("not used by feedback http tests")
+}
+
+func (fakeGrammarRepo) ConceptStats(context.Context, learner.IdentityID) ([]storage.ConceptStat, error) {
+	panic("not used by feedback http tests")
+}
+
+func (fakeGrammarRepo) CorrectionsForConcept(context.Context, learner.IdentityID, string, int) ([]storage.CorrectionRecord, error) {
+	panic("not used by feedback http tests")
+}
 
 // fakeFeedbackRepo is an in-memory storage.FeedbackRepository for
 // HTTP-layer tests, mirroring the identity-scoped join
@@ -61,6 +87,13 @@ func (f *fakeFeedbackRepo) UpdateCorrectionStatus(_ context.Context, identity le
 	return c, nil
 }
 
+// InsertCorrectionConcepts is a no-op here: the HTTP-layer tests assert
+// on rendered correction-card HTML, not persisted concept rows — that
+// contract lives in application/feedback/service_test.go.
+func (f *fakeFeedbackRepo) InsertCorrectionConcepts(_ context.Context, _ string, _ []string, _ map[string]bool) error {
+	return nil
+}
+
 // feedbackTestServer wires a real chi router with a real
 // feedback.Service (a real teacher.Agent over fakeai — deterministic,
 // no network) over in-memory repos, the same "real collaborators, fake
@@ -80,7 +113,7 @@ func feedbackTestServer(t *testing.T, content string) (http.Handler, session.Ses
 	opts.Sessions = sessions.NewService(sessionRepo)
 	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
-	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, teacher.New(fakeai.New()), rec)
+	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, teacher.New(fakeai.New()), rec)
 
 	sess, err := opts.Sessions.Create(context.Background(), "dev", "日記", "Diary", session.Profile{
 		TeacherMode:         "teacher",

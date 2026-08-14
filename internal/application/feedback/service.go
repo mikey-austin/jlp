@@ -40,12 +40,13 @@ type Service struct {
 	sessions storage.SessionRepository
 	docs     storage.DocumentRepository
 	repo     storage.FeedbackRepository
+	grammar  storage.GrammarRepository
 	teacher  *teacher.Agent
 	rec      *learning.Recorder
 }
 
-func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, t *teacher.Agent, rec *learning.Recorder) *Service {
-	return &Service{sessions: sessions, docs: docs, repo: repo, teacher: t, rec: rec}
+func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, t *teacher.Agent, rec *learning.Recorder) *Service {
+	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, teacher: t, rec: rec}
 }
 
 // Request asks for AI feedback on a slice of a document. Start/End are
@@ -129,6 +130,23 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 	}
 	contextText := windowContext(runes, start, end, contextWindow)
 
+	// conceptCandidates offers the teacher.feedback.v2 prompt the full
+	// catalog of taggable grammar concepts; knownSlugs is the same
+	// catalog as a set, used below to decide whether each concept the
+	// teacher tags a correction with is resolved (in the catalog) or
+	// not (recorded anyway, just unresolved — see
+	// storage.FeedbackRepository.InsertCorrectionConcepts).
+	concepts, err := s.grammar.ListConcepts(ctx)
+	if err != nil {
+		return Feedback{}, fmt.Errorf("feedback: list grammar concepts: %w", err)
+	}
+	conceptCandidates := make([]string, 0, len(concepts))
+	knownSlugs := make(map[string]bool, len(concepts))
+	for _, c := range concepts {
+		conceptCandidates = append(conceptCandidates, fmt.Sprintf("%s — %s", c.Slug, c.Name))
+		knownSlugs[c.Slug] = true
+	}
+
 	result, resp, err := s.teacher.ReviewWriting(ctx, teacher.ReviewInput{
 		Identity:  req.Identity,
 		Session:   sess,
@@ -136,6 +154,7 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		Context:   contextText,
 		// RecentErrors intentionally left empty in the Phase 1 MVP;
 		// Phase 2 fills this from weakness statistics.
+		ConceptCandidates: conceptCandidates,
 	})
 	if err != nil {
 		return Feedback{}, err
@@ -201,6 +220,11 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		}); err != nil {
 			return Feedback{}, fmt.Errorf("feedback: record %s: %w", event.TypeCorrectionPresented, err)
 		}
+
+		if err := s.tagConcepts(ctx, req, c, knownSlugs); err != nil {
+			return Feedback{}, err
+		}
+
 		views = append(views, CorrectionView{
 			Correction: c,
 			Status:     "presented",
@@ -216,6 +240,47 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		Corrections: views,
 		AIRequestID: resp.RequestID,
 	}, nil
+}
+
+// tagConcepts persists c's grammar-concept tags (if any) and records
+// one grammar.concept.encountered event per RESOLVED slug — a slug the
+// teacher tagged that isn't in knownSlugs (a hallucinated or stale
+// candidate) is still persisted, with resolved=false, but never gets an
+// event: the learner model only reacts to concepts it can actually
+// explain via GetConcept, not to whatever string the model happened to
+// emit.
+func (s *Service) tagConcepts(ctx context.Context, req Request, c correction.Correction, knownSlugs map[string]bool) error {
+	if len(c.Concepts) == 0 {
+		return nil
+	}
+
+	resolved := make(map[string]bool, len(c.Concepts))
+	for _, slug := range c.Concepts {
+		resolved[slug] = knownSlugs[slug]
+	}
+	if err := s.repo.InsertCorrectionConcepts(ctx, c.ID, c.Concepts, resolved); err != nil {
+		return fmt.Errorf("feedback: persist concepts: %w", err)
+	}
+
+	for _, slug := range c.Concepts {
+		if !resolved[slug] {
+			continue
+		}
+		if err := s.rec.Record(ctx, event.LearningEvent{
+			IdentityID: req.Identity,
+			SessionID:  &req.SessionID,
+			Type:       event.TypeGrammarConceptEncountered,
+			Subject:    slug,
+			Evidence: map[string]any{
+				"correction_id": c.ID,
+				"type":          string(c.Type),
+				"severity":      string(c.Severity),
+			},
+		}); err != nil {
+			return fmt.Errorf("feedback: record %s: %w", event.TypeGrammarConceptEncountered, err)
+		}
+	}
+	return nil
 }
 
 // SetCorrectionStatus records the learner's accept/reject decision on a

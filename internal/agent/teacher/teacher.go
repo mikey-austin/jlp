@@ -24,7 +24,7 @@ import (
 
 const (
 	promptName    = "teacher.feedback"
-	promptVersion = "v1"
+	promptVersion = "v2"
 	schemaName    = "correction_result.v1"
 	agentName     = "teacher"
 	maxTokens     = 2048
@@ -52,9 +52,17 @@ type ReviewInput struct {
 	Selection    string
 	Context      string   // surrounding document text
 	RecentErrors []string // human-readable weakness summaries (empty in MVP; Phase 2 fills it)
+	// ConceptCandidates is the tagging vocabulary the teacher.feedback.v2
+	// prompt offers the model: one "slug — name" line per grammar
+	// concept in the catalog (see application/feedback.Service, which
+	// builds this from storage.GrammarRepository.ListConcepts). The
+	// model may only tag a correction's concepts from this list — see
+	// the v2 system template's "chosen ONLY from the provided candidate
+	// list" instruction.
+	ConceptCandidates []string
 }
 
-// promptData mirrors exactly what templates/teacher.feedback.v1.*.md
+// promptData mirrors exactly what templates/teacher.feedback.v2.*.md
 // range/index over.
 type promptData struct {
 	TeacherMode         string
@@ -66,6 +74,7 @@ type promptData struct {
 	Context             string
 	Selection           string
 	RecentErrors        []string
+	ConceptCandidates   []string
 }
 
 // The following DTOs mirror schemas/defs/correction_result.v1.json
@@ -106,6 +115,7 @@ func (a *Agent) ReviewWriting(ctx context.Context, in ReviewInput) (correction.R
 		Context:             in.Context,
 		Selection:           in.Selection,
 		RecentErrors:        in.RecentErrors,
+		ConceptCandidates:   in.ConceptCandidates,
 	}
 	rendered, err := prompts.Render(promptName, promptVersion, data)
 	if err != nil {

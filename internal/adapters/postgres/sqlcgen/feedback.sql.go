@@ -50,6 +50,23 @@ func (q *Queries) InsertCorrection(ctx context.Context, arg InsertCorrectionPara
 	return err
 }
 
+const insertCorrectionConcept = `-- name: InsertCorrectionConcept :exec
+INSERT INTO correction_concepts (correction_id, concept_slug, resolved)
+VALUES ($1, $2, $3)
+ON CONFLICT (correction_id, concept_slug) DO NOTHING
+`
+
+type InsertCorrectionConceptParams struct {
+	CorrectionID pgtype.UUID
+	ConceptSlug  string
+	Resolved     bool
+}
+
+func (q *Queries) InsertCorrectionConcept(ctx context.Context, arg InsertCorrectionConceptParams) error {
+	_, err := q.db.Exec(ctx, insertCorrectionConcept, arg.CorrectionID, arg.ConceptSlug, arg.Resolved)
+	return err
+}
+
 const insertFeedbackRequest = `-- name: InsertFeedbackRequest :exec
 INSERT INTO feedback_requests (
     id, identity_id, session_id, document_id,

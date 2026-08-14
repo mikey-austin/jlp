@@ -26,6 +26,7 @@ type correctionCardView struct {
 	ID, Type, Severity, Original, Replacement string
 	ExplanationJA, ExplanationEN, Status      string
 	DiffSpans                                 []diffSpanView
+	Concepts                                  []string // grammar concept slugs; chips link /grammar/{slug} (Task 3)
 }
 
 // feedbackView is the result of one review, as the feedback partial
@@ -64,6 +65,7 @@ func toCorrectionCardView(cv feedback.CorrectionView) correctionCardView {
 		ExplanationEN: cv.Explanation.EN,
 		Status:        cv.Status,
 		DiffSpans:     toDiffSpans(cv.Diff),
+		Concepts:      cv.Concepts,
 	}
 }
 

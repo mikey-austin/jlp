@@ -6,6 +6,7 @@
   <p class="inline-diff">{{range .DiffSpans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
   <p class="expl ja">{{.ExplanationJA}}</p>
   <p class="expl en">{{.ExplanationEN}}</p>
+  {{if .Concepts}}<p class="concepts">{{range .Concepts}}<a class="chip" href="/grammar/{{.}}">{{.}}</a>{{end}}</p>{{end}}
   {{if eq .Status "presented"}}<footer>
     <button hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"accepted"}'
             hx-target="#corr-{{.ID}}" hx-swap="outerHTML">納得した</button>

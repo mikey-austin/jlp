@@ -3,6 +3,7 @@ package feedback_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"    //nolint:depguard // fakeai/inprocbus are port-shaped test doubles; PRD §75 forbids agents/application importing real adapters, not fakes
@@ -11,9 +12,11 @@ import (
 	appfeedback "github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -100,6 +103,7 @@ func (f *fakeDocRepo) ListVersions(_ context.Context, identity learner.IdentityI
 type fakeFeedbackRepo struct {
 	feedback    map[string]storage.FeedbackRecord   // key: feedback ID
 	corrections map[string]storage.CorrectionRecord // key: correction ID
+	concepts    []conceptRow                        // every InsertCorrectionConcepts call, flattened
 	insertErr   error
 }
 
@@ -136,6 +140,22 @@ func (f *fakeFeedbackRepo) UpdateCorrectionStatus(_ context.Context, identity le
 	return c, nil
 }
 
+// conceptRow is one InsertCorrectionConcepts call recorded by
+// fakeFeedbackRepo, letting tests assert exactly which
+// (correction, slug, resolved) tuples were persisted.
+type conceptRow struct {
+	CorrectionID string
+	Slug         string
+	Resolved     bool
+}
+
+func (f *fakeFeedbackRepo) InsertCorrectionConcepts(_ context.Context, correctionID string, slugs []string, resolved map[string]bool) error {
+	for _, slug := range slugs {
+		f.concepts = append(f.concepts, conceptRow{CorrectionID: correctionID, Slug: slug, Resolved: resolved[slug]})
+	}
+	return nil
+}
+
 // fakeEventStore is an in-memory storage.LearningEventRepository, same
 // role as application/writing/service_test.go's double: it lets tests
 // assert exactly which events were recorded, in what order, without a
@@ -157,6 +177,47 @@ func (f *fakeEventStore) ListRecent(context.Context, learner.IdentityID, *sessio
 	return f.events, nil
 }
 
+// fakeGrammarRepo is an in-memory storage.GrammarRepository: only
+// ListConcepts is exercised by the feedback pipeline (it builds the
+// teacher.feedback.v2 prompt's candidate list and the known-slug set
+// used to classify each tag as resolved/unresolved), so every other
+// method panics if called — a test that needs it should say so
+// explicitly rather than silently getting a zero value.
+type fakeGrammarRepo struct {
+	concepts []grammar.Concept
+}
+
+func (f *fakeGrammarRepo) UpsertConcepts(context.Context, []grammar.Concept) error {
+	panic("not used by feedback service tests")
+}
+
+func (f *fakeGrammarRepo) ListConcepts(context.Context) ([]grammar.Concept, error) {
+	return f.concepts, nil
+}
+
+func (f *fakeGrammarRepo) GetConcept(context.Context, string) (grammar.Concept, error) {
+	panic("not used by feedback service tests")
+}
+
+func (f *fakeGrammarRepo) ConceptStats(context.Context, learner.IdentityID) ([]storage.ConceptStat, error) {
+	panic("not used by feedback service tests")
+}
+
+func (f *fakeGrammarRepo) CorrectionsForConcept(context.Context, learner.IdentityID, string, int) ([]storage.CorrectionRecord, error) {
+	panic("not used by feedback service tests")
+}
+
+// knownConceptsForFakeAI mirrors the two concept slugs
+// internal/adapters/fakeai tags corrections with (i-adjective-past,
+// particle-ni-direction), so the default test harness's candidate list
+// matches what fakeai's deterministic rules actually produce.
+func knownConceptsForFakeAI() []grammar.Concept {
+	return []grammar.Concept{
+		{Slug: "i-adjective-past", Name: "い-adjective past tense", JLPTLevel: 5},
+		{Slug: "particle-ni-direction", Name: "に (direction/target/time)", JLPTLevel: 5},
+	}
+}
+
 const testIdentity = learner.IdentityID("learner-a")
 const testSessionID = session.ID("sess-1")
 const testDocID = writing.DocumentID("doc-1")
@@ -171,18 +232,31 @@ type testHarness struct {
 	sessions *fakeSessionRepo
 	docs     *fakeDocRepo
 	repo     *fakeFeedbackRepo
+	grammar  *fakeGrammarRepo
 	events   *fakeEventStore
 }
 
+// newTestHarness wires the default harness over fakeai — its
+// GrammarRepository double knows exactly the two concept slugs fakeai's
+// deterministic rules tag (see knownConceptsForFakeAI), so a review of
+// a known-bad fakeai sentence resolves its tag(s) the same way the real
+// pipeline would. newTestHarnessWithGenerator lets a test swap in a
+// different ai.StructuredGenerator (e.g. to return an unknown concept
+// slug) while keeping everything else the same.
 func newTestHarness() *testHarness {
+	return newTestHarnessWithGenerator(fakeai.New())
+}
+
+func newTestHarnessWithGenerator(gen ai.StructuredGenerator) *testHarness {
 	sessions := newFakeSessionRepo()
 	docs := newFakeDocRepo()
 	repo := newFakeFeedbackRepo()
+	grammarRepo := &fakeGrammarRepo{concepts: knownConceptsForFakeAI()}
 	events := &fakeEventStore{}
 	rec := learning.NewRecorder(events, inprocbus.New())
-	t := teacher.New(fakeai.New())
-	svc := appfeedback.NewService(sessions, docs, repo, t, rec)
-	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, events: events}
+	t := teacher.New(gen)
+	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, t, rec)
+	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events}
 }
 
 func (h *testHarness) putSession(s session.Session) {
@@ -268,10 +342,12 @@ func TestRequestFeedbackHappyPath(t *testing.T) {
 		}
 	}
 
-	// Events recorded in order: feedback.requested, then
-	// correction.presented.
-	if len(h.events.events) != 2 {
-		t.Fatalf("recorded %d events, want 2: %+v", len(h.events.events), h.events.events)
+	// Events recorded in order: feedback.requested, correction.presented,
+	// then grammar.concept.encountered (面白いでした→面白かったです is
+	// fakeai's i-adjective-past rule, and the harness's GrammarRepository
+	// double knows that slug, so the tag resolves and gets an event).
+	if len(h.events.events) != 3 {
+		t.Fatalf("recorded %d events, want 3: %+v", len(h.events.events), h.events.events)
 	}
 	first := h.events.events[0]
 	if first.Type != event.TypeFeedbackRequested {
@@ -302,6 +378,95 @@ func TestRequestFeedbackHappyPath(t *testing.T) {
 	if got := second.Evidence["severity"]; got != string(cv.Severity) {
 		t.Fatalf("events[1].Evidence[severity] = %v, want %q", got, cv.Severity)
 	}
+	third := h.events.events[2]
+	if third.Type != event.TypeGrammarConceptEncountered {
+		t.Fatalf("events[2].Type = %q, want %q", third.Type, event.TypeGrammarConceptEncountered)
+	}
+	if third.Subject != "i-adjective-past" {
+		t.Fatalf("events[2].Subject = %q, want i-adjective-past", third.Subject)
+	}
+	if third.SessionID == nil || *third.SessionID != testSessionID {
+		t.Fatalf("events[2].SessionID = %v, want %q", third.SessionID, testSessionID)
+	}
+	if got := third.Evidence["correction_id"]; got != cv.ID {
+		t.Fatalf("events[2].Evidence[correction_id] = %v, want %q", got, cv.ID)
+	}
+	if got := third.Evidence["type"]; got != string(cv.Type) {
+		t.Fatalf("events[2].Evidence[type] = %v, want %q", got, cv.Type)
+	}
+	if got := third.Evidence["severity"]; got != string(cv.Severity) {
+		t.Fatalf("events[2].Evidence[severity] = %v, want %q", got, cv.Severity)
+	}
+
+	// correction_concepts: one resolved row for i-adjective-past.
+	if len(h.repo.concepts) != 1 {
+		t.Fatalf("persisted concept rows = %d, want 1: %+v", len(h.repo.concepts), h.repo.concepts)
+	}
+	cc := h.repo.concepts[0]
+	if cc.CorrectionID != cv.ID || cc.Slug != "i-adjective-past" || !cc.Resolved {
+		t.Fatalf("persisted concept row = %+v, want {CorrectionID:%q Slug:i-adjective-past Resolved:true}", cc, cv.ID)
+	}
+}
+
+// TestRequestFeedbackUnknownConceptSlugPersistsUnresolvedWithoutEvent
+// pins the other half of Step 2: a teacher response tagging a
+// correction with a slug that ISN'T in the GrammarRepository catalog
+// still gets a correction_concepts row (resolved=false) — tagging bugs
+// or a stale candidate list must be visible in the data, not silently
+// dropped — but must NOT produce a grammar.concept.encountered event,
+// since the learner model can't explain a concept it has no catalog
+// entry for.
+func TestRequestFeedbackUnknownConceptSlugPersistsUnresolvedWithoutEvent(t *testing.T) {
+	gen := &stubConceptGen{
+		original:    "行きました",
+		replacement: "行った",
+		concept:     "totally-unknown-slug",
+	}
+	h := newTestHarnessWithGenerator(gen)
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "昨日、公園に行きました。"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	fb, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	if len(fb.Corrections) != 1 {
+		t.Fatalf("len(Corrections) = %d, want 1: %+v", len(fb.Corrections), fb.Corrections)
+	}
+	correctionID := fb.Corrections[0].ID
+
+	if len(h.repo.concepts) != 1 {
+		t.Fatalf("persisted concept rows = %d, want 1: %+v", len(h.repo.concepts), h.repo.concepts)
+	}
+	cc := h.repo.concepts[0]
+	if cc.CorrectionID != correctionID || cc.Slug != "totally-unknown-slug" || cc.Resolved {
+		t.Fatalf("persisted concept row = %+v, want {CorrectionID:%q Slug:totally-unknown-slug Resolved:false}", cc, correctionID)
+	}
+
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeGrammarConceptEncountered {
+			t.Fatalf("recorded a %s event for an unresolved slug, want none: %+v", event.TypeGrammarConceptEncountered, ev)
+		}
+	}
+}
+
+// stubConceptGen is a minimal ai.StructuredGenerator that always
+// returns one correction tagging the given (unvalidated) concept slug —
+// used to exercise the unknown-slug persistence path without needing
+// fakeai to know about a slug that, by construction, isn't in any real
+// catalog.
+type stubConceptGen struct {
+	original, replacement, concept string
+}
+
+func (s *stubConceptGen) GenerateStructured(_ context.Context, _ ai.StructuredRequest) (ai.StructuredResponse, error) {
+	payload := fmt.Sprintf(`{"corrections":[{"original":%q,"replacement":%q,"type":"conjugation","severity":"incorrect","explanation":{"ja":"テスト","en":"test"},"concepts":[%q]}]}`,
+		s.original, s.replacement, s.concept)
+	return ai.StructuredResponse{JSON: []byte(payload), Provider: "stub", Model: "stub-1"}, nil
 }
 
 // (b) Start==End → whole document reviewed, regardless of where the

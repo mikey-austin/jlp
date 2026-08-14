@@ -87,6 +87,7 @@ func main() {
 			postgres.NewSessionRepository(pool),
 			postgres.NewDocumentRepository(pool),
 			postgres.NewFeedbackRepository(pool),
+			postgres.NewGrammarRepository(pool),
 			teacherAgent,
 			recorder,
 		)

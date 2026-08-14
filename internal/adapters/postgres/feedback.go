@@ -122,6 +122,44 @@ func (r *FeedbackRepository) UpdateCorrectionStatus(ctx context.Context, identit
 	return fromUpdateCorrectionStatusRow(row), nil
 }
 
+// InsertCorrectionConcepts writes one correction_concepts row per slug
+// in slugs, in one transaction (the same WithTx pattern InsertFeedback
+// above uses). resolved[slug] decides that row's resolved column: true
+// for a slug the caller has already checked against the
+// GrammarRepository catalog, false for an unknown one — the row is
+// still written either way, never silently dropped (see the
+// storage.FeedbackRepository doc comment on InsertCorrectionConcepts).
+// The underlying query is `ON CONFLICT (correction_id, concept_slug)
+// DO NOTHING`, so re-running this for the same correction is a no-op,
+// not a duplicate-row error.
+func (r *FeedbackRepository) InsertCorrectionConcepts(ctx context.Context, correctionID string, slugs []string, resolved map[string]bool) error {
+	if len(slugs) == 0 {
+		return nil
+	}
+	cid, err := parseUUID(correctionID)
+	if err != nil {
+		return fmt.Errorf("correction id: %w", err)
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has succeeded
+
+	qtx := r.q.WithTx(tx)
+	for _, slug := range slugs {
+		if err := qtx.InsertCorrectionConcept(ctx, sqlcgen.InsertCorrectionConceptParams{
+			CorrectionID: cid,
+			ConceptSlug:  slug,
+			Resolved:     resolved[slug],
+		}); err != nil {
+			return fmt.Errorf("concept %q: %w", slug, err)
+		}
+	}
+	return tx.Commit(ctx)
+}
+
 // toOptionalUUID converts an optional canonical UUID string (empty
 // means "not set") to the nullable pgtype sqlc generates for
 // feedback_requests.ai_request_id: empty maps to an invalid (SQL NULL)

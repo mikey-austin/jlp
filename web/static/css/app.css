@@ -34,6 +34,10 @@ main { padding:1rem; max-width:1400px; margin:0 auto; }
 .correction .pair ins { color:#1a7a1a; text-decoration:none; }
 .correction .expl { margin:.3rem 0; }
 .correction .expl.en { color:var(--muted); font-size:.9rem; }
+.correction .concepts { margin:.3rem 0; display:flex; gap:.4rem; flex-wrap:wrap; }
+.chip { display:inline-block; padding:.1rem .6rem; border-radius:1rem; font-size:.8rem;
+        background:#eef2fb; color:var(--accent); border:1px solid var(--border); text-decoration:none; }
+.chip:hover { background:#e2e9fa; }
 .correction footer { margin-top:.6rem; display:flex; gap:.5rem; }
 .correction footer.resolved { color:var(--muted); font-size:.9rem; text-transform:capitalize; }
 .correction[data-status="accepted"] { opacity:.6; border-left:3px solid green; }

@@ -2,6 +2,7 @@ package teacher_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai" //nolint:depguard // fakeai is a port-shaped test double injected via teacher.New(ai.StructuredGenerator); PRD §75 Rule 3 forbids agents reaching real adapters, not fakes constructed in tests
@@ -79,6 +80,55 @@ func TestReviewWritingNaturalSentenceYieldsNoCorrections(t *testing.T) {
 	}
 	if result.Corrected != in.Selection {
 		t.Fatalf("Corrected = %q, want unchanged %q", result.Corrected, in.Selection)
+	}
+}
+
+// spyGen is a local ai.StructuredGenerator test double that records the
+// last ai.StructuredRequest it was called with (so a test can inspect
+// the fully-rendered System/User prompt text) and always returns a
+// fixed, schema-valid empty-corrections response.
+type spyGen struct {
+	req ai.StructuredRequest
+}
+
+func (s *spyGen) GenerateStructured(_ context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
+	s.req = req
+	return ai.StructuredResponse{
+		JSON:     []byte(`{"corrections":[]}`),
+		Provider: "spy",
+		Model:    "spy-1",
+	}, nil
+}
+
+// TestReviewWritingRendersV2PromptWithConceptCandidates pins the Step 1
+// scenario from the task brief: ReviewInput.ConceptCandidates flows
+// through to the rendered teacher.feedback.v2 prompt — the user half
+// lists each candidate line, and the system half carries the
+// tag-from-candidates-only instruction — and the request is sent as
+// prompt version "v2", not "v1".
+func TestReviewWritingRendersV2PromptWithConceptCandidates(t *testing.T) {
+	gen := &spyGen{}
+	agent := teacher.New(gen)
+
+	in := testReviewInput()
+	in.ConceptCandidates = []string{"i-adjective-past — い-adjective past tense (〜かった)"}
+
+	_, _, err := agent.ReviewWriting(context.Background(), in)
+	if err != nil {
+		t.Fatalf("ReviewWriting returned error: %v", err)
+	}
+
+	if gen.req.PromptVersion != "v2" {
+		t.Fatalf("PromptVersion = %q, want v2", gen.req.PromptVersion)
+	}
+	if gen.req.PromptName != "teacher.feedback" {
+		t.Fatalf("PromptName = %q, want teacher.feedback", gen.req.PromptName)
+	}
+	if !strings.Contains(gen.req.User, "i-adjective-past — い-adjective past tense (〜かった)") {
+		t.Fatalf("User prompt missing the candidate line: %s", gen.req.User)
+	}
+	if !strings.Contains(gen.req.System, "chosen ONLY from the provided candidate list") {
+		t.Fatalf("System prompt missing the tag-from-candidates instruction: %s", gen.req.System)
 	}
 }
 

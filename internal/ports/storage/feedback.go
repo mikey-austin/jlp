@@ -52,8 +52,16 @@ type CorrectionRecord struct {
 // UpdateCorrectionStatus re-checks identity via a join to
 // feedback_requests, mirroring the other repositories' identity-scoped
 // access control, so one learner can never mutate another's
-// correction.
+// correction. InsertCorrectionConcepts persists a correction's
+// grammar-concept tags (Phase 2 Task 2): slugs is every concept the
+// teacher agent tagged the correction with, resolved reports per-slug
+// whether it was found in the GrammarRepository catalog at tag-time —
+// an unknown slug is still recorded (resolved=false), never dropped,
+// so a tagging bug or a stale candidate list surfaces as data rather
+// than silently vanishing. Idempotent: re-inserting the same
+// (correctionID, slug) pair is a no-op (ON CONFLICT DO NOTHING).
 type FeedbackRepository interface {
 	InsertFeedback(ctx context.Context, rec FeedbackRecord, corrections []CorrectionRecord) error
 	UpdateCorrectionStatus(ctx context.Context, identity learner.IdentityID, correctionID, status string) (CorrectionRecord, error)
+	InsertCorrectionConcepts(ctx context.Context, correctionID string, slugs []string, resolved map[string]bool) error
 }
