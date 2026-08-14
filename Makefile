@@ -1,8 +1,9 @@
 COMPOSE := docker compose
 TOOLS   := $(COMPOSE) run --rm tools
+PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed deploy-local deploy deploy-logs
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -76,3 +77,19 @@ test-integration: ## Adapter tests against compose services
 vendor-js: ## Vendor pinned htmx + alpine into web/static/js
 	$(TOOLS) sh -c "curl -fsSL https://unpkg.com/htmx.org@2/dist/htmx.min.js -o web/static/js/htmx.min.js && \
 	                curl -fsSL https://unpkg.com/alpinejs@3/dist/cdn.min.js -o web/static/js/alpine.min.js"
+
+deploy-local: ## Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
+	$(PROD_COMPOSE) build
+	$(PROD_COMPOSE) up -d
+	$(PROD_COMPOSE) run --rm app migrate
+	@set -a; . deploy/.env.prod; set +a; sh scripts/wait-healthy.sh "https://$${JLP_DOMAIN}:8444/healthz"
+
+deploy: ## Deploy to $(DEPLOY_HOST) over SSH (set in .env)
+	@test -n "$(DEPLOY_HOST)" || (echo "set DEPLOY_HOST in .env"; exit 1)
+	DOCKER_HOST=ssh://$(DEPLOY_HOST) $(PROD_COMPOSE) build
+	DOCKER_HOST=ssh://$(DEPLOY_HOST) $(PROD_COMPOSE) up -d
+	DOCKER_HOST=ssh://$(DEPLOY_HOST) $(PROD_COMPOSE) run --rm app migrate
+	@echo "deployed to $(DEPLOY_HOST)"
+
+deploy-logs: ## Tail remote app logs
+	DOCKER_HOST=ssh://$(DEPLOY_HOST) $(PROD_COMPOSE) logs -f app

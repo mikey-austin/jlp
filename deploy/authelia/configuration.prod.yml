@@ -1,0 +1,26 @@
+theme: light
+server:
+  address: 'tcp://0.0.0.0:9091'
+log:
+  level: info
+identity_validation:
+  reset_password:
+    jwt_secret: '{{ secret "/secrets/jwt_secret" }}'
+authentication_backend:
+  file:
+    path: '/config/users.yml'
+access_control:
+  default_policy: one_factor
+session:
+  secret: '{{ secret "/secrets/session_secret" }}'
+  cookies:
+    - domain: '${JLP_DOMAIN}'
+      authelia_url: 'https://auth.${JLP_DOMAIN}:8444'
+      default_redirection_url: 'https://${JLP_DOMAIN}:8444'
+storage:
+  encryption_key: '{{ secret "/secrets/storage_encryption_key" }}'
+  local:
+    path: '/data/db.sqlite3'
+notifier:
+  filesystem:
+    filename: '/data/notification.txt'

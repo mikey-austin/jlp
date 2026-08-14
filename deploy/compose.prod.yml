@@ -1,0 +1,101 @@
+# Production stack: `make deploy-local` (locally, https://<JLP_DOMAIN>:8444 —
+# see deploy/.env.prod.example) or `make deploy` (over
+# DOCKER_HOST=ssh://$DEPLOY_HOST, identical compose path).
+#
+# A distinct project name (jlp-prod) and a distinct network subnet
+# (172.31.5.0/24, vs. the dev stack's 172.28.5.0/24 in docker-compose.yml)
+# keep this stack from colliding with the dev stack when both run on the
+# same host — as they do during deploy-local verification.
+name: jlp-prod
+
+services:
+  app:
+    build: { context: .., target: prod }
+    restart: unless-stopped
+    # No source mounts (this is the distroless prod image, not `air`), and
+    # no published port: the only way to reach the app is through Caddy,
+    # which is the whole point of the trusted-proxy check below.
+    environment:
+      APP_DATABASE_URL: postgres://jlp:${POSTGRES_PASSWORD}@postgres:5432/jlp?sslmode=disable
+      APP_AUTH_MODE: authelia
+      # Caddy's fixed address on the pinned prod subnet below — the only
+      # peer the app trusts to have already run forward_auth. Narrow CIDR
+      # naming Caddy specifically, never the bridge gateway or a broad
+      # /12: Docker hairpin-NATs host->published-port traffic through the
+      # gateway, which would otherwise look indistinguishable from Caddy.
+      # See docker-compose.yml / task-5-report.md for the dev-stack
+      # writeup of this exact failure mode.
+      APP_AUTH_TRUSTEDPROXIES: 127.0.0.1/32,172.31.5.9/32
+      # `app seed` target only — the authelia adapter authenticates
+      # purely from Remote-User/Remote-Name headers set by Caddy, never
+      # from these. Set to match whoever you actually log in as (see
+      # AUTHELIA_PROD_USER/DISPLAYNAME in deploy/.env.prod.example) so
+      # the seeded session belongs to that identity.
+      APP_AUTH_STATIC_ID: ${APP_AUTH_STATIC_ID:-admin}
+      APP_AUTH_STATIC_DISPLAYNAME: ${APP_AUTH_STATIC_DISPLAYNAME:-Admin}
+      APP_AI_PROVIDER: ${APP_AI_PROVIDER:-fake}
+      APP_AI_ANTHROPIC_APIKEY: ${ANTHROPIC_API_KEY:-}
+      # Empty is safe: viper's getEnv only honors a bound env var when
+      # it's non-empty, so an unset override here falls through to
+      # config's own defaults rather than blanking them out.
+      APP_AI_ANTHROPIC_MODEL: ${APP_AI_ANTHROPIC_MODEL:-}
+      APP_AI_ANTHROPIC_BASEURL: ${APP_AI_ANTHROPIC_BASEURL:-}
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment: { POSTGRES_USER: jlp, POSTGRES_PASSWORD: "${POSTGRES_PASSWORD}", POSTGRES_DB: jlp }
+    volumes: [ "pgdata_prod:/var/lib/postgresql/data" ]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jlp"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports: ["8444:8444"]
+    environment:
+      JLP_DOMAIN: ${JLP_DOMAIN}
+    volumes:
+      - ./caddy/Caddyfile.prod:/etc/caddy/Caddyfile:ro
+      - caddydata_prod:/data
+    depends_on: [app, authelia]
+    networks:
+      default:
+        # Fixed address so the app's trusted-proxy CIDR (above) can name
+        # Caddy specifically, distinct from the bridge gateway.
+        ipv4_address: 172.31.5.9
+
+  authelia:
+    image: authelia/authelia:4
+    restart: unless-stopped
+    environment:
+      JLP_DOMAIN: ${JLP_DOMAIN}
+      # Enables Authelia's config-file preprocessing: `expand-env`
+      # substitutes ${JLP_DOMAIN} (used for the cookie domain / portal
+      # URLs in configuration.prod.yml) and `template` evaluates the
+      # `{{ secret "/path" }}` function so the three Authelia secrets are
+      # read from mounted files instead of living in the committed YAML.
+      X_AUTHELIA_CONFIG_FILTERS: template,expand-env
+    volumes:
+      - ./authelia/configuration.prod.yml:/config/configuration.yml:ro
+      - ./authelia/users.prod.yml:/config/users.yml:ro
+      - ./authelia/secrets:/secrets:ro
+      - autheliadata_prod:/data
+
+volumes: { pgdata_prod: {}, caddydata_prod: {}, autheliadata_prod: {} }
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.31.5.0/24
+          # Reserve the lower half of the subnet from dynamic allocation so
+          # a container started without a static address (postgres, app,
+          # authelia) can never race Caddy for its pinned 172.31.5.9 (used
+          # above in APP_AUTH_TRUSTEDPROXIES as the sole trusted peer).
+          ip_range: 172.31.5.128/25
