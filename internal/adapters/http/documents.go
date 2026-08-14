@@ -19,6 +19,12 @@ import (
 func (s *Server) documentsSave(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	id := writing.DocumentID(chi.URLParam(r, "id"))
+	// Cap the autosave body: without this a client (malicious or just a
+	// runaway editor buffer) could stream an unbounded body and have
+	// ParseForm read all of it into memory. MaxBytesReader makes the
+	// oversized read fail instead, which ParseForm surfaces as an error
+	// handled by the branch below (400, not a panic).
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return

@@ -3,6 +3,7 @@ package httpx
 import (
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -53,6 +54,15 @@ func NewServer(opts Options) *Server {
 	s := &Server{opts: opts}
 	s.Addr = opts.Addr
 	s.Handler = s.routes()
+	// Guard against slow-client resource exhaustion (Slowloris-style
+	// connections that trickle bytes to keep a handler goroutine and its
+	// connection pinned indefinitely). None of these routes stream or
+	// long-poll, so ordinary request/response timing comfortably fits
+	// inside all four.
+	s.ReadHeaderTimeout = 5 * time.Second
+	s.ReadTimeout = 30 * time.Second
+	s.WriteTimeout = 60 * time.Second
+	s.IdleTimeout = 120 * time.Second
 	return s
 }
 

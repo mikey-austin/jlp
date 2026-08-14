@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
+	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -122,6 +123,56 @@ func TestAPISessionsCreateMalformedJSONReturnsBadRequest(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"error"`) {
 		t.Fatalf("body missing {\"error\":...}: %s", rec.Body.String())
+	}
+}
+
+// TestAPISessionsCreateOversizedBodyReturns400 is the API equivalent of
+// documents_test.go's TestDocumentsSaveOversizedBodyReturns400: a body
+// over decodeJSON's maxRequestBodyBytes cap must fail cleanly as 400
+// {"error":...}, not panic or hang buffering unbounded bytes.
+func TestAPISessionsCreateOversizedBodyReturns400(t *testing.T) {
+	srv := NewServer(testOptionsWithSessions())
+	h := srv.HandlerForTest()
+
+	oversized := []byte(`{"title":"` + strings.Repeat("a", maxRequestBodyBytes+1) + `"}`)
+	rec := postJSON(t, h, "/api/v1/sessions", oversized)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body len=%d", rec.Code, rec.Body.Len())
+	}
+	if !strings.Contains(rec.Body.String(), `"error"`) {
+		t.Fatalf("body missing {\"error\":...}: %s", rec.Body.String())
+	}
+}
+
+// TestAPISessionsCreateRepositoryErrorReturns500AndHidesDetail is the
+// API equivalent of sessions_test.go's
+// TestSessionsCreateRepositoryErrorReturns500AndHidesDetail: a
+// repository failure must surface as a generic 500 {"error":"internal
+// error"}, never echoing the underlying error's text.
+func TestAPISessionsCreateRepositoryErrorReturns500AndHidesDetail(t *testing.T) {
+	opts := testOptionsWithSessions()
+	repo := newFakeSessionRepo()
+	repo.createErr = errors.New("pq: connection refused to host db.internal:5432 user=jlp password=hunter2")
+	opts.Sessions = sessions.NewService(repo)
+
+	srv := NewServer(opts)
+	h := srv.HandlerForTest()
+
+	rec := postJSON(t, h, "/api/v1/sessions", []byte(`{"title":"旅行について書く","purpose":"Diary"}`))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "hunter2") || strings.Contains(rec.Body.String(), "connection refused") {
+		t.Fatalf("body leaked underlying repository error: %s", rec.Body.String())
+	}
+	var got struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("could not decode error body %s: %v", rec.Body.String(), err)
+	}
+	if got.Error != "internal error" {
+		t.Fatalf("error = %q, want %q", got.Error, "internal error")
 	}
 }
 

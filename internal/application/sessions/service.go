@@ -20,11 +20,19 @@ func NewService(repo storage.SessionRepository) *Service {
 	return &Service{repo: repo}
 }
 
+// ErrInvalidTitle is returned by Create when title is empty. It's a
+// sentinel (rather than a plain errors.New at the call site) so HTTP
+// handlers can distinguish this validation failure — safe to surface to
+// the caller verbatim — from any other error Create or its repository
+// returns, which must not be echoed back (see internal/adapters/http's
+// sessionsCreate/apiSessionsCreate).
+var ErrInvalidTitle = errors.New("title must not be empty")
+
 // Create validates title is non-empty, applies profile defaults, generates a
 // uuid, and persists the new session.
 func (s *Service) Create(ctx context.Context, identity learner.IdentityID, title, purpose string, p session.Profile) (session.Session, error) {
 	if title == "" {
-		return session.Session{}, errors.New("title must not be empty")
+		return session.Session{}, ErrInvalidTitle
 	}
 	if p.TeacherMode == "" {
 		p.TeacherMode = "teacher"

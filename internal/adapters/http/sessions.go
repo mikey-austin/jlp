@@ -6,6 +6,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -40,7 +41,14 @@ func (s *Server) sessionsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := s.opts.Sessions.Create(r.Context(), ident.ID, r.FormValue("title"), r.FormValue("purpose"), profile)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		if errors.Is(err, sessions.ErrInvalidTitle) {
+			http.Error(w, sessions.ErrInvalidTitle.Error(), http.StatusBadRequest)
+			return
+		}
+		// Anything else (a repository failure, most likely) is never
+		// echoed back verbatim — it could leak internal detail (a DSN, a
+		// driver error, a stack fragment) to the client.
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	http.Redirect(w, r, "/sessions/"+string(sess.ID), http.StatusSeeOther)

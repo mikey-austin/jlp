@@ -27,6 +27,10 @@ import (
 // tests, mirroring the port and scoped by identity like the real adapters.
 type fakeSessionRepo struct {
 	byKey map[string]session.Session
+	// createErr, when set, makes Create fail — used to exercise the
+	// handlers' repository-failure path (must surface as 500 without
+	// echoing this error's text back to the client).
+	createErr error
 }
 
 func newFakeSessionRepo() *fakeSessionRepo {
@@ -38,6 +42,9 @@ func (f *fakeSessionRepo) key(identity learner.IdentityID, id session.ID) string
 }
 
 func (f *fakeSessionRepo) Create(_ context.Context, s session.Session) error {
+	if f.createErr != nil {
+		return f.createErr
+	}
 	f.byKey[f.key(s.IdentityID, s.ID)] = s
 	return nil
 }
@@ -232,6 +239,36 @@ func TestSessionsCreateEmptyTitleReturnsBadRequest(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// TestSessionsCreateRepositoryErrorReturns500AndHidesDetail: a
+// repository failure unrelated to validation (e.g. a database error)
+// must surface as a generic 500, and the response body must never leak
+// the underlying error's text — it could contain a DSN, driver detail,
+// or other internal information.
+func TestSessionsCreateRepositoryErrorReturns500AndHidesDetail(t *testing.T) {
+	opts := testOptionsWithSessions()
+	repo := newFakeSessionRepo()
+	repo.createErr = errors.New("pq: connection refused to host db.internal:5432 user=jlp password=hunter2")
+	opts.Sessions = sessions.NewService(repo)
+
+	srv := NewServer(opts)
+	h := srv.HandlerForTest()
+
+	form := url.Values{}
+	form.Set("title", "旅行について書く")
+	form.Set("purpose", "Diary")
+	req := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500, body=%s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "hunter2") || strings.Contains(rec.Body.String(), "connection refused") {
+		t.Fatalf("body leaked underlying repository error: %s", rec.Body.String())
 	}
 }
 

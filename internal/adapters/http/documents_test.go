@@ -56,6 +56,37 @@ func TestDocumentsSaveReturnsVersionSavedAtAndRunes(t *testing.T) {
 	}
 }
 
+// TestDocumentsSaveOversizedBodyReturns400 proves the autosave handler's
+// http.MaxBytesReader cap: a body over 1MiB must fail as an ordinary
+// 400 (ParseForm's error path), not hang buffering an unbounded body
+// into memory or panic.
+func TestDocumentsSaveOversizedBodyReturns400(t *testing.T) {
+	opts := testOptionsWithSessions()
+	svc := opts.Sessions
+	sess, err := svc.Create(context.Background(), "dev", "旅行について書く", "Diary", session.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := opts.Writing.Open(context.Background(), "dev", sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := NewServer(opts)
+	h := srv.HandlerForTest()
+
+	form := url.Values{}
+	form.Set("content", strings.Repeat("a", (1<<20)+1))
+	req := httptest.NewRequest(http.MethodPost, "/documents/"+string(doc.ID), strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body len=%d", rec.Code, rec.Body.Len())
+	}
+}
+
 func TestDocumentsSaveCrossIdentityNotFound(t *testing.T) {
 	opts := testOptionsWithSessions()
 	sess, err := opts.Sessions.Create(context.Background(), "someone-else", "他人のセッション", "Diary", session.Profile{})

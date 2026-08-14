@@ -25,6 +25,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
+	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
@@ -158,10 +159,20 @@ func writeAPIError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// decodeJSON decodes r's body into v. Any failure — malformed JSON, an
-// empty body, a type mismatch — is reported as a single error the
-// caller treats uniformly as 400.
-func decodeJSON(r *http.Request, v any) error {
+// maxRequestBodyBytes caps request bodies the app reads into memory —
+// the JSON API's decodeJSON below and the HTML autosave handler
+// (documents.go) both use it. 1 MiB comfortably covers any legitimate
+// session/feedback/rating payload or writing-document autosave; beyond
+// that a request is either misbehaving or malicious, and either way
+// shouldn't be allowed to buffer unbounded bytes into memory.
+const maxRequestBodyBytes = 1 << 20
+
+// decodeJSON decodes r's body into v, after capping it to
+// maxRequestBodyBytes via http.MaxBytesReader. Any failure — malformed
+// JSON, an empty body, a type mismatch, or an oversized body — is
+// reported as a single error the caller treats uniformly as 400.
+func decodeJSON(w http.ResponseWriter, r *http.Request, v any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodyBytes)
 	return json.NewDecoder(r.Body).Decode(v)
 }
 
@@ -211,7 +222,7 @@ type sessionCreateRequest struct {
 func (s *Server) apiSessionsCreate(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	var req sessionCreateRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "malformed request body")
 		return
 	}
@@ -222,7 +233,14 @@ func (s *Server) apiSessionsCreate(w http.ResponseWriter, r *http.Request) {
 	}
 	sess, err := s.opts.Sessions.Create(r.Context(), ident.ID, req.Title, req.Purpose, profile)
 	if err != nil {
-		writeAPIError(w, http.StatusBadRequest, err.Error())
+		if errors.Is(err, sessions.ErrInvalidTitle) {
+			writeAPIError(w, http.StatusBadRequest, sessions.ErrInvalidTitle.Error())
+			return
+		}
+		// Anything else (a repository failure, most likely) is never
+		// echoed back verbatim — see sessionsCreate's HTML counterpart for
+		// the same reasoning.
+		writeAPIError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
 	writeJSON(w, http.StatusCreated, toSessionDTO(sess))
@@ -269,7 +287,7 @@ func (s *Server) apiFeedbackRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req feedbackCreateRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "malformed request body")
 		return
 	}
@@ -313,7 +331,7 @@ func (s *Server) apiCorrectionStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req correctionStatusRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "malformed request body")
 		return
 	}
@@ -360,7 +378,7 @@ type ratingCreateRequest struct {
 func (s *Server) apiRatingsCreate(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	var req ratingCreateRequest
-	if err := decodeJSON(r, &req); err != nil {
+	if err := decodeJSON(w, r, &req); err != nil {
 		writeAPIError(w, http.StatusBadRequest, "malformed request body")
 		return
 	}

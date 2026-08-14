@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
@@ -68,6 +69,26 @@ func TestHealthz(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), `"ok"`) {
 		t.Fatalf("healthz body = %s", rec.Body.String())
+	}
+}
+
+// TestServerHasTimeoutsConfigured guards against a slow-client
+// resource-exhaustion regression: NewServer must set all four
+// http.Server timeouts rather than leaving them at Go's zero-value
+// defaults (no timeout at all).
+func TestServerHasTimeoutsConfigured(t *testing.T) {
+	srv := NewServer(testOptions())
+	if srv.ReadHeaderTimeout != 5*time.Second {
+		t.Errorf("ReadHeaderTimeout = %v, want 5s", srv.ReadHeaderTimeout)
+	}
+	if srv.ReadTimeout != 30*time.Second {
+		t.Errorf("ReadTimeout = %v, want 30s", srv.ReadTimeout)
+	}
+	if srv.WriteTimeout != 60*time.Second {
+		t.Errorf("WriteTimeout = %v, want 60s", srv.WriteTimeout)
+	}
+	if srv.IdleTimeout != 120*time.Second {
+		t.Errorf("IdleTimeout = %v, want 120s", srv.IdleTimeout)
 	}
 }
 

@@ -95,8 +95,8 @@ func TestCreateEmptyTitleErrors(t *testing.T) {
 	svc := sessions.NewService(newFakeSessionRepo())
 
 	_, err := svc.Create(context.Background(), "learner-a", "", "Diary", session.Profile{})
-	if err == nil {
-		t.Fatal("expected an error for an empty title")
+	if !errors.Is(err, sessions.ErrInvalidTitle) {
+		t.Fatalf("Create error = %v, want sessions.ErrInvalidTitle", err)
 	}
 }
 
