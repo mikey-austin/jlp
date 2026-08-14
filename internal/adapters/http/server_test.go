@@ -78,7 +78,15 @@ func TestServerDoesNotTrustForwardedForHeader(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := NewServer(Options{Addr: ":0", Auth: authn, Identities: testIdentityRepo{}})
+	// Built on testOptionsWithSessions (not a bare Options{Auth, Identities}
+	// literal) so Sessions/Analytics are non-nil here too: the request below
+	// is expected to be rejected by RequireIdentity before s.home ever runs,
+	// but if a future change to that middleware ever let it through, this
+	// should fail on the 401 assertion below rather than nil-panic inside
+	// s.home.
+	opts := testOptionsWithSessions()
+	opts.Auth = authn
+	srv := NewServer(opts)
 
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.RemoteAddr = "203.0.113.9:1234" // real TCP peer: untrusted, outside 172.16.0.0/12

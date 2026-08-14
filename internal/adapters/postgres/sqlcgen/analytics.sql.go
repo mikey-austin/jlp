@@ -86,7 +86,7 @@ FROM corrections c
 JOIN feedback_requests f ON f.id = c.feedback_request_id
 WHERE f.identity_id = $1
 GROUP BY c.type
-ORDER BY count(*) DESC
+ORDER BY count(*) DESC, c.type ASC
 LIMIT 5
 `
 
@@ -95,6 +95,9 @@ type TopErrorTypesRow struct {
 	Count int32
 }
 
+// Secondary "type ASC" tiebreak keeps the top-5 stable across requests
+// when two error types are presented equally often — Postgres makes no
+// ordering guarantee among GROUP BY ties otherwise.
 func (q *Queries) TopErrorTypes(ctx context.Context, identityID string) ([]TopErrorTypesRow, error) {
 	rows, err := q.db.Query(ctx, topErrorTypes, identityID)
 	if err != nil {

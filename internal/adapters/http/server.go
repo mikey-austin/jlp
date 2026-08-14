@@ -104,13 +104,9 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	}
 
 	Render(w, r, "home", map[string]any{
-		"Title":    "JLP",
-		"Identity": ident,
-		"Stats":    stats,
-		// AcceptancePercent is precomputed here rather than in the
-		// template: html/template has no arithmetic, so the ×100 for
-		// display happens on this side of the boundary.
-		"AcceptancePercent": stats.AcceptanceRate * 100,
-		"RecentSessions":    recent,
+		"Title":          "JLP",
+		"Identity":       ident,
+		"Stats":          stats,
+		"RecentSessions": recent,
 	})
 }

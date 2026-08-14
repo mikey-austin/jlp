@@ -5,7 +5,7 @@
     <div class="stat-tile"><span class="stat-value">{{.Stats.RunesWritten}}</span><span class="stat-label">書いた文字数</span></div>
     <div class="stat-tile"><span class="stat-value">{{.Stats.SessionCount}}</span><span class="stat-label">セッション</span></div>
     <div class="stat-tile"><span class="stat-value">{{.Stats.FeedbackRequests}}</span><span class="stat-label">フィードバック</span></div>
-    <div class="stat-tile"><span class="stat-value">{{printf "%.0f" .AcceptancePercent}}%</span><span class="stat-label">納得率</span></div>
+    <div class="stat-tile"><span class="stat-value">{{percent .Stats.AcceptanceRate}}%</span><span class="stat-label">納得率</span></div>
     <div class="stat-tile"><span class="stat-value">{{printf "%.1f" .Stats.CorrectionsPer1000}}</span><span class="stat-label">修正/1000字</span></div>
   </div>
 
