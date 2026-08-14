@@ -28,7 +28,7 @@ func (q *Queries) GetIdentity(ctx context.Context, id string) (Identity, error) 
 const upsertIdentity = `-- name: UpsertIdentity :exec
 INSERT INTO identities (id, display_name, attributes)
 VALUES ($1, $2, $3)
-ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name
+ON CONFLICT (id) DO UPDATE SET display_name = EXCLUDED.display_name, attributes = EXCLUDED.attributes
 `
 
 type UpsertIdentityParams struct {

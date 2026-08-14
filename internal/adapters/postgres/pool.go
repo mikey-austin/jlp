@@ -11,5 +11,9 @@ func NewPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
 	if err != nil {
 		return nil, err
 	}
-	return pool, pool.Ping(ctx)
+	if err := pool.Ping(ctx); err != nil {
+		pool.Close()
+		return nil, err
+	}
+	return pool, nil
 }
