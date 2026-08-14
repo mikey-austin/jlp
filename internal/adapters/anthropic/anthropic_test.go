@@ -27,6 +27,17 @@ const cannedTextOnlyResponse = `{"id":"msg_test2","model":"claude-sonnet-5","rol
  "content":[{"type":"text","text":"I can't help with that."}],
  "usage":{"input_tokens":50,"output_tokens":10}}`
 
+// cannedWrongToolResponse has a tool_use block, but naming a tool
+// other than the one we forced — this must be treated the same as no
+// tool_use block at all, since it isn't a call to emit_result.
+const cannedWrongToolResponse = `{"id":"msg_test3","model":"claude-sonnet-5","role":"assistant","stop_reason":"tool_use",
+ "content":[{"type":"tool_use","id":"tu_2","name":"some_other_tool","input":{}}],
+ "usage":{"input_tokens":40,"output_tokens":8}}`
+
+// cannedAPIErrorResponse is the Anthropic error envelope shape for a
+// non-2xx response.
+const cannedAPIErrorResponse = `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`
+
 type wantExplanation struct {
 	JA string `json:"ja"`
 	EN string `json:"en"`
@@ -219,5 +230,90 @@ func TestGenerateStructuredErrorsWhenNoToolUseBlock(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "tool_use") {
 		t.Errorf("error = %q, want it to mention %q", err.Error(), "tool_use")
+	}
+}
+
+func TestGenerateStructuredErrorsWhenToolUseBlockNamesWrongTool(t *testing.T) {
+	var captured requestAssertion
+	srv := newTestServer(t, &captured, cannedWrongToolResponse)
+	defer srv.Close()
+
+	schema, err := schemas.Get("correction_result.v1")
+	if err != nil {
+		t.Fatalf("schemas.Get: %v", err)
+	}
+
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	_, err = gen.GenerateStructured(context.Background(), ai.StructuredRequest{
+		System:     "system",
+		User:       "user",
+		SchemaName: "correction_result.v1",
+		Schema:     schema,
+	})
+	if err == nil {
+		t.Fatal("expected error for a tool_use block naming a different tool, got nil")
+	}
+	if !strings.Contains(err.Error(), "tool_use") {
+		t.Errorf("error = %q, want it to mention %q", err.Error(), "tool_use")
+	}
+}
+
+func TestGenerateStructuredWrapsNon2xxHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(cannedAPIErrorResponse))
+	}))
+	defer srv.Close()
+
+	schema, err := schemas.Get("correction_result.v1")
+	if err != nil {
+		t.Fatalf("schemas.Get: %v", err)
+	}
+
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	resp, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{
+		System:     "system",
+		User:       "user",
+		SchemaName: "correction_result.v1",
+		Schema:     schema,
+	})
+	if err == nil {
+		t.Fatal("expected error for a non-2xx response, got nil")
+	}
+	if !strings.Contains(err.Error(), "anthropic: messages.new") {
+		t.Errorf("error = %q, want it wrapped with %q", err.Error(), "anthropic: messages.new")
+	}
+	// Provider/Model are known regardless of outcome, so the
+	// observability decorator wrapping this call can still record which
+	// provider/model a failed call went through.
+	if resp.Provider != "anthropic" || resp.Model != "claude-sonnet-5" {
+		t.Errorf("Provider/Model on error = %q/%q, want anthropic/claude-sonnet-5", resp.Provider, resp.Model)
+	}
+}
+
+func TestGenerateStructuredMaxTokensPassedThrough(t *testing.T) {
+	var captured requestAssertion
+	srv := newTestServer(t, &captured, cannedToolUseResponse)
+	defer srv.Close()
+
+	schema, err := schemas.Get("correction_result.v1")
+	if err != nil {
+		t.Fatalf("schemas.Get: %v", err)
+	}
+
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	_, err = gen.GenerateStructured(context.Background(), ai.StructuredRequest{
+		System:     "system",
+		User:       "user",
+		SchemaName: "correction_result.v1",
+		Schema:     schema,
+		MaxTokens:  512,
+	})
+	if err != nil {
+		t.Fatalf("GenerateStructured returned error: %v", err)
+	}
+	if captured.Body["max_tokens"] != float64(512) {
+		t.Errorf("max_tokens = %v, want 512 (explicit req.MaxTokens, not the 2048 default)", captured.Body["max_tokens"])
 	}
 }
