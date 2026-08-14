@@ -51,7 +51,14 @@ func Load() (Config, error) {
 	v.SetDefault("server.port", 8080)
 	v.SetDefault("server.baseurl", "http://localhost:8080")
 	v.SetDefault("auth.mode", "static")
-	v.SetDefault("auth.trustedproxies", []string{"127.0.0.1/32", "172.16.0.0/12"})
+	// 127.0.0.1/32 only: a broad default like 172.16.0.0/12 would trust
+	// every private-network peer out of the box, re-opening the
+	// hairpin-NAT spoofing hole (see docker-compose.yml /
+	// deploy/compose.prod.yml, both of which override this with the
+	// exact reverse-proxy address for their stack). Anyone running
+	// authelia mode outside compose must set APP_AUTH_TRUSTEDPROXIES
+	// explicitly to their real proxy's address.
+	v.SetDefault("auth.trustedproxies", []string{"127.0.0.1/32"})
 	v.SetDefault("auth.static.id", "dev")
 	v.SetDefault("auth.static.displayname", "Dev Learner")
 	v.SetDefault("ai.provider", "fake")
@@ -84,6 +91,15 @@ func (c Config) validate() error {
 	}
 	if !slices.Contains([]string{"static", "authelia"}, c.Auth.Mode) {
 		return fmt.Errorf("config: APP_AUTH_MODE must be static|authelia, got %q", c.Auth.Mode)
+	}
+	// authelia mode authenticates purely by trusting Remote-User/Remote-Name
+	// headers from a peer in this list; an empty list would mean no peer is
+	// trusted (every request 401s) at best, or — if a future change ever
+	// mishandled that — an unintentionally wide-open trust decision at
+	// worst. Guard explicitly rather than relying on the default alone,
+	// since an operator's env can still override it to empty.
+	if c.Auth.Mode == "authelia" && len(c.Auth.TrustedProxies) == 0 {
+		return fmt.Errorf("config: APP_AUTH_TRUSTEDPROXIES must be non-empty when APP_AUTH_MODE=authelia")
 	}
 	if !slices.Contains([]string{"fake", "anthropic"}, c.AI.Provider) {
 		return fmt.Errorf("config: APP_AI_PROVIDER must be fake|anthropic, got %q", c.AI.Provider)

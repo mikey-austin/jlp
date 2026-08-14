@@ -14,6 +14,15 @@ func TestDefaults(t *testing.T) {
 	if cfg.Auth.Static.ID != "dev" {
 		t.Fatalf("static identity default: %+v", cfg.Auth.Static)
 	}
+	// Regression: the default must be the loopback address only. A
+	// broad default like 172.16.0.0/12 would trust every private-network
+	// peer, re-opening the hairpin-NAT spoofing hole a non-compose
+	// deployment (no docker-compose.yml override) would otherwise be
+	// exposed to.
+	want := []string{"127.0.0.1/32"}
+	if len(cfg.Auth.TrustedProxies) != len(want) || cfg.Auth.TrustedProxies[0] != want[0] {
+		t.Fatalf("TrustedProxies default = %+v, want %+v (127.0.0.1/32 only, no 172.16.0.0/12)", cfg.Auth.TrustedProxies, want)
+	}
 }
 
 func TestEnvOverrides(t *testing.T) {
@@ -80,5 +89,27 @@ func TestValidation(t *testing.T) {
 				t.Fatal("expected validation error")
 			}
 		})
+	}
+}
+
+// TestValidationAutheliaRequiresNonEmptyTrustedProxies exercises
+// Config.validate directly rather than through Load: Viper's env
+// handling treats a *set-but-empty* APP_AUTH_TRUSTEDPROXIES the same as
+// unset (viper's allowEmptyEnv defaults to false, so an empty env var
+// falls back to the non-empty default rather than producing an empty
+// slice — see TestEmptyEnvVarDoesNotClobberDefault for the same
+// behavior on string fields). validate's guard is therefore defense in
+// depth against any other path that could construct a Config with an
+// empty list (a future default change, a non-env config source, etc.),
+// and this test proves that guard fires.
+func TestValidationAutheliaRequiresNonEmptyTrustedProxies(t *testing.T) {
+	cfg := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "authelia", TrustedProxies: []string{}},
+		AI:       AI{Provider: "fake"},
+	}
+	if err := cfg.validate(); err == nil {
+		t.Fatal("expected validation error for authelia mode with empty TrustedProxies")
 	}
 }
