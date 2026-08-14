@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
+	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
@@ -15,8 +16,23 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
+	"github.com/mikeyaustin/jlp/internal/observability"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
 )
+
+// aiPricing is the USD-per-million-token rate card the observability
+// decorator costs every AI call against. It lives here rather than in
+// package config because it's not deployment configuration a operator
+// tunes per environment — it's a fixed fact about what providers
+// charge, reviewed and updated in code alongside the provider list
+// itself.
+func aiPricing() map[string]observability.ModelPricing {
+	return map[string]observability.ModelPricing{
+		"claude-sonnet-5": {InPerMTok: 3, OutPerMTok: 15},
+		"fake-1":          {InPerMTok: 0, OutPerMTok: 0},
+	}
+}
 
 func main() {
 	cmd := "serve"
@@ -44,6 +60,23 @@ func main() {
 		bus := inprocbus.New()
 		recorder := learning.NewRecorder(eventRepo, bus)
 		writingSvc := appwriting.NewService(postgres.NewDocumentRepository(pool), recorder)
+
+		var innerGen ai.StructuredGenerator
+		switch cfg.AI.Provider {
+		case "fake":
+			innerGen = fakeai.New()
+		case "anthropic":
+			slog.Error("ai", "err", "anthropic provider arrives in Task 11")
+			os.Exit(1)
+		default:
+			slog.Error("ai", "err", fmt.Sprintf("unknown ai provider %q", cfg.AI.Provider))
+			os.Exit(1)
+		}
+		// Every AI call is observed, whichever provider is behind it: the
+		// audit trail (latency, cost, success) must never depend on
+		// remembering to wrap a specific adapter.
+		aiGen := observability.NewAIObserver(innerGen, postgres.NewAIRequestRepository(pool), aiPricing())
+
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
 		case "static":
@@ -65,6 +98,7 @@ func main() {
 			Sessions:   sessionsSvc,
 			Writing:    writingSvc,
 			Events:     eventRepo,
+			AI:         aiGen,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -19,6 +20,11 @@ type Options struct {
 	Sessions   *sessions.Service
 	Writing    *appwriting.Service
 	Events     storage.LearningEventRepository
+	// AI is the always-observed structured generator (fake or Anthropic
+	// underneath). No route consumes it yet — that arrives with the
+	// teacher feedback pipeline (Task 12) — but it's wired through here
+	// so that task only has to add handlers, not plumbing.
+	AI ai.StructuredGenerator
 }
 
 type Server struct {

@@ -8,6 +8,24 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AiRequest struct {
+	ID            pgtype.UUID
+	IdentityID    string
+	SessionID     pgtype.UUID
+	Capability    string
+	Provider      string
+	Model         string
+	PromptName    string
+	PromptVersion string
+	LatencyMs     int32
+	InputTokens   int32
+	OutputTokens  int32
+	CostUsd       pgtype.Numeric
+	Success       bool
+	Error         string
+	CreatedAt     pgtype.Timestamptz
+}
+
 type Document struct {
 	ID         pgtype.UUID
 	SessionID  pgtype.UUID
