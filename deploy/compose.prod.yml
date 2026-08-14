@@ -24,7 +24,10 @@ services:
       # /12: Docker hairpin-NATs host->published-port traffic through the
       # gateway, which would otherwise look indistinguishable from Caddy.
       # See docker-compose.yml / task-5-report.md for the dev-stack
-      # writeup of this exact failure mode.
+      # writeup of this exact failure mode. 127.0.0.1/32 is carried over
+      # for dev-stack parity (e.g. `docker compose ... run --rm app`
+      # debugging from the host network namespace); it isn't load-bearing
+      # for prod, where Caddy (172.31.5.9/32) is the only real caller.
       APP_AUTH_TRUSTEDPROXIES: 127.0.0.1/32,172.31.5.9/32
       # `app seed` target only — the authelia adapter authenticates
       # purely from Remote-User/Remote-Name headers set by Caddy, never

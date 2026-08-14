@@ -85,11 +85,13 @@ deploy-local: ## Run the production stack locally (https://<JLP_DOMAIN>:8444, se
 	@set -a; . deploy/.env.prod; set +a; sh scripts/wait-healthy.sh "https://$${JLP_DOMAIN}:8444/healthz"
 
 deploy: ## Deploy to $(DEPLOY_HOST) over SSH (set in .env)
-	@test -n "$(DEPLOY_HOST)" || (echo "set DEPLOY_HOST in .env"; exit 1)
-	DOCKER_HOST=ssh://$(DEPLOY_HOST) $(PROD_COMPOSE) build
-	DOCKER_HOST=ssh://$(DEPLOY_HOST) $(PROD_COMPOSE) up -d
-	DOCKER_HOST=ssh://$(DEPLOY_HOST) $(PROD_COMPOSE) run --rm app migrate
-	@echo "deployed to $(DEPLOY_HOST)"
+	@set -ea; [ -f .env ] && . ./.env; set +a; \
+	test -n "$$DEPLOY_HOST" || { echo "set DEPLOY_HOST in .env"; exit 1; }; \
+	DOCKER_HOST=ssh://$$DEPLOY_HOST $(PROD_COMPOSE) build; \
+	DOCKER_HOST=ssh://$$DEPLOY_HOST $(PROD_COMPOSE) up -d; \
+	DOCKER_HOST=ssh://$$DEPLOY_HOST $(PROD_COMPOSE) run --rm app migrate; \
+	echo "deployed to $$DEPLOY_HOST"
 
 deploy-logs: ## Tail remote app logs
-	DOCKER_HOST=ssh://$(DEPLOY_HOST) $(PROD_COMPOSE) logs -f app
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	DOCKER_HOST=ssh://$$DEPLOY_HOST $(PROD_COMPOSE) logs -f app
