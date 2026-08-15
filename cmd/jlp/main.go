@@ -14,6 +14,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	adaptermqtt "github.com/mikeyaustin/jlp/internal/adapters/mqtt"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
+	slackadapter "github.com/mikeyaustin/jlp/internal/adapters/slack"
 	smtpadapter "github.com/mikeyaustin/jlp/internal/adapters/smtp"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
 	agentanki "github.com/mikeyaustin/jlp/internal/agent/anki"
@@ -24,6 +25,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/agentrun"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
+	appchannel "github.com/mikeyaustin/jlp/internal/application/channel"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
@@ -251,6 +253,36 @@ func main() {
 		drillAgent := drill.New(aiGen)
 		practiceSvc := practice.NewService(postgres.NewExerciseRepository(pool), drillAgent, teachingPlanner, grammarRepo, recorder)
 
+		// Channel port + Slack Socket Mode adapter (Phase 4 Task 4, PRD
+		// §20/§20.1): channelSvc composes the SAME sessions/feedback/
+		// practice services every other JLP surface already uses — a
+		// channel gets no privilege, and no different correction/gating
+		// behaviour, an HTTP request wouldn't also get. Constructed
+		// unconditionally (cheap — no network call happens until an
+		// adapter's Start actually dials out), but only ever driven by an
+		// adapter when that adapter's own tokens are configured; with no
+		// channel adapter enabled at all, channelSvc simply has no caller.
+		channelSvc := appchannel.NewService(sessionsSvc, feedbackSvc, practiceSvc, postgres.NewDocumentRepository(pool), identities, cfg.Channels)
+
+		// Slack is dormant unless BOTH APP_SLACK_APPTOKEN and
+		// APP_SLACK_BOTTOKEN are set (config.Slack's own doc comment;
+		// validate() already rejects a lone token at boot). Socket Mode
+		// dials OUT to Slack, so Start is run on its own goroutine — see
+		// that method's doc comment: a genuinely fatal Start error (an
+		// invalid token, say) is logged, not os.Exit'd, exactly like a
+		// transient reconnect is logged and never fatal. One channel
+		// going down — or never starting at all, on a boot-time token
+		// problem — must never take the rest of the app with it.
+		if cfg.Slack.AppToken != "" && cfg.Slack.BotToken != "" {
+			slackAdapter := slackadapter.New(cfg.Slack.AppToken, cfg.Slack.BotToken)
+			go func() {
+				if err := slackAdapter.Start(context.Background(), channelSvc.Handle); err != nil {
+					slog.Error("slack: adapter stopped", "err", err)
+				}
+			}()
+			slog.Info("slack: adapter starting")
+		}
+
 		// The Anki review queue (Phase 3 Task 3, PRD §19): ankiAgent
 		// writes one flashcard per accepted correction through the same
 		// always-observed aiGen every other agent uses; ankiSvc reuses
@@ -403,6 +435,17 @@ func main() {
 			slog.Error("send-summary", "err", err)
 			os.Exit(1)
 		}
+	case "slack-smoke":
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		if err := runSlackSmoke(context.Background(), cfg); err != nil {
+			slog.Error("slack-smoke", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("slack-smoke: message sent")
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)

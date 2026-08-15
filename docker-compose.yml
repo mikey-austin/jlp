@@ -58,6 +58,15 @@ services:
       # internal/config.A2A's doc comment.
       APP_A2A_ENABLED: ${APP_A2A_ENABLED:-false}
       APP_A2A_PATH: ${APP_A2A_PATH:-}
+      # Slack channel adapter (Phase 4 Task 4, PRD §20/§20.1): both
+      # tokens empty (the default) keeps it entirely dormant — see
+      # internal/config.Slack's doc comment. No new service needed here:
+      # Socket Mode dials OUT to Slack, so there's no inbound port for
+      # compose to publish or route.
+      APP_SLACK_APPTOKEN: ${APP_SLACK_APPTOKEN:-}
+      APP_SLACK_BOTTOKEN: ${APP_SLACK_BOTTOKEN:-}
+      APP_SLACK_SMOKECHANNEL: ${APP_SLACK_SMOKECHANNEL:-}
+      APP_CHANNELS_ALLOWFROM: ${APP_CHANNELS_ALLOWFROM:-}
     depends_on:
       postgres: { condition: service_healthy }
 
@@ -106,6 +115,11 @@ services:
       # (internal/adapters/mqtt/mqtt_test.go) skips itself unless this
       # is set — see that file's testBrokerURL doc comment.
       APP_MQTT_URL: ${APP_MQTT_URL:-}
+      # `make slack-smoke` runs `jlp slack-smoke` in THIS container (see
+      # the Makefile) — same passthrough need as APP_SUMMARY_TO above.
+      APP_SLACK_APPTOKEN: ${APP_SLACK_APPTOKEN:-}
+      APP_SLACK_BOTTOKEN: ${APP_SLACK_BOTTOKEN:-}
+      APP_SLACK_SMOKECHANNEL: ${APP_SLACK_SMOKECHANNEL:-}
 
   caddy:
     image: caddy:2

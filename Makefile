@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth up-mail up-mqtt down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo
+.PHONY: help init build up up-auth up-mail up-mqtt down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -128,6 +128,9 @@ ext-build: ## Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-e
 
 send-summary: up-mail ## Trigger one weekly summary send immediately (needs APP_SUMMARY_TO set; brings up Mailpit + postgres first)
 	$(TOOLS) go run ./cmd/jlp send-summary
+
+slack-smoke: ## Post one test message via the Slack bot token (needs APP_SLACK_BOTTOKEN + APP_SLACK_SMOKECHANNEL set; no live Slack test runs in `make test`)
+	$(TOOLS) go run ./cmd/jlp slack-smoke
 
 deploy-local: ## Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
 	$(PROD_COMPOSE) build

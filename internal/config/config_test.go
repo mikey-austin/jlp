@@ -616,3 +616,157 @@ func TestA2AEnabledRejectsMalformedPathShape(t *testing.T) {
 		t.Fatalf("validate() = %v, want nil (the shape check only applies once Enabled=true)", err)
 	}
 }
+
+// TestSlackDefaults pins Slack's dormant-by-default contract: both
+// tokens empty must boot clean, mirroring TestA2ADefaults/
+// TestMQTTURLDefaultsEmptyAndDoesNotRequireValidation for the other
+// opt-in adapters.
+func TestSlackDefaults(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Slack.AppToken != "" || cfg.Slack.BotToken != "" {
+		t.Fatalf("Slack defaults = %+v, want both tokens empty", cfg.Slack)
+	}
+	if cfg.Channels.AllowFrom != "" {
+		t.Fatalf("Channels.AllowFrom default = %q, want empty", cfg.Channels.AllowFrom)
+	}
+}
+
+// TestSlackEnvOverrides pins the APP_SLACK_APPTOKEN/APP_SLACK_BOTTOKEN/
+// APP_CHANNELS_ALLOWFROM env var names exactly as documented.
+func TestSlackEnvOverrides(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_SLACK_APPTOKEN", "xapp-1-test")
+	t.Setenv("APP_SLACK_BOTTOKEN", "xoxb-test")
+	t.Setenv("APP_CHANNELS_ALLOWFROM", "slack:U123=dev")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Slack.AppToken != "xapp-1-test" || cfg.Slack.BotToken != "xoxb-test" {
+		t.Fatalf("Slack tokens = %+v, want overrides applied", cfg.Slack)
+	}
+	if cfg.Channels.AllowFrom != "slack:U123=dev" {
+		t.Fatalf("Channels.AllowFrom = %q, want override applied", cfg.Channels.AllowFrom)
+	}
+}
+
+// TestSlackRequiresBothTokensTogether pins validate's guard: a LONE
+// token (the other left at its empty default) is almost certainly a
+// misconfiguration, not the valid "dormant" state — only both-empty or
+// both-set are accepted.
+func TestSlackRequiresBothTokensTogether(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	onlyApp := base
+	onlyApp.Slack = Slack{AppToken: "xapp-1-test"}
+	if err := onlyApp.validate(); err == nil {
+		t.Fatal("expected a validation error for AppToken set without BotToken")
+	}
+
+	onlyBot := base
+	onlyBot.Slack = Slack{BotToken: "xoxb-test"}
+	if err := onlyBot.validate(); err == nil {
+		t.Fatal("expected a validation error for BotToken set without AppToken")
+	}
+
+	bothEmpty := base
+	if err := bothEmpty.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil for the dormant both-empty state", err)
+	}
+
+	bothSet := base
+	bothSet.Slack = Slack{AppToken: "xapp-1-test", BotToken: "xoxb-test"}
+	if err := bothSet.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil for a well-formed both-set Slack config", err)
+	}
+}
+
+// TestSlackRejectsWrongTokenPrefix pins validate's second guard: each
+// token, once both are set, must carry Slack's own documented prefix —
+// catching a pasted-the-wrong-token mistake (e.g. swapping AppToken and
+// BotToken) at boot rather than at the adapter's first, silently
+// failing Socket Mode dial.
+func TestSlackRejectsWrongTokenPrefix(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	swapped := base
+	swapped.Slack = Slack{AppToken: "xoxb-test", BotToken: "xapp-1-test"}
+	if err := swapped.validate(); err == nil {
+		t.Fatal("expected a validation error for swapped Slack token prefixes")
+	}
+
+	badApp := base
+	badApp.Slack = Slack{AppToken: "not-a-token", BotToken: "xoxb-test"}
+	if err := badApp.validate(); err == nil {
+		t.Fatal("expected a validation error for a malformed AppToken")
+	}
+}
+
+// TestChannelsAllowFromValidation pins the config.validate() ->
+// ParseAllowFrom wiring: a malformed APP_CHANNELS_ALLOWFROM must fail
+// fast at boot, unconditionally (not gated behind Slack being enabled)
+// — see Channels.AllowFrom's own doc comment.
+func TestChannelsAllowFromValidation(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	malformed := base
+	malformed.Channels = Channels{AllowFrom: "slack:U123-no-equals-sign"}
+	if err := malformed.validate(); err == nil {
+		t.Fatal("expected a validation error for a malformed APP_CHANNELS_ALLOWFROM entry")
+	}
+
+	wellFormed := base
+	wellFormed.Channels = Channels{AllowFrom: "slack:U123=dev,slack:U456=alice"}
+	if err := wellFormed.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil for a well-formed APP_CHANNELS_ALLOWFROM", err)
+	}
+}
+
+// TestParseAllowFrom exercises config.ParseAllowFrom directly: multiple
+// entries parse into the exact "<channel>:<external id>" -> identity
+// map application/channel.Service looks senders up in; an empty string
+// parses to an empty, non-nil map (PRD §20.1's default-deny — nobody is
+// allowed until explicitly listed).
+func TestParseAllowFrom(t *testing.T) {
+	got, err := ParseAllowFrom("slack:U123=dev, slack:U456=alice")
+	if err != nil {
+		t.Fatalf("ParseAllowFrom returned error: %v", err)
+	}
+	want := map[string]string{"slack:U123": "dev", "slack:U456": "alice"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseAllowFrom = %+v, want %+v", got, want)
+	}
+
+	empty, err := ParseAllowFrom("")
+	if err != nil {
+		t.Fatalf("ParseAllowFrom(\"\") returned error: %v", err)
+	}
+	if empty == nil || len(empty) != 0 {
+		t.Fatalf("ParseAllowFrom(\"\") = %#v, want an empty non-nil map", empty)
+	}
+
+	for _, bad := range []string{"no-equals-sign", "slack=dev", "=dev", "slack:U123="} {
+		if _, err := ParseAllowFrom(bad); err == nil {
+			t.Errorf("ParseAllowFrom(%q) = nil error, want an error", bad)
+		}
+	}
+}

@@ -58,6 +58,7 @@ ext-build          Zip chrome-extension/ (excluding shim/ and README) into dist/
 send-summary       Trigger one weekly summary send immediately (needs APP_SUMMARY_TO set; brings up Mailpit + postgres first)
 mqtt-tap           Tail every learner/# MQTT topic (needs `make up-mqtt` first)
 mqtt-demo          Publish a sample vocabulary.lookup ingest event over MQTT (needs `make up-mqtt` first); appears on /vocabulary for the "dev" identity
+slack-smoke        Post one test message via the Slack bot token (needs APP_SLACK_BOTTOKEN + APP_SLACK_SMOKECHANNEL set; no live Slack test runs in `make test`)
 deploy-local       Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
 deploy             Deploy to $(DEPLOY_HOST) over SSH (set in .env)
 deploy-logs        Tail remote app logs
@@ -418,6 +419,71 @@ make mqtt-demo # publishes a sample vocabulary.lookup ingest event; appears on /
 Reconnection after the initial connect is handled by paho's
 `AutoReconnect` — a mosquitto restart while the app is running self-
 heals without restarting the app.
+
+## Slack channel adapter (PRD §20, §20.1)
+
+`internal/ports/channels` is a transport-agnostic channel port — the
+domain never learns which messaging surface an interaction arrived
+over — and `internal/application/channel.Service` is the one place that
+turns a channel message into calls against the *same*
+sessions/feedback/practice application services every other JLP surface
+(the web UI, the agentic teacher) already uses: a Slack message gets no
+privilege, and no different socratic-gating behaviour, an HTTP request
+wouldn't also get. `internal/adapters/slack` is the first concrete
+`Channel` implementation, over Slack's **Socket Mode** — the connection
+dials *out* to Slack, so no public ingress, reverse-proxy route, or new
+`docker-compose.yml` service is needed even for a LAN-only deployment.
+
+**Dormant by default**: both `APP_SLACK_APPTOKEN` and
+`APP_SLACK_BOTTOKEN` empty (the default) keeps the adapter entirely
+unconstructed — `cmd/jlp/main.go` never dials Slack. Setting only one of
+the two is rejected at boot (`config.validate()`), as is a token that
+doesn't carry Slack's own documented prefix (`xapp-...` /
+`xoxb-...`) — a pasted-the-wrong-token mistake fails fast at startup
+rather than silently at the first Socket Mode handshake.
+
+**Routing** (a message's trimmed text decides the reply):
+
+| Message | Reply |
+|---|---|
+| Japanese text | A correction of that text in the sender's channel session, rendered **compact** — pairs plus a one-line reason, not the full HTML card. A gated (socratic, unrevealed) correction shows only its hint — **never** the answer; `correction.IsGated` (the single project-wide pre-reveal predicate) decides this, not a re-implementation. |
+| `practice` / 練習 | Starts a drill exercise and renders it as text; the sender's *next* message is scored as the answer. |
+| `help` / ヘルプ | A short command list. |
+
+A channel session is a real `session.Session` (title `"Slack — <external
+id>"`), created on first contact so every usual event/learner-model
+update flows exactly as it would from the web UI; each inbound message
+becomes that session's single document's newest version.
+
+**Untrusted edge — `APP_CHANNELS_ALLOWFROM`**: a comma list of
+`<channel>:<external id>=<identity>` entries, e.g.
+`slack:U0123ABCDEF=dev,slack:U0456DEFGH=alice`, mapping a Slack user ID
+to a JLP `learner.IdentityID`. A sender **not** in this list gets a
+polite refusal, and — this is the part that's actually enforced by a
+test, not just documented — **nothing is recorded**: no session, no
+document, no learning event, no identity row. Config-driven, explicit
+allow-list only; nothing is auto-provisioned from the message itself.
+
+```sh
+make up                 # Socket Mode dials out — no extra compose service or profile needed
+# set APP_SLACK_APPTOKEN, APP_SLACK_BOTTOKEN, APP_CHANNELS_ALLOWFROM in .env, then:
+make restart
+make slack-smoke        # needs APP_SLACK_BOTTOKEN + APP_SLACK_SMOKECHANNEL; posts one test message
+```
+
+Reconnection after the initial connect is handled by
+`socketmode.Client.RunContext`'s own retry loop (the slack-go analogue
+of paho's `AutoReconnect` above); every other failure along the path —
+a bad inbound event, a failed reply post, a fatal Start error — is
+logged, never fatal: one channel going down can't take the rest of the
+app with it.
+
+**Not exercised by `go test`/`make test`/`make test-integration`**: this
+adapter is tested entirely over a fake, in-process transport (no
+network, no real Slack connection) — see
+`internal/adapters/slack/slack_test.go`. `make slack-smoke` is the only
+way to confirm real Slack credentials actually work, and requires the
+person running it to supply their own bot token and app-level token.
 
 ## Deploying
 

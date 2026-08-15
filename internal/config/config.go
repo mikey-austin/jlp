@@ -19,6 +19,8 @@ type Config struct {
 	SMTP     SMTP
 	MQTT     MQTT
 	A2A      A2A
+	Slack    Slack
+	Channels Channels
 }
 
 type Server struct {
@@ -213,6 +215,46 @@ type A2A struct {
 	Path string
 }
 
+// Slack configures Phase 4 Task 4's channel adapter
+// (internal/adapters/slack, PRD §20/§20.1): a Socket Mode connection —
+// dials OUT to Slack, so no public ingress is needed on a LAN
+// deployment. AppToken and BotToken both empty (the default) keep the
+// adapter entirely dormant: main.go never constructs a slack.Adapter and
+// no Socket Mode connection is ever dialed, matching MQTT.URL's/
+// A2A.Enabled's own "dormant unless explicitly configured" contract.
+// validate() below requires both to be set together (a lone token is
+// almost certainly a misconfiguration, not a valid dormant state) and,
+// once both are set, that each carries Slack's own documented token
+// prefix — catching a pasted-the-wrong-token mistake at boot rather than
+// at the adapter's first (silently failing) Socket Mode dial.
+type Slack struct {
+	AppToken string
+	BotToken string
+	// SmokeChannel is a Slack channel or user ID `make slack-smoke`
+	// (cmd/jlp/slack.go) posts one test message to, confirming BotToken
+	// actually works without going through the full Socket Mode event
+	// loop. Only required by that command, not by validate() here — an
+	// operator who never runs `make slack-smoke` doesn't need to set it.
+	SmokeChannel string
+}
+
+// Channels configures the transport-agnostic channel port (Phase 4 Task
+// 4, PRD §20/§20.1) application/channel.Service composes on top of the
+// existing sessions/feedback/practice application services.
+type Channels struct {
+	// AllowFrom is APP_CHANNELS_ALLOWFROM: a comma-separated list of
+	// "<channel>:<external id>=<identity>" entries (e.g.
+	// "slack:U012ABCDEF=dev,slack:U099XYZAB=alice"), each mapping one
+	// channel-specific sender to a JLP learner.IdentityID. This is the
+	// UNTRUSTED EDGE of the system (PRD §20.1): an inbound sender whose
+	// "<channel>:<external id>" isn't a key in this map gets a polite
+	// refusal from application/channel.Service.Handle and NOTHING is
+	// recorded — no session, no events, no learner-model updates. The
+	// mapping is an explicit allow-list, never inferred or
+	// auto-provisioned from the message itself.
+	AllowFrom string
+}
+
 // a2aPathShapeError reports why p isn't an acceptable APP_A2A_PATH
 // shape, or "" if it is. This is a STRUCTURAL check — it has nothing
 // to do with what routes already exist (see a2aReservedPathPrefixes
@@ -326,6 +368,9 @@ func Load() (Config, error) {
 	// who only sets APP_A2A_ENABLED=true doesn't also have to pick a
 	// mount path.
 	v.SetDefault("a2a.path", "/a2a")
+	// slack.* and channels.allowfrom have no explicit defaults (Go's
+	// zero-value empty string IS the "dormant"/"nobody allowed" contract
+	// — see Slack's and Channels.AllowFrom's own doc comments).
 
 	v.SetEnvPrefix("APP")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -336,7 +381,8 @@ func Load() (Config, error) {
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
 		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes", "ai.agenticteacher",
 		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url",
-		"a2a.enabled", "a2a.path"} {
+		"a2a.enabled", "a2a.path",
+		"slack.apptoken", "slack.bottoken", "slack.smokechannel", "channels.allowfrom"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}
@@ -420,7 +466,64 @@ func (c Config) validate() error {
 			return fmt.Errorf("config: APP_A2A_PATH %q collides with an existing route (\"/%s\") — choose a different mount path", c.A2A.Path, seg)
 		}
 	}
+	// Slack: both tokens empty is the valid "dormant" state (see Slack's
+	// doc comment) — only a LONE token, or a token that doesn't carry
+	// Slack's own documented prefix, is rejected.
+	if (c.Slack.AppToken == "") != (c.Slack.BotToken == "") {
+		return fmt.Errorf("config: APP_SLACK_APPTOKEN and APP_SLACK_BOTTOKEN must both be set, or both left empty to keep the Slack adapter dormant")
+	}
+	if c.Slack.AppToken != "" {
+		if !strings.HasPrefix(c.Slack.AppToken, "xapp-") {
+			return fmt.Errorf("config: APP_SLACK_APPTOKEN must be a Socket Mode app-level token (starts with \"xapp-\")")
+		}
+		if !strings.HasPrefix(c.Slack.BotToken, "xoxb-") {
+			return fmt.Errorf("config: APP_SLACK_BOTTOKEN must be a bot token (starts with \"xoxb-\")")
+		}
+	}
+	// APP_CHANNELS_ALLOWFROM is validated unconditionally (not gated
+	// behind Slack or any other channel being enabled): it's cheap to
+	// parse, channel-agnostic, and a malformed entry here is exactly the
+	// kind of thing that should fail fast at boot rather than silently
+	// deny every sender once a channel adapter is later turned on — see
+	// application/channel.NewService, which re-parses this same string.
+	if _, err := ParseAllowFrom(c.Channels.AllowFrom); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ParseAllowFrom parses APP_CHANNELS_ALLOWFROM (see Channels.AllowFrom's
+// doc comment): comma-separated "<channel>:<external id>=<identity>"
+// entries into a map keyed "<channel>:<external id>" -> identity. An
+// empty string parses to an empty (non-nil) map — PRD §20.1's
+// default-deny: no channel sender is allowed until an operator
+// explicitly lists them.
+func ParseAllowFrom(s string) (map[string]string, error) {
+	out := map[string]string{}
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return out, nil
+	}
+	for _, entry := range strings.Split(s, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		key, identity, ok := strings.Cut(entry, "=")
+		key = strings.TrimSpace(key)
+		identity = strings.TrimSpace(identity)
+		if !ok || key == "" || identity == "" {
+			return nil, fmt.Errorf("config: invalid APP_CHANNELS_ALLOWFROM entry %q, want <channel>:<external id>=<identity>", entry)
+		}
+		channel, externalID, ok := strings.Cut(key, ":")
+		channel = strings.TrimSpace(channel)
+		externalID = strings.TrimSpace(externalID)
+		if !ok || channel == "" || externalID == "" {
+			return nil, fmt.Errorf("config: invalid APP_CHANNELS_ALLOWFROM entry %q, want <channel>:<external id>=<identity>", entry)
+		}
+		out[channel+":"+externalID] = identity
+	}
+	return out, nil
 }
 
 // routeProviders is the set of provider names ParseRoutes accepts —
