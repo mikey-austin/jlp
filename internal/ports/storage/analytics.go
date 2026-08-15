@@ -60,26 +60,36 @@ type SubjectTrend struct {
 
 // ConfidenceCalibration is one row of the dashboard's 自信の較正 table:
 // among exercise_attempts that carry a self-reported Confidence
-// (1..5), how many attempts landed at that level and what fraction
-// were correct. Only confidence levels that actually occur are
-// returned — an identity with no confidence-rated attempts at all gets
-// an empty slice, which callers must render as an explicit empty
-// state rather than computing anything that could divide by zero.
+// (1..5), how many attempts landed at that level and how many were
+// correct. Only confidence levels that actually occur are returned —
+// an identity with no confidence-rated attempts at all gets an empty
+// slice, which callers must render as an explicit empty state.
+// AnalyticsRepository returns this with CorrectRate left zero — same
+// split as Statistics' AcceptanceRate/CorrectionsPer1000 above —
+// application/analytics.Service computes it from Corrects/Attempts,
+// which keeps the (admittedly can't-actually-be-zero, since Attempts
+// comes from a non-empty GROUP BY bucket) division unit-testable
+// without a database.
 type ConfidenceCalibration struct {
 	Confidence  int
 	Attempts    int
+	Corrects    int
 	CorrectRate float64
 }
 
 // AgentUsage is one row of /learner's エージェント利用 table: per-agent
 // (ai.StructuredRequest.Agent — "teacher", "drill", "anki", "lesson",
-// "summary") request volume, success rate, and average latency drawn
+// "summary") request volume, success count, and average latency drawn
 // from ai_requests. Agent is "" for rows written before that column
 // existed (see the 00017 migration) — display code must label that
 // bucket, not drop or blank it (see learner.html.tmpl).
+// AnalyticsRepository returns this with SuccessRate left zero;
+// application/analytics.Service computes it from Successes/Requests
+// (see ConfidenceCalibration's doc comment above for why).
 type AgentUsage struct {
 	Agent        string
 	Requests     int
+	Successes    int
 	SuccessRate  float64
 	AvgLatencyMS int
 }

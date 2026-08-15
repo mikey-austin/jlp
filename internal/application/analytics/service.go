@@ -43,14 +43,18 @@ func (s *Service) Statistics(ctx context.Context, identity learner.IdentityID) (
 	return stats, nil
 }
 
-// VocabFunnel, WeaknessTrends, ConfidenceCalibration, AgentUsage, and
-// SystemStats are plain pass-throughs to the repository, unlike
-// Statistics above: each repository query already returns a value
-// that's either raw (no ratio involved) or a ratio computed from a
-// GROUP BY bucket guaranteed non-empty (so it can never be the
-// division-by-a-legitimate-zero case Statistics' two ratios have to
-// guard against) — see storage.AnalyticsRepository's doc comments on
-// each method for why.
+// VocabFunnel, WeaknessTrends, and SystemStats are plain pass-throughs
+// to the repository: none of their fields is a derived ratio.
+// ConfidenceCalibration and AgentUsage below follow Statistics' split
+// instead — the repository returns raw counts, this service derives
+// the rate — even though, unlike Statistics' two ratios, their
+// denominator (Attempts/Requests) can never actually be zero (each row
+// comes from a non-empty GROUP BY bucket): the convention is kept
+// uniform across every ratio this package computes, which is what
+// buys the fast, DB-free zero-denominator unit coverage below (see
+// TestConfidenceCalibrationZeroAttemptsReturnsZeroRate/
+// TestAgentUsageZeroRequestsReturnsZeroRate) rather than relying on an
+// integration test to exercise that path.
 
 func (s *Service) VocabFunnel(ctx context.Context, identity learner.IdentityID) (storage.VocabFunnel, error) {
 	return s.repo.VocabFunnel(ctx, identity)
@@ -60,12 +64,38 @@ func (s *Service) WeaknessTrends(ctx context.Context, identity learner.IdentityI
 	return s.repo.WeaknessTrends(ctx, identity)
 }
 
+// ConfidenceCalibration returns identity's calibration rows, filling in
+// CorrectRate from each row's raw Corrects/Attempts (which the
+// repository leaves zeroed) — 0 when Attempts is 0 rather than
+// dividing by it.
 func (s *Service) ConfidenceCalibration(ctx context.Context, identity learner.IdentityID) ([]storage.ConfidenceCalibration, error) {
-	return s.repo.ConfidenceCalibration(ctx, identity)
+	rows, err := s.repo.ConfidenceCalibration(ctx, identity)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if rows[i].Attempts > 0 {
+			rows[i].CorrectRate = float64(rows[i].Corrects) / float64(rows[i].Attempts)
+		}
+	}
+	return rows, nil
 }
 
+// AgentUsage returns identity's per-agent usage rows, filling in
+// SuccessRate from each row's raw Successes/Requests (which the
+// repository leaves zeroed) — 0 when Requests is 0 rather than
+// dividing by it.
 func (s *Service) AgentUsage(ctx context.Context, identity learner.IdentityID) ([]storage.AgentUsage, error) {
-	return s.repo.AgentUsage(ctx, identity)
+	rows, err := s.repo.AgentUsage(ctx, identity)
+	if err != nil {
+		return nil, err
+	}
+	for i := range rows {
+		if rows[i].Requests > 0 {
+			rows[i].SuccessRate = float64(rows[i].Successes) / float64(rows[i].Requests)
+		}
+	}
+	return rows, nil
 }
 
 func (s *Service) SystemStats(ctx context.Context, identity learner.IdentityID) (storage.SystemStats, error) {

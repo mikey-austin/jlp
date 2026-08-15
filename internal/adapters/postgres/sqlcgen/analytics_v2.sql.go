@@ -14,7 +14,7 @@ import (
 const agentUsageStats = `-- name: AgentUsageStats :many
 SELECT agent,
        COUNT(*)::int AS requests,
-       ((COUNT(*) FILTER (WHERE success))::float8 / COUNT(*)::float8)::float8 AS success_rate,
+       (COUNT(*) FILTER (WHERE success))::int AS successes,
        ROUND(AVG(latency_ms))::int AS avg_latency_ms
 FROM ai_requests
 WHERE identity_id = $1
@@ -25,15 +25,17 @@ ORDER BY requests DESC, agent ASC
 type AgentUsageStatsRow struct {
 	Agent        string
 	Requests     int32
-	SuccessRate  float64
+	Successes    int32
 	AvgLatencyMs int32
 }
 
-// Per-agent request volume, success rate, and average latency from
+// Per-agent request volume, success count, and average latency from
 // ai_requests — agent is ” for rows written before the column existed
 // (see the 00017 migration); the ” bucket is returned like any other
 // and it's the HTTP layer's job to label it for display (see
-// learner.html.tmpl's 未分類 fallback).
+// learner.html.tmpl's 未分類 fallback). Raw counts only (see
+// ConfidenceCalibration's doc comment above) — SuccessRate is derived
+// in application/analytics.Service from Requests/Successes.
 func (q *Queries) AgentUsageStats(ctx context.Context, identityID string) ([]AgentUsageStatsRow, error) {
 	rows, err := q.db.Query(ctx, agentUsageStats, identityID)
 	if err != nil {
@@ -46,7 +48,7 @@ func (q *Queries) AgentUsageStats(ctx context.Context, identityID string) ([]Age
 		if err := rows.Scan(
 			&i.Agent,
 			&i.Requests,
-			&i.SuccessRate,
+			&i.Successes,
 			&i.AvgLatencyMs,
 		); err != nil {
 			return nil, err
@@ -62,7 +64,7 @@ func (q *Queries) AgentUsageStats(ctx context.Context, identityID string) ([]Age
 const confidenceCalibration = `-- name: ConfidenceCalibration :many
 SELECT ea.confidence AS confidence,
        COUNT(*)::int AS attempts,
-       ((COUNT(*) FILTER (WHERE ea.correct))::float8 / COUNT(*)::float8)::float8 AS correct_rate
+       (COUNT(*) FILTER (WHERE ea.correct))::int AS corrects
 FROM exercise_attempts ea
 JOIN exercises e ON e.id = ea.exercise_id
 WHERE e.identity_id = $1 AND ea.confidence IS NOT NULL
@@ -71,19 +73,21 @@ ORDER BY ea.confidence
 `
 
 type ConfidenceCalibrationRow struct {
-	Confidence  pgtype.Int4
-	Attempts    int32
-	CorrectRate float64
+	Confidence pgtype.Int4
+	Attempts   int32
+	Corrects   int32
 }
 
-// Per-confidence-level (1..5) attempt count and correct rate, from
+// Per-confidence-level (1..5) attempt count and correct count, from
 // exercise_attempts rows that actually carry a confidence value —
 // confidence IS NULL rows (no self-rating given) never contribute.
-// Every returned row has attempts >= 1 (it came from a non-empty
-// GROUP BY bucket), so the correct-rate division here can never be
-// NaN; an identity with no confidence-rated attempts at all simply
-// gets zero rows back, which the template renders as an explicit
-// empty state.
+// Raw counts only, per the codebase's "SQL returns raw data, Go
+// derives" convention (see analytics.go's Statistics doc comment):
+// application/analytics.Service computes CorrectRate from
+// Attempts/Corrects, the same way it computes AcceptanceRate from
+// Statistics' raw correction counts. An identity with no
+// confidence-rated attempts at all simply gets zero rows back, which
+// the template renders as an explicit empty state.
 func (q *Queries) ConfidenceCalibration(ctx context.Context, identityID string) ([]ConfidenceCalibrationRow, error) {
 	rows, err := q.db.Query(ctx, confidenceCalibration, identityID)
 	if err != nil {
@@ -93,7 +97,7 @@ func (q *Queries) ConfidenceCalibration(ctx context.Context, identityID string) 
 	var items []ConfidenceCalibrationRow
 	for rows.Next() {
 		var i ConfidenceCalibrationRow
-		if err := rows.Scan(&i.Confidence, &i.Attempts, &i.CorrectRate); err != nil {
+		if err := rows.Scan(&i.Confidence, &i.Attempts, &i.Corrects); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

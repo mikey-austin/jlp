@@ -179,7 +179,7 @@ func TestHomeRenders(t *testing.T) {
 				{Count: 1}, {Count: 0}, {Count: 2}, {Count: 3},
 			},
 		}},
-		calibration: []storage.ConfidenceCalibration{{Confidence: 4, Attempts: 5, CorrectRate: 0.8}},
+		calibration: []storage.ConfidenceCalibration{{Confidence: 4, Attempts: 5, Corrects: 4}},
 	})
 	sess, err := opts.Sessions.Create(context.Background(), "dev", "旅行について書く", "Diary", session.Profile{})
 	if err != nil {

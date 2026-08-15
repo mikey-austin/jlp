@@ -76,8 +76,10 @@ func (r *AnalyticsRepository) WeaknessTrends(ctx context.Context, identity learn
 }
 
 // ConfidenceCalibration assembles storage.ConfidenceCalibration rows
-// from the ConfidenceCalibration query — see that query's doc comment
-// for why the correct-rate division there can never be NaN.
+// from the ConfidenceCalibration query, leaving CorrectRate at its
+// zero value — application/analytics.Service computes it from
+// Corrects/Attempts, the same raw-data-in-SQL/ratio-in-Go split
+// Statistics uses (see storage.ConfidenceCalibration's doc comment).
 func (r *AnalyticsRepository) ConfidenceCalibration(ctx context.Context, identity learner.IdentityID) ([]storage.ConfidenceCalibration, error) {
 	rows, err := r.q.ConfidenceCalibration(ctx, string(identity))
 	if err != nil {
@@ -90,15 +92,17 @@ func (r *AnalyticsRepository) ConfidenceCalibration(ctx context.Context, identit
 		// query's "confidence IS NOT NULL" filter guarantees every
 		// returned row actually has a value.
 		out = append(out, storage.ConfidenceCalibration{
-			Confidence:  int(row.Confidence.Int32),
-			Attempts:    int(row.Attempts),
-			CorrectRate: row.CorrectRate,
+			Confidence: int(row.Confidence.Int32),
+			Attempts:   int(row.Attempts),
+			Corrects:   int(row.Corrects),
 		})
 	}
 	return out, nil
 }
 
-// AgentUsage assembles storage.AgentUsage rows from AgentUsageStats.
+// AgentUsage assembles storage.AgentUsage rows from AgentUsageStats,
+// leaving SuccessRate at its zero value — application/analytics.Service
+// computes it from Successes/Requests (see AgentUsage's doc comment).
 func (r *AnalyticsRepository) AgentUsage(ctx context.Context, identity learner.IdentityID) ([]storage.AgentUsage, error) {
 	rows, err := r.q.AgentUsageStats(ctx, string(identity))
 	if err != nil {
@@ -109,7 +113,7 @@ func (r *AnalyticsRepository) AgentUsage(ctx context.Context, identity learner.I
 		out = append(out, storage.AgentUsage{
 			Agent:        row.Agent,
 			Requests:     int(row.Requests),
-			SuccessRate:  row.SuccessRate,
+			Successes:    int(row.Successes),
 			AvgLatencyMS: int(row.AvgLatencyMs),
 		})
 	}

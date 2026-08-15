@@ -141,8 +141,8 @@ func TestLearnerPageRendersAgentUsageAndSystemSections(t *testing.T) {
 	opts := learnerTestOptions()
 	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{
 		agentUsage: []storage.AgentUsage{
-			{Agent: "teacher", Requests: 5, SuccessRate: 0.8, AvgLatencyMS: 420},
-			{Agent: "", Requests: 1, SuccessRate: 1.0, AvgLatencyMS: 100},
+			{Agent: "teacher", Requests: 5, Successes: 4, AvgLatencyMS: 420},
+			{Agent: "", Requests: 1, Successes: 1, AvgLatencyMS: 100},
 		},
 		system: storage.SystemStats{
 			LearningEvents: 12,

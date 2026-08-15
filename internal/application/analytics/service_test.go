@@ -132,11 +132,14 @@ func TestStatisticsPropagatesRepositoryError(t *testing.T) {
 	}
 }
 
-// TestNewAnalyticsMethodsPassThroughAndPropagateErrors pins the Task 7
-// additions as pure pass-throughs: the value the repository returns
-// comes back unchanged, and a repository error surfaces rather than
-// being swallowed — for all five, in one table so each gets the same
-// two assertions without five near-identical test funcs.
+// TestNewAnalyticsMethodsPassThroughAndPropagateErrors pins
+// VocabFunnel/WeaknessTrends/SystemStats — none of whose fields is a
+// derived ratio — as pure pass-throughs: the value the repository
+// returns comes back unchanged, and a repository error surfaces rather
+// than being swallowed. ConfidenceCalibration and AgentUsage are
+// covered separately below (they derive a rate, so aren't pure
+// pass-throughs — see TestConfidenceCalibrationDerivesCorrectRate and
+// TestAgentUsageDerivesSuccessRate).
 func TestNewAnalyticsMethodsPassThroughAndPropagateErrors(t *testing.T) {
 	wantErr := errors.New("db down")
 
@@ -164,30 +167,6 @@ func TestNewAnalyticsMethodsPassThroughAndPropagateErrors(t *testing.T) {
 		}
 	})
 
-	t.Run("ConfidenceCalibration", func(t *testing.T) {
-		want := []storage.ConfidenceCalibration{{Confidence: 4, Attempts: 5, CorrectRate: 0.8}}
-		svc := analytics.NewService(fakeAnalyticsRepo{calibration: want})
-		got, err := svc.ConfidenceCalibration(context.Background(), "learner-a")
-		if err != nil || len(got) != 1 || got[0] != want[0] {
-			t.Fatalf("ConfidenceCalibration() = %+v, %v, want %+v, nil", got, err, want)
-		}
-		if _, err := analytics.NewService(fakeAnalyticsRepo{calibrationErr: wantErr}).ConfidenceCalibration(context.Background(), "learner-a"); !errors.Is(err, wantErr) {
-			t.Fatalf("ConfidenceCalibration() err = %v, want %v", err, wantErr)
-		}
-	})
-
-	t.Run("AgentUsage", func(t *testing.T) {
-		want := []storage.AgentUsage{{Agent: "teacher", Requests: 3, SuccessRate: 1, AvgLatencyMS: 200}}
-		svc := analytics.NewService(fakeAnalyticsRepo{agentUsage: want})
-		got, err := svc.AgentUsage(context.Background(), "learner-a")
-		if err != nil || len(got) != 1 || got[0] != want[0] {
-			t.Fatalf("AgentUsage() = %+v, %v, want %+v, nil", got, err, want)
-		}
-		if _, err := analytics.NewService(fakeAnalyticsRepo{agentUsageErr: wantErr}).AgentUsage(context.Background(), "learner-a"); !errors.Is(err, wantErr) {
-			t.Fatalf("AgentUsage() err = %v, want %v", err, wantErr)
-		}
-	})
-
 	t.Run("SystemStats", func(t *testing.T) {
 		want := storage.SystemStats{LearningEvents: 7, EventsByType: map[string]int{"quiz.answered": 7}, AIRequests: 2}
 		svc := analytics.NewService(fakeAnalyticsRepo{system: want})
@@ -199,4 +178,109 @@ func TestNewAnalyticsMethodsPassThroughAndPropagateErrors(t *testing.T) {
 			t.Fatalf("SystemStats() err = %v, want %v", err, wantErr)
 		}
 	})
+}
+
+// TestConfidenceCalibrationDerivesCorrectRate covers ConfidenceCalibration's
+// split from Statistics' pattern: the repository returns raw
+// Attempts/Corrects (CorrectRate left zero, as the real postgres repo
+// does), and the service fills in CorrectRate = Corrects/Attempts.
+// Also covers error propagation and raw-count pass-through.
+func TestConfidenceCalibrationDerivesCorrectRate(t *testing.T) {
+	repo := fakeAnalyticsRepo{calibration: []storage.ConfidenceCalibration{
+		{Confidence: 4, Attempts: 5, Corrects: 4},
+		{Confidence: 2, Attempts: 3, Corrects: 3},
+	}}
+	svc := analytics.NewService(repo)
+
+	got, err := svc.ConfidenceCalibration(context.Background(), "learner-a")
+	if err != nil {
+		t.Fatalf("ConfidenceCalibration returned error: %v", err)
+	}
+	want := []storage.ConfidenceCalibration{
+		{Confidence: 4, Attempts: 5, Corrects: 4, CorrectRate: 0.8},
+		{Confidence: 2, Attempts: 3, Corrects: 3, CorrectRate: 1.0},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("ConfidenceCalibration() = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("ConfidenceCalibration()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	wantErr := errors.New("db down")
+	if _, err := analytics.NewService(fakeAnalyticsRepo{calibrationErr: wantErr}).ConfidenceCalibration(context.Background(), "learner-a"); !errors.Is(err, wantErr) {
+		t.Fatalf("ConfidenceCalibration() err = %v, want %v", err, wantErr)
+	}
+}
+
+// TestConfidenceCalibrationZeroAttemptsReturnsZeroRate is the
+// zero-denominator guard TestStatisticsZeroDivisionCasesReturnZero
+// pins for Statistics, now covered for ConfidenceCalibration too: a
+// row with Attempts == 0 must get CorrectRate 0, not divide by zero.
+// The real postgres query can never actually produce such a row (every
+// group has at least one member), but the Go-side guard is asserted
+// directly here rather than only via the (much slower) integration
+// suite.
+func TestConfidenceCalibrationZeroAttemptsReturnsZeroRate(t *testing.T) {
+	repo := fakeAnalyticsRepo{calibration: []storage.ConfidenceCalibration{{Confidence: 3, Attempts: 0, Corrects: 0}}}
+	svc := analytics.NewService(repo)
+
+	got, err := svc.ConfidenceCalibration(context.Background(), "learner-a")
+	if err != nil {
+		t.Fatalf("ConfidenceCalibration returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].CorrectRate != 0 {
+		t.Fatalf("ConfidenceCalibration() = %+v, want CorrectRate 0", got)
+	}
+}
+
+// TestAgentUsageDerivesSuccessRate mirrors
+// TestConfidenceCalibrationDerivesCorrectRate for AgentUsage: raw
+// Requests/Successes in, SuccessRate = Successes/Requests out.
+func TestAgentUsageDerivesSuccessRate(t *testing.T) {
+	repo := fakeAnalyticsRepo{agentUsage: []storage.AgentUsage{
+		{Agent: "teacher", Requests: 4, Successes: 3, AvgLatencyMS: 200},
+		{Agent: "", Requests: 2, Successes: 2, AvgLatencyMS: 50},
+	}}
+	svc := analytics.NewService(repo)
+
+	got, err := svc.AgentUsage(context.Background(), "learner-a")
+	if err != nil {
+		t.Fatalf("AgentUsage returned error: %v", err)
+	}
+	want := []storage.AgentUsage{
+		{Agent: "teacher", Requests: 4, Successes: 3, AvgLatencyMS: 200, SuccessRate: 0.75},
+		{Agent: "", Requests: 2, Successes: 2, AvgLatencyMS: 50, SuccessRate: 1.0},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("AgentUsage() = %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("AgentUsage()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	wantErr := errors.New("db down")
+	if _, err := analytics.NewService(fakeAnalyticsRepo{agentUsageErr: wantErr}).AgentUsage(context.Background(), "learner-a"); !errors.Is(err, wantErr) {
+		t.Fatalf("AgentUsage() err = %v, want %v", err, wantErr)
+	}
+}
+
+// TestAgentUsageZeroRequestsReturnsZeroRate mirrors
+// TestConfidenceCalibrationZeroAttemptsReturnsZeroRate: a row with
+// Requests == 0 must get SuccessRate 0, not divide by zero.
+func TestAgentUsageZeroRequestsReturnsZeroRate(t *testing.T) {
+	repo := fakeAnalyticsRepo{agentUsage: []storage.AgentUsage{{Agent: "drill", Requests: 0, Successes: 0}}}
+	svc := analytics.NewService(repo)
+
+	got, err := svc.AgentUsage(context.Background(), "learner-a")
+	if err != nil {
+		t.Fatalf("AgentUsage returned error: %v", err)
+	}
+	if len(got) != 1 || got[0].SuccessRate != 0 {
+		t.Fatalf("AgentUsage() = %+v, want SuccessRate 0", got)
+	}
 }

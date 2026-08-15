@@ -249,13 +249,20 @@ func TestWeaknessTrendsZeroFillsMissingWeeksAndScopesToIdentity(t *testing.T) {
 
 // TestConfidenceCalibrationOnlyRatedAttemptsAndEmptyIsExplicit covers
 // ConfidenceCalibration: attempts with no confidence value never
-// contribute a row, only observed confidence levels appear, and an
-// identity with zero rated attempts gets an empty (not nil-panicking,
-// not NaN-producing) slice back.
+// contribute a row, only observed confidence levels appear, an
+// identity with zero rated attempts gets an empty (not nil-panicking)
+// slice back, and — matching TestVocabFunnelScopedToIdentity's
+// rigour — a second identity's OVERLAPPING confidence values (same
+// confidence levels, different attempt/correct counts) never leak
+// into identity A's rows. The repository leaves CorrectRate at its
+// zero value throughout (see storage.ConfidenceCalibration's doc
+// comment) — application/analytics.Service derives it, covered by
+// that package's own unit tests, not here.
 func TestConfidenceCalibrationOnlyRatedAttemptsAndEmptyIsExplicit(t *testing.T) {
 	ctx := context.Background()
 	repo := analyticsV2TestPool(t)
 	identityA := newAnalyticsTestIdentity(t, repo, "calib-a")
+	identityB := newAnalyticsTestIdentity(t, repo, "calib-b")
 	identityEmpty := newAnalyticsTestIdentity(t, repo, "calib-empty")
 
 	pool, err := NewPool(ctx, testURL(t))
@@ -286,31 +293,58 @@ func TestConfidenceCalibrationOnlyRatedAttemptsAndEmptyIsExplicit(t *testing.T) 
 	}
 	conf := func(v int) *int { return &v }
 
-	// confidence=4: 2 attempts, 1 correct -> correct_rate 0.5.
+	// confidence=4: 2 attempts, 1 correct.
 	ex1, ex2 := mkExercise(identityA.ID), mkExercise(identityA.ID)
 	recordAttempt(ex1.ID, true, conf(4))
 	recordAttempt(ex2.ID, false, conf(4))
-	// confidence=2: 1 attempt, correct -> correct_rate 1.0.
+	// confidence=2: 1 attempt, correct.
 	ex3 := mkExercise(identityA.ID)
 	recordAttempt(ex3.ID, true, conf(2))
 	// No confidence given at all: must never surface as a row.
 	ex4 := mkExercise(identityA.ID)
 	recordAttempt(ex4.ID, true, nil)
 
+	// Identity B: the SAME two confidence levels (4 and 2) as A, but a
+	// larger, all-correct set of attempts — if scoping ever broke, B's
+	// rows would inflate A's Attempts/Corrects rather than merely
+	// appearing as separate rows, since both identities use the same
+	// confidence keys.
+	exB1, exB2, exB3 := mkExercise(identityB.ID), mkExercise(identityB.ID), mkExercise(identityB.ID)
+	recordAttempt(exB1.ID, true, conf(4))
+	recordAttempt(exB2.ID, true, conf(4))
+	recordAttempt(exB3.ID, true, conf(2))
+
 	got, err := repo.ConfidenceCalibration(ctx, identityA.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []storage.ConfidenceCalibration{
-		{Confidence: 2, Attempts: 1, CorrectRate: 1.0},
-		{Confidence: 4, Attempts: 2, CorrectRate: 0.5},
+		{Confidence: 2, Attempts: 1, Corrects: 1},
+		{Confidence: 4, Attempts: 2, Corrects: 1},
 	}
 	if len(got) != len(want) {
-		t.Fatalf("ConfidenceCalibration(A) = %+v, want %+v", got, want)
+		t.Fatalf("ConfidenceCalibration(A) = %+v, want %+v (must exclude identity B's overlapping rows)", got, want)
 	}
 	for i := range want {
 		if got[i] != want[i] {
 			t.Errorf("ConfidenceCalibration(A)[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+
+	gotB, err := repo.ConfidenceCalibration(ctx, identityB.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantB := []storage.ConfidenceCalibration{
+		{Confidence: 2, Attempts: 1, Corrects: 1},
+		{Confidence: 4, Attempts: 2, Corrects: 2},
+	}
+	if len(gotB) != len(wantB) {
+		t.Fatalf("ConfidenceCalibration(B) = %+v, want %+v (must exclude identity A's overlapping rows)", gotB, wantB)
+	}
+	for i := range wantB {
+		if gotB[i] != wantB[i] {
+			t.Errorf("ConfidenceCalibration(B)[%d] = %+v, want %+v", i, gotB[i], wantB[i])
 		}
 	}
 
@@ -325,8 +359,11 @@ func TestConfidenceCalibrationOnlyRatedAttemptsAndEmptyIsExplicit(t *testing.T) 
 
 // TestAgentUsageGroupsByAgentIncludingBlankAndScopesToIdentity covers
 // AgentUsage: grouped per agent (including the '' bucket predating the
-// 00017 migration), success rate and latency computed correctly, and
-// identity-scoped.
+// 00017 migration), raw success count and latency computed correctly,
+// and identity-scoped. The repository leaves SuccessRate at its zero
+// value (see storage.AgentUsage's doc comment) — asserted explicitly
+// below, mirroring analytics_test.go's "repository must not compute
+// derived ratios" assertion for Statistics.
 func TestAgentUsageGroupsByAgentIncludingBlankAndScopesToIdentity(t *testing.T) {
 	ctx := context.Background()
 	repo := analyticsV2TestPool(t)
@@ -373,15 +410,18 @@ func TestAgentUsageGroupsByAgentIncludingBlankAndScopesToIdentity(t *testing.T) 
 	if !ok {
 		t.Fatalf("AgentUsage(A) missing teacher group: %+v", got)
 	}
-	if teacher.Requests != 2 || teacher.SuccessRate != 0.5 || teacher.AvgLatencyMS != 150 {
-		t.Errorf("teacher group = %+v, want {Requests:2 SuccessRate:0.5 AvgLatencyMS:150}", teacher)
+	if teacher.Requests != 2 || teacher.Successes != 1 || teacher.AvgLatencyMS != 150 {
+		t.Errorf("teacher group = %+v, want {Requests:2 Successes:1 AvgLatencyMS:150}", teacher)
+	}
+	if teacher.SuccessRate != 0 {
+		t.Errorf("teacher group SuccessRate = %v, want 0 (repository must not compute derived ratios)", teacher.SuccessRate)
 	}
 	blank, ok := byAgent[""]
 	if !ok {
 		t.Fatalf("AgentUsage(A) missing blank-agent group: %+v", got)
 	}
-	if blank.Requests != 1 || blank.SuccessRate != 1.0 || blank.AvgLatencyMS != 50 {
-		t.Errorf("blank group = %+v, want {Requests:1 SuccessRate:1 AvgLatencyMS:50}", blank)
+	if blank.Requests != 1 || blank.Successes != 1 || blank.AvgLatencyMS != 50 {
+		t.Errorf("blank group = %+v, want {Requests:1 Successes:1 AvgLatencyMS:50}", blank)
 	}
 }
 
