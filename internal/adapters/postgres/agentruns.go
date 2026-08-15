@@ -17,10 +17,11 @@ import (
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
-// AgentRunRepository persists agent-run traces (agent_runs + tool_calls,
-// see the 00018 migration). tool_calls carries no identity_id of its
-// own — RecordToolCall and the tool-call reads below reach it only
-// via a join through agent_runs, mirroring FeedbackRepository's
+// AgentRunRepository persists agent-run traces (agent_runs + tool_calls
+// from the 00018 migration, agent_turns from the 00020 migration).
+// tool_calls/agent_turns carry no identity_id of their own —
+// RecordToolCall/RecordTurn and the reads below reach them only via a
+// join through agent_runs, mirroring FeedbackRepository's
 // corrections-via-feedback_requests join.
 type AgentRunRepository struct{ q *sqlcgen.Queries }
 
@@ -104,6 +105,32 @@ func (r *AgentRunRepository) RecordToolCall(ctx context.Context, identity learne
 	return nil
 }
 
+func (r *AgentRunRepository) RecordTurn(ctx context.Context, identity learner.IdentityID, t storage.AgentTurn) error {
+	id, err := parseUUID(t.ID)
+	if err != nil {
+		return fmt.Errorf("agent turn id: %w", err)
+	}
+	runID, err := parseUUID(t.AgentRunID)
+	if err != nil {
+		return fmt.Errorf("agent run id: %w", err)
+	}
+	n, err := r.q.InsertAgentTurn(ctx, sqlcgen.InsertAgentTurnParams{
+		ID:         id,
+		TurnNumber: int32(t.TurnNumber),
+		Text:       t.Text,
+		CreatedAt:  pgtype.Timestamptz{Time: t.CreatedAt, Valid: true},
+		ID_2:       runID,
+		IdentityID: string(identity),
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
 func (r *AgentRunRepository) List(ctx context.Context, identity learner.IdentityID, limit int) ([]storage.AgentRun, error) {
 	rows, err := r.q.ListAgentRuns(ctx, sqlcgen.ListAgentRunsParams{
 		IdentityID: string(identity),
@@ -119,28 +146,38 @@ func (r *AgentRunRepository) List(ctx context.Context, identity learner.Identity
 	return out, nil
 }
 
-func (r *AgentRunRepository) Get(ctx context.Context, identity learner.IdentityID, runID string) (storage.AgentRun, []storage.ToolCall, error) {
+func (r *AgentRunRepository) Get(ctx context.Context, identity learner.IdentityID, runID string) (storage.AgentRun, []storage.ToolCall, []storage.AgentTurn, error) {
 	id, err := parseUUID(runID)
 	if err != nil {
-		return storage.AgentRun{}, nil, fmt.Errorf("agent run id: %w", err)
+		return storage.AgentRun{}, nil, nil, fmt.Errorf("agent run id: %w", err)
 	}
 	row, err := r.q.GetAgentRun(ctx, sqlcgen.GetAgentRunParams{ID: id, IdentityID: string(identity)})
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return storage.AgentRun{}, nil, storage.ErrNotFound
+			return storage.AgentRun{}, nil, nil, storage.ErrNotFound
 		}
-		return storage.AgentRun{}, nil, err
+		return storage.AgentRun{}, nil, nil, err
 	}
 
 	calls, err := r.q.ListToolCallsForRun(ctx, id)
 	if err != nil {
-		return storage.AgentRun{}, nil, err
+		return storage.AgentRun{}, nil, nil, err
 	}
-	out := make([]storage.ToolCall, 0, len(calls))
+	toolCalls := make([]storage.ToolCall, 0, len(calls))
 	for _, c := range calls {
-		out = append(out, fromToolCallRow(c))
+		toolCalls = append(toolCalls, fromToolCallRow(c))
 	}
-	return fromAgentRunRow(row), out, nil
+
+	turnRows, err := r.q.ListAgentTurnsForRun(ctx, id)
+	if err != nil {
+		return storage.AgentRun{}, nil, nil, err
+	}
+	turns := make([]storage.AgentTurn, 0, len(turnRows))
+	for _, t := range turnRows {
+		turns = append(turns, fromAgentTurnRow(t))
+	}
+
+	return fromAgentRunRow(row), toolCalls, turns, nil
 }
 
 func fromAgentRunRow(row sqlcgen.AgentRun) storage.AgentRun {
@@ -177,6 +214,16 @@ func fromToolCallRow(row sqlcgen.ToolCall) storage.ToolCall {
 		Result:     row.Result,
 		IsError:    row.IsError,
 		DurationMS: int(row.DurationMs),
+		CreatedAt:  row.CreatedAt.Time,
+	}
+}
+
+func fromAgentTurnRow(row sqlcgen.AgentTurn) storage.AgentTurn {
+	return storage.AgentTurn{
+		ID:         uuid.UUID(row.ID.Bytes).String(),
+		AgentRunID: uuid.UUID(row.AgentRunID.Bytes).String(),
+		TurnNumber: int(row.TurnNumber),
+		Text:       row.Text,
 		CreatedAt:  row.CreatedAt.Time,
 	}
 }

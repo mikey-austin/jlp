@@ -85,6 +85,15 @@ func TestAgentRunStartFinishListGetRoundTrips(t *testing.T) {
 		t.Fatalf("RecordToolCall: %v", err)
 	}
 
+	turn1 := storage.AgentTurn{ID: uuid.NewString(), AgentRunID: run.ID, TurnNumber: 1, Text: "", CreatedAt: now}
+	if err := repo.RecordTurn(ctx, identity, turn1); err != nil {
+		t.Fatalf("RecordTurn(1): %v", err)
+	}
+	turn2 := storage.AgentTurn{ID: uuid.NewString(), AgentRunID: run.ID, TurnNumber: 2, Text: "Focus on i-adjective-past.", CreatedAt: now.Add(time.Second)}
+	if err := repo.RecordTurn(ctx, identity, turn2); err != nil {
+		t.Fatalf("RecordTurn(2): %v", err)
+	}
+
 	endedAt := now.Add(2 * time.Second)
 	if err := repo.Finish(ctx, identity, run.ID, "completed", "", "Focus on i-adjective-past.", 2, endedAt); err != nil {
 		t.Fatalf("Finish: %v", err)
@@ -101,7 +110,7 @@ func TestAgentRunStartFinishListGetRoundTrips(t *testing.T) {
 		t.Fatalf("List()[0] = %+v, want Status=completed Turns=2", list[0])
 	}
 
-	gotRun, gotCalls, err := repo.Get(ctx, identity, run.ID)
+	gotRun, gotCalls, gotTurns, err := repo.Get(ctx, identity, run.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -123,6 +132,15 @@ func TestAgentRunStartFinishListGetRoundTrips(t *testing.T) {
 	if gotCalls[0].ToolName != "get_learning_priorities" || gotCalls[0].Result != call.Result || gotCalls[0].DurationMS != 42 {
 		t.Fatalf("Get() calls[0] = %+v, want ToolName=get_learning_priorities Result=%q DurationMS=42", gotCalls[0], call.Result)
 	}
+	if len(gotTurns) != 2 {
+		t.Fatalf("len(Get() turns) = %d, want 2", len(gotTurns))
+	}
+	if gotTurns[0].TurnNumber != 1 || gotTurns[0].Text != "" {
+		t.Fatalf("Get() turns[0] = %+v, want TurnNumber=1 Text=\"\"", gotTurns[0])
+	}
+	if gotTurns[1].TurnNumber != 2 || gotTurns[1].Text != "Focus on i-adjective-past." {
+		t.Fatalf("Get() turns[1] = %+v, want TurnNumber=2 Text=%q", gotTurns[1], "Focus on i-adjective-past.")
+	}
 }
 
 // TestAgentRunGetCrossIdentityMisses pins the identity-scoped access
@@ -136,7 +154,7 @@ func TestAgentRunGetCrossIdentityMisses(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	_, _, err := repo.Get(ctx, identityB, run.ID)
+	_, _, _, err := repo.Get(ctx, identityB, run.ID)
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("Get(wrong identity) err = %v, want storage.ErrNotFound", err)
 	}
@@ -158,7 +176,7 @@ func TestAgentRunFinishCrossIdentityMisses(t *testing.T) {
 	}
 
 	// Confirm the real owner's run is untouched — still "running".
-	gotRun, _, err := repo.Get(ctx, identityA, run.ID)
+	gotRun, _, _, err := repo.Get(ctx, identityA, run.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -185,12 +203,37 @@ func TestAgentRunRecordToolCallRefusesRunBelongingToAnotherIdentity(t *testing.T
 	}
 
 	// Confirm nothing was written: the real owner's Get shows zero calls.
-	_, calls, err := repo.Get(ctx, identityA, run.ID)
+	_, calls, _, err := repo.Get(ctx, identityA, run.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
 	if len(calls) != 0 {
 		t.Fatalf("len(calls) = %d, want 0 — a cross-identity RecordToolCall must write nothing", len(calls))
+	}
+}
+
+// TestAgentRunRecordTurnRefusesRunBelongingToAnotherIdentity mirrors
+// the RecordToolCall case above for RecordTurn.
+func TestAgentRunRecordTurnRefusesRunBelongingToAnotherIdentity(t *testing.T) {
+	repo, identityA, identityB := agentRunTestSetup(t)
+	ctx := context.Background()
+	run := testAgentRun(identityA, time.Now().UTC().Truncate(time.Microsecond))
+	if err := repo.Start(ctx, run); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	turn := storage.AgentTurn{ID: uuid.NewString(), AgentRunID: run.ID, TurnNumber: 1, CreatedAt: time.Now().UTC()}
+	err := repo.RecordTurn(ctx, identityB, turn)
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("RecordTurn(wrong identity) err = %v, want storage.ErrNotFound", err)
+	}
+
+	_, _, turns, err := repo.Get(ctx, identityA, run.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(turns) != 0 {
+		t.Fatalf("len(turns) = %d, want 0 — a cross-identity RecordTurn must write nothing", len(turns))
 	}
 }
 
@@ -220,7 +263,7 @@ func TestAgentRunListIsIdentityScoped(t *testing.T) {
 // (neither identity has ever started this run ID).
 func TestAgentRunGetUnknownRunMisses(t *testing.T) {
 	repo, identity, _ := agentRunTestSetup(t)
-	_, _, err := repo.Get(context.Background(), identity, uuid.NewString())
+	_, _, _, err := repo.Get(context.Background(), identity, uuid.NewString())
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("Get(unknown run) err = %v, want storage.ErrNotFound", err)
 	}

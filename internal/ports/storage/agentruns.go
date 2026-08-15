@@ -45,6 +45,23 @@ type ToolCall struct {
 	CreatedAt                time.Time
 }
 
+// AgentTurn is one ai.ToolCaller.CallWithTools response the agent-run
+// loop received during an AgentRun — tool_calls' sibling (the 00020
+// migration), one row per model turn regardless of whether that turn
+// also produced tool invocations. Persisted so the /ai/agents trace
+// viewer can show EVERY model turn, not just the final one:
+// AgentRun.Output alone (Task 2's first pass) only ever carries the
+// LAST turn's text, so a run that fails MaxTurns — the exact case
+// someone opens the trace viewer to diagnose — showed no model text
+// at all. TurnNumber is 1-based, matching the loop counter
+// application/agentrun.Runner already tracks internally.
+type AgentTurn struct {
+	ID, AgentRunID string
+	TurnNumber     int
+	Text           string
+	CreatedAt      time.Time
+}
+
 // AgentRunRepository persists agent-run traces: agent_runs (one row
 // per run) and tool_calls (one row per Registry.Invoke call within a
 // run) — see the 00018 migration. tool_calls carries no identity_id of
@@ -67,11 +84,15 @@ type AgentRunRepository interface {
 	// doesn't exist at all — misses with ErrNotFound and writes nothing,
 	// same as Finish.
 	RecordToolCall(ctx context.Context, identity learner.IdentityID, c ToolCall) error
+	// RecordTurn persists t, scoped via a join to agent_runs, same
+	// contract as RecordToolCall.
+	RecordTurn(ctx context.Context, identity learner.IdentityID, t AgentTurn) error
 	// List returns up to limit of identity's runs, newest (by
 	// StartedAt) first.
 	List(ctx context.Context, identity learner.IdentityID, limit int) ([]AgentRun, error)
-	// Get reads back one run and every tool call recorded against it,
-	// oldest first (replay order). A runID that exists but belongs to a
+	// Get reads back one run, every tool call recorded against it
+	// (oldest first, replay order), and every turn recorded against it
+	// (by TurnNumber ascending). A runID that exists but belongs to a
 	// different identity misses with ErrNotFound, same as Finish.
-	Get(ctx context.Context, identity learner.IdentityID, runID string) (AgentRun, []ToolCall, error)
+	Get(ctx context.Context, identity learner.IdentityID, runID string) (AgentRun, []ToolCall, []AgentTurn, error)
 }

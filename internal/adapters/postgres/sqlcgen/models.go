@@ -25,6 +25,14 @@ type AgentRun struct {
 	Output        string
 }
 
+type AgentTurn struct {
+	ID         pgtype.UUID
+	AgentRunID pgtype.UUID
+	TurnNumber int32
+	Text       string
+	CreatedAt  pgtype.Timestamptz
+}
+
 type AiRating struct {
 	ID          pgtype.UUID
 	AiRequestID pgtype.UUID

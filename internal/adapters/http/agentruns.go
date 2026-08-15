@@ -3,6 +3,7 @@ package httpx
 import (
 	"errors"
 	"net/http"
+	"sort"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -64,19 +65,46 @@ type toolCallView struct {
 	CreatedAt                   time.Time
 }
 
-func toToolCallViews(calls []storage.ToolCall) []toolCallView {
-	views := make([]toolCallView, 0, len(calls))
-	for _, c := range calls {
-		views = append(views, toolCallView{
-			ToolName:   c.ToolName,
-			Arguments:  c.Arguments,
-			Result:     c.Result,
-			IsError:    c.IsError,
-			DurationMS: c.DurationMS,
-			CreatedAt:  c.CreatedAt,
-		})
+func toToolCallView(c storage.ToolCall) toolCallView {
+	return toolCallView{
+		ToolName:   c.ToolName,
+		Arguments:  c.Arguments,
+		Result:     c.Result,
+		IsError:    c.IsError,
+		DurationMS: c.DurationMS,
+		CreatedAt:  c.CreatedAt,
 	}
-	return views
+}
+
+// traceEventView is one entry in the detail page's chronological trace
+// — either a model turn's text (Kind "turn") or a tool call's
+// arguments/result/error (Kind "tool_call") — interleaved by
+// CreatedAt so the page shows the conversation the way it actually
+// happened, one event after another, instead of two disconnected
+// lists. This is what closes the brief's "each model turn ... each
+// tool call" requirement (PRD §50): Task 2's first pass only persisted
+// the FINAL turn's text (AgentRun.Output), so a run that failed
+// MaxTurns — exactly the case someone opens this page to diagnose —
+// showed no model text at all; every turn is now recorded via
+// AgentRunRepository.RecordTurn and rendered here in sequence.
+type traceEventView struct {
+	Kind       string // "turn" | "tool_call"
+	TurnNumber int
+	Text       string // Kind == "turn"; empty when the model produced no prose that turn
+	ToolCall   toolCallView
+	CreatedAt  time.Time
+}
+
+func toTraceEvents(turns []storage.AgentTurn, calls []storage.ToolCall) []traceEventView {
+	events := make([]traceEventView, 0, len(turns)+len(calls))
+	for _, t := range turns {
+		events = append(events, traceEventView{Kind: "turn", TurnNumber: t.TurnNumber, Text: t.Text, CreatedAt: t.CreatedAt})
+	}
+	for _, c := range calls {
+		events = append(events, traceEventView{Kind: "tool_call", ToolCall: toToolCallView(c), CreatedAt: c.CreatedAt})
+	}
+	sort.Slice(events, func(i, j int) bool { return events[i].CreatedAt.Before(events[j].CreatedAt) })
+	return events
 }
 
 // agentRunsList handles GET /ai/agents: the trace list (PRD §27/§50),
@@ -100,17 +128,17 @@ func (s *Server) agentRunsList(w http.ResponseWriter, r *http.Request) {
 }
 
 // agentRunsDetail handles GET /ai/agents/{id}: one run's full trace —
-// input context (System/Input), every tool call (arguments/result/
-// error), and the final output, exactly what PRD §50 draws for the
-// agent-run trace viewer. Identity-scoped via
-// storage.AgentRunRepository.Get, same cross-identity-miss-is-404
-// convention every other detail page in this package uses (see
-// lessonsDetail).
+// input context (System/Input), every model turn interleaved with
+// every tool call it made (arguments/result/error), and the final
+// output, exactly what PRD §50 draws for the agent-run trace viewer.
+// Identity-scoped via storage.AgentRunRepository.Get, same
+// cross-identity-miss-is-404 convention every other detail page in
+// this package uses (see lessonsDetail).
 func (s *Server) agentRunsDetail(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	id := chi.URLParam(r, "id")
 
-	run, calls, err := s.opts.AgentRuns.Get(r.Context(), ident.ID, id)
+	run, calls, turns, err := s.opts.AgentRuns.Get(r.Context(), ident.ID, id)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			http.NotFound(w, r)
@@ -121,12 +149,12 @@ func (s *Server) agentRunsDetail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	Render(w, r, "agent_run_detail", map[string]any{
-		"Title":     "Agent Run",
-		"Identity":  ident,
-		"Run":       toAgentRunView(run),
-		"System":    run.System,
-		"Input":     run.Input,
-		"Output":    run.Output,
-		"ToolCalls": toToolCallViews(calls),
+		"Title":       "Agent Run",
+		"Identity":    ident,
+		"Run":         toAgentRunView(run),
+		"System":      run.System,
+		"Input":       run.Input,
+		"Output":      run.Output,
+		"TraceEvents": toTraceEvents(turns, calls),
 	})
 }

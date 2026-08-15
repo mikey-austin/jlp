@@ -19,16 +19,19 @@ import (
 )
 
 // fakeRepo is an in-memory storage.AgentRunRepository double: it
-// records every Start/Finish/RecordToolCall call verbatim so tests can
-// assert on exactly what the loop persisted, without a real database.
-// recordErrs lets a test make one specific RecordToolCall call
-// (indexed 0-based across the whole run) fail, to pin the "trace
-// persistence failure aborts the run" behaviour.
+// records every Start/Finish/RecordToolCall/RecordTurn call verbatim
+// so tests can assert on exactly what the loop persisted, without a
+// real database. recordErrs lets a test make one specific
+// RecordToolCall call (indexed 0-based across the whole run) fail, to
+// pin the "trace persistence failure aborts the run" behaviour;
+// recordTurnErrs is the same for RecordTurn.
 type fakeRepo struct {
-	started    []storage.AgentRun
-	finished   []finishCall
-	toolCalls  []storage.ToolCall
-	recordErrs map[int]error
+	started        []storage.AgentRun
+	finished       []finishCall
+	toolCalls      []storage.ToolCall
+	turns          []storage.AgentTurn
+	recordErrs     map[int]error
+	recordTurnErrs map[int]error
 }
 
 type finishCall struct {
@@ -59,12 +62,21 @@ func (f *fakeRepo) RecordToolCall(_ context.Context, _ learner.IdentityID, c sto
 	return nil
 }
 
+func (f *fakeRepo) RecordTurn(_ context.Context, _ learner.IdentityID, t storage.AgentTurn) error {
+	idx := len(f.turns)
+	f.turns = append(f.turns, t)
+	if err, ok := f.recordTurnErrs[idx]; ok {
+		return err
+	}
+	return nil
+}
+
 func (f *fakeRepo) List(context.Context, learner.IdentityID, int) ([]storage.AgentRun, error) {
 	return nil, nil
 }
 
-func (f *fakeRepo) Get(context.Context, learner.IdentityID, string) (storage.AgentRun, []storage.ToolCall, error) {
-	return storage.AgentRun{}, nil, nil
+func (f *fakeRepo) Get(context.Context, learner.IdentityID, string) (storage.AgentRun, []storage.ToolCall, []storage.AgentTurn, error) {
+	return storage.AgentRun{}, nil, nil, nil
 }
 
 // scriptedCaller returns each of responses in order, one per
@@ -159,6 +171,20 @@ func TestRunTwoTurnScriptCompletesWithOneToolCall(t *testing.T) {
 	if tc.ToolName != "get_learning_priorities" || tc.IsError || tc.AgentRunID != out.RunID {
 		t.Errorf("toolCalls[0] = %+v, want a non-error get_learning_priorities call against %q", tc, out.RunID)
 	}
+
+	// EVERY model turn is recorded, not just the final one — review
+	// finding: Task 2's first pass only ever persisted the LAST turn's
+	// text (as agent_runs.output), discarding turn 1's (empty, since
+	// fakeai's first turn is pure tool-calling) entirely.
+	if len(repo.turns) != 2 {
+		t.Fatalf("turns = %+v, want exactly 2 rows (one per CallWithTools call)", repo.turns)
+	}
+	if repo.turns[0].TurnNumber != 1 || repo.turns[0].Text != "" || repo.turns[0].AgentRunID != out.RunID {
+		t.Errorf("turns[0] = %+v, want TurnNumber=1 Text=\"\" (fakeai's first turn is pure tool-calling) against %q", repo.turns[0], out.RunID)
+	}
+	if repo.turns[1].TurnNumber != 2 || !strings.Contains(repo.turns[1].Text, "i-adjective-past") {
+		t.Errorf("turns[1] = %+v, want TurnNumber=2 mentioning i-adjective-past", repo.turns[1])
+	}
 }
 
 // TestRunRefusedToolStillRecordsTraceRowAndContinues pins the
@@ -239,7 +265,10 @@ func TestRunMaxTurnsExhaustionFailsRun(t *testing.T) {
 	reg.Allow("teacher", "allowed_tool")
 
 	caller := &scriptedCaller{responses: []ai.ToolResponse{
-		{Turn: ai.ToolTurn{Invocations: []ai.ToolInvocation{{ID: "1", Name: "allowed_tool", Arguments: json.RawMessage(`{}`)}}}},
+		{Turn: ai.ToolTurn{
+			Text:        "let me check the learner's priorities first",
+			Invocations: []ai.ToolInvocation{{ID: "1", Name: "allowed_tool", Arguments: json.RawMessage(`{}`)}},
+		}},
 	}}
 	repo := &fakeRepo{}
 	runner := agentrun.NewRunner(caller, reg, repo, time.Now)
@@ -268,6 +297,14 @@ func TestRunMaxTurnsExhaustionFailsRun(t *testing.T) {
 	if len(repo.toolCalls) != 1 {
 		t.Fatalf("toolCalls = %+v, want the last turn's tool call still recorded before failing", repo.toolCalls)
 	}
+	// Review finding: a MaxTurns-failed run previously showed NO model
+	// text at all, since AgentRun.Output is only ever written on
+	// success (Finish is called with output="" here). The turn's own
+	// text must still be recorded via RecordTurn — exactly the case
+	// someone opens the trace viewer to diagnose.
+	if len(repo.turns) != 1 || repo.turns[0].Text != "let me check the learner's priorities first" {
+		t.Fatalf("turns = %+v, want the failing turn's text still recorded", repo.turns)
+	}
 }
 
 // TestRunRecordToolCallFailureFailsRun pins the hard-fail policy for
@@ -293,6 +330,29 @@ func TestRunRecordToolCallFailureFailsRun(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Run returned nil error, want the RecordToolCall failure surfaced")
+	}
+	if len(repo.finished) != 1 || repo.finished[0].Status != "failed" {
+		t.Fatalf("finished = %+v, want a failed row when the trace itself can't be persisted", repo.finished)
+	}
+}
+
+// TestRunRecordTurnFailureFailsRun mirrors
+// TestRunRecordToolCallFailureFailsRun for RecordTurn: a turn's own
+// audit row failing to persist is the same category of trace-integrity
+// failure and gets the same hard-fail treatment.
+func TestRunRecordTurnFailureFailsRun(t *testing.T) {
+	reg := tools.NewRegistry()
+	caller := &scriptedCaller{responses: []ai.ToolResponse{{Turn: ai.ToolTurn{Text: "done"}}}}
+	repo := &fakeRepo{recordTurnErrs: map[int]error{0: errors.New("db down")}}
+	runner := agentrun.NewRunner(caller, reg, repo, time.Now)
+
+	_, err := runner.Run(context.Background(), agentrun.RunInput{
+		Agent:    "teacher",
+		Identity: "mikey",
+		Messages: []ai.ToolMessage{{Role: "user", Text: "hi"}},
+	})
+	if err == nil {
+		t.Fatal("Run returned nil error, want the RecordTurn failure surfaced")
 	}
 	if len(repo.finished) != 1 || repo.finished[0].Status != "failed" {
 		t.Fatalf("finished = %+v, want a failed row when the trace itself can't be persisted", repo.finished)

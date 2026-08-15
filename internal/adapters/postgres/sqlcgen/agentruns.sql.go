@@ -116,6 +116,39 @@ func (q *Queries) InsertAgentRun(ctx context.Context, arg InsertAgentRunParams) 
 	return err
 }
 
+const insertAgentTurn = `-- name: InsertAgentTurn :execrows
+INSERT INTO agent_turns (id, agent_run_id, turn_number, text, created_at)
+SELECT $1, ar.id, $2, $3, $4
+FROM agent_runs ar
+WHERE ar.id = $5 AND ar.identity_id = $6
+`
+
+type InsertAgentTurnParams struct {
+	ID         pgtype.UUID
+	TurnNumber int32
+	Text       string
+	CreatedAt  pgtype.Timestamptz
+	ID_2       pgtype.UUID
+	IdentityID string
+}
+
+// Identity-scoped via a join back to agent_runs, same convention as
+// InsertToolCall above.
+func (q *Queries) InsertAgentTurn(ctx context.Context, arg InsertAgentTurnParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertAgentTurn,
+		arg.ID,
+		arg.TurnNumber,
+		arg.Text,
+		arg.CreatedAt,
+		arg.ID_2,
+		arg.IdentityID,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertToolCall = `-- name: InsertToolCall :execrows
 INSERT INTO tool_calls (id, agent_run_id, tool_name, arguments, result, is_error, duration_ms, created_at)
 SELECT $1, ar.id, $2, $3, $4, $5, $6, $7
@@ -195,6 +228,39 @@ func (q *Queries) ListAgentRuns(ctx context.Context, arg ListAgentRunsParams) ([
 			&i.System,
 			&i.Input,
 			&i.Output,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgentTurnsForRun = `-- name: ListAgentTurnsForRun :many
+SELECT id, agent_run_id, turn_number, text, created_at
+FROM agent_turns
+WHERE agent_run_id = $1
+ORDER BY turn_number ASC
+`
+
+func (q *Queries) ListAgentTurnsForRun(ctx context.Context, agentRunID pgtype.UUID) ([]AgentTurn, error) {
+	rows, err := q.db.Query(ctx, listAgentTurnsForRun, agentRunID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AgentTurn
+	for rows.Next() {
+		var i AgentTurn
+		if err := rows.Scan(
+			&i.ID,
+			&i.AgentRunID,
+			&i.TurnNumber,
+			&i.Text,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

@@ -576,6 +576,13 @@ p.empty {
   max-height: 280px;
   overflow-y: auto;
 }
+/* .agent-run-event: one entry in the chronological "会話ログ" list
+ * (agent_run_detail.html.tmpl's TraceEvents range) — a model turn or a
+ * tool call, in the order they actually happened. Plain vertical
+ * spacing between an otherwise unstyled .card is all this needs. */
+.agent-run-event {
+  margin-bottom: 12px;
+}
 
 /* ============================== Print (lesson guides) =================== */
 /* A lesson guide (PRD §18/§60) is meant to be printed or exported as a

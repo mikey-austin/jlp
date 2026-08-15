@@ -39,3 +39,17 @@ SELECT id, agent_run_id, tool_name, arguments, result, is_error, duration_ms, cr
 FROM tool_calls
 WHERE agent_run_id = $1
 ORDER BY created_at ASC;
+
+-- name: InsertAgentTurn :execrows
+-- Identity-scoped via a join back to agent_runs, same convention as
+-- InsertToolCall above.
+INSERT INTO agent_turns (id, agent_run_id, turn_number, text, created_at)
+SELECT $1, ar.id, $2, $3, $4
+FROM agent_runs ar
+WHERE ar.id = $5 AND ar.identity_id = $6;
+
+-- name: ListAgentTurnsForRun :many
+SELECT id, agent_run_id, turn_number, text, created_at
+FROM agent_turns
+WHERE agent_run_id = $1
+ORDER BY turn_number ASC;

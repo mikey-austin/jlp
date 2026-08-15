@@ -20,10 +20,11 @@ import (
 type fakeAgentRunRepo struct {
 	runs  map[string]storage.AgentRun
 	calls map[string][]storage.ToolCall
+	turns map[string][]storage.AgentTurn
 }
 
 func newFakeAgentRunRepo() *fakeAgentRunRepo {
-	return &fakeAgentRunRepo{runs: map[string]storage.AgentRun{}, calls: map[string][]storage.ToolCall{}}
+	return &fakeAgentRunRepo{runs: map[string]storage.AgentRun{}, calls: map[string][]storage.ToolCall{}, turns: map[string][]storage.AgentTurn{}}
 }
 
 func (f *fakeAgentRunRepo) Start(_ context.Context, run storage.AgentRun) error {
@@ -50,6 +51,15 @@ func (f *fakeAgentRunRepo) RecordToolCall(_ context.Context, identity learner.Id
 	return nil
 }
 
+func (f *fakeAgentRunRepo) RecordTurn(_ context.Context, identity learner.IdentityID, t storage.AgentTurn) error {
+	run, ok := f.runs[t.AgentRunID]
+	if !ok || run.IdentityID != identity {
+		return storage.ErrNotFound
+	}
+	f.turns[t.AgentRunID] = append(f.turns[t.AgentRunID], t)
+	return nil
+}
+
 func (f *fakeAgentRunRepo) List(_ context.Context, identity learner.IdentityID, limit int) ([]storage.AgentRun, error) {
 	var out []storage.AgentRun
 	for _, run := range f.runs {
@@ -63,12 +73,12 @@ func (f *fakeAgentRunRepo) List(_ context.Context, identity learner.IdentityID, 
 	return out, nil
 }
 
-func (f *fakeAgentRunRepo) Get(_ context.Context, identity learner.IdentityID, runID string) (storage.AgentRun, []storage.ToolCall, error) {
+func (f *fakeAgentRunRepo) Get(_ context.Context, identity learner.IdentityID, runID string) (storage.AgentRun, []storage.ToolCall, []storage.AgentTurn, error) {
 	run, ok := f.runs[runID]
 	if !ok || run.IdentityID != identity {
-		return storage.AgentRun{}, nil, storage.ErrNotFound
+		return storage.AgentRun{}, nil, nil, storage.ErrNotFound
 	}
-	return run, f.calls[runID], nil
+	return run, f.calls[runID], f.turns[runID], nil
 }
 
 func agentRunsTestServer(t *testing.T) (h http.Handler, repo *fakeAgentRunRepo) {
@@ -131,10 +141,20 @@ func TestAgentRunsDetailRendersToolCallAndOutput(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := repo.RecordTurn(context.Background(), "dev", storage.AgentTurn{
+		ID: "turn-1", AgentRunID: "run-2", TurnNumber: 1, Text: "", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	if err := repo.RecordToolCall(context.Background(), "dev", storage.ToolCall{
 		ID: "call-1", AgentRunID: "run-2", ToolName: "get_learning_priorities",
 		Arguments: `{"limit":5}`, Result: `[{"subject":"i-adjective-past"}]`,
-		IsError: false, DurationMS: 12, CreatedAt: now,
+		IsError: false, DurationMS: 12, CreatedAt: now.Add(time.Millisecond),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordTurn(context.Background(), "dev", storage.AgentTurn{
+		ID: "turn-2", AgentRunID: "run-2", TurnNumber: 2, Text: "Investigated the learner priorities.", CreatedAt: now.Add(2 * time.Millisecond),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -151,14 +171,26 @@ func TestAgentRunsDetailRendersToolCallAndOutput(t *testing.T) {
 	for _, want := range []string{
 		"You are an agentic Japanese writing teacher.",          // input context: System
 		"What should I focus on next?",                          // input context: Input
+		"モデルターン 1",                                              // turn 1 (pure tool-calling, no text)
 		"get_learning_priorities",                               // tool call name
 		`{&#34;limit&#34;:5}`,                                   // tool call arguments, HTML-escaped
 		"i-adjective-past",                                      // tool call result content
+		"モデルターン 2",                                              // turn 2
+		"Investigated the learner priorities.",                  // turn 2's own text
 		"Focus on i-adjective-past based on recent priorities.", // final output
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("detail page missing %q\nbody:\n%s", want, body)
 		}
+	}
+
+	// "in sequence": turn 1 -> its tool call -> turn 2, in that order —
+	// not two disconnected lists.
+	iTurn1 := strings.Index(body, "モデルターン 1")
+	iToolCall := strings.Index(body, "get_learning_priorities")
+	iTurn2 := strings.Index(body, "モデルターン 2")
+	if iTurn1 >= iToolCall || iToolCall >= iTurn2 {
+		t.Errorf("trace events out of order: turn1=%d toolCall=%d turn2=%d, want turn1 < toolCall < turn2", iTurn1, iToolCall, iTurn2)
 	}
 }
 
@@ -193,6 +225,75 @@ func TestAgentRunsDetailEscapesToolCallArguments(t *testing.T) {
 	}
 	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
 		t.Errorf("detail page missing the escaped tool result\nbody:\n%s", body)
+	}
+}
+
+// TestAgentRunsDetailEscapesTurnText mirrors the tool-call escaping
+// test above for a model turn's own text.
+func TestAgentRunsDetailEscapesTurnText(t *testing.T) {
+	h, repo := agentRunsTestServer(t)
+	now := time.Now().UTC()
+	if err := repo.Start(context.Background(), storage.AgentRun{
+		ID: "run-turn-xss", IdentityID: "dev", Agent: "teacher",
+		PromptName: "teacher.agentic", PromptVersion: "v1",
+		Status: "running", StartedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordTurn(context.Background(), "dev", storage.AgentTurn{
+		ID: "turn-xss", AgentRunID: "run-turn-xss", TurnNumber: 1,
+		Text: "<script>alert(1)</script>", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ai/agents/run-turn-xss", nil))
+	body := rec.Body.String()
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Fatal("detail page rendered a turn's text as raw HTML — must be escaped")
+	}
+	if !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
+		t.Errorf("detail page missing the escaped turn text\nbody:\n%s", body)
+	}
+}
+
+// TestAgentRunsDetailShowsTurnTextOnAFailedRun pins the exact scenario
+// found in review: a run that failed on MaxTurns exhaustion previously
+// showed NO model text at all (AgentRun.Output is only ever written on
+// success) — exactly the case someone opens the trace viewer to
+// diagnose. The failing turn's own text must still render.
+func TestAgentRunsDetailShowsTurnTextOnAFailedRun(t *testing.T) {
+	h, repo := agentRunsTestServer(t)
+	now := time.Now().UTC()
+	if err := repo.Start(context.Background(), storage.AgentRun{
+		ID: "run-failed", IdentityID: "dev", Agent: "teacher",
+		PromptName: "teacher.agentic", PromptVersion: "v1",
+		Status: "running", StartedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.RecordTurn(context.Background(), "dev", storage.AgentTurn{
+		ID: "turn-failed", AgentRunID: "run-failed", TurnNumber: 1,
+		Text: "checking the learner priorities first", CreatedAt: now,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.Finish(context.Background(), "dev", "run-failed", "failed", "agent run exceeded max turns (1)", "", 1, now.Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ai/agents/run-failed", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "checking the learner priorities first") {
+		t.Errorf("detail page missing the failing turn's text, want it visible even though the run failed\nbody:\n%s", body)
+	}
+	if !strings.Contains(body, "agent run exceeded max turns") {
+		t.Error("detail page missing the run's error message")
 	}
 }
 

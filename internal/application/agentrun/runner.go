@@ -138,6 +138,33 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 			return RunOutput{RunID: runID}, callErr
 		}
 
+		// Persist THIS turn's text before anything else — a model turn
+		// that leads to tool calls, or is the last turn before MaxTurns
+		// is hit, still deserves to show up in the trace viewer, not just
+		// the final successful turn's text (AgentRun.Output). Review
+		// finding: a run that fails MaxTurns previously showed NO model
+		// text at all, since Output is only ever written on success. A
+		// RecordTurn failure gets the same hard-fail treatment as
+		// RecordToolCall — see the Run doc comment's Start/RecordToolCall
+		// -vs-Finish distinction; this is the same category of audit
+		// data.
+		if err := r.runs.RecordTurn(ctx, in.Identity, storage.AgentTurn{
+			ID:         uuid.NewString(),
+			AgentRunID: runID,
+			TurnNumber: turn,
+			Text:       resp.Turn.Text,
+			CreatedAt:  r.clock(),
+		}); err != nil {
+			// turn, not turn-1: CallWithTools DID succeed this iteration
+			// (we have resp) — only the turn's own audit row failed to
+			// persist, same "the model responded, only bookkeeping
+			// failed" situation RecordToolCall's failure path below is
+			// in, which also uses turn.
+			recordErr := fmt.Errorf("agentrun: record turn %d: %w", turn, err)
+			r.finish(ctx, in.Identity, runID, "failed", recordErr.Error(), "", turn)
+			return RunOutput{RunID: runID}, recordErr
+		}
+
 		messages = append(messages, ai.ToolMessage{
 			Role:        "assistant",
 			Text:        resp.Turn.Text,
