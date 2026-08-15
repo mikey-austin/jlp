@@ -385,6 +385,46 @@ func TestHandleLineDropsReceiveWithUnexpectedEnvelopeShapeWithLog(t *testing.T) 
 	}
 }
 
+// TestHandleLineDoesNotBlockOnDuplicateResponseForSameID pins a fix: a
+// daemon that (buggily) sends TWO response lines for the same request
+// id must never block handleLine — and therefore the single goroutine
+// that reads every line off the connection, both responses and every
+// future inbound message — on a full, already-satisfied respCh nobody
+// will ever drain a second time. Regression test for the fix; run with
+// a 2s deadline of its own so a reintroduced blocking send fails this
+// test instead of hanging the whole suite.
+func TestHandleLineDoesNotBlockOnDuplicateResponseForSameID(t *testing.T) {
+	tr := newJSONRPCTransport("unused:0", "+15555550199")
+	respCh := make(chan rpcResponse, 1)
+	tr.pendingMu.Lock()
+	tr.pending[9] = respCh
+	tr.pendingMu.Unlock()
+
+	handlerDone := make(chan struct{})
+	go func() {
+		tr.handleLine([]byte(`{"jsonrpc":"2.0","result":{"timestamp":1},"id":9}`))
+		// Second line for the SAME id, before anyone has drained respCh
+		// — with the old blocking `ch <- resp` this would hang forever.
+		tr.handleLine([]byte(`{"jsonrpc":"2.0","result":{"timestamp":2},"id":9}`))
+		close(handlerDone)
+	}()
+
+	select {
+	case <-handlerDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleLine blocked on a duplicate response for an already-buffered id")
+	}
+
+	select {
+	case resp := <-respCh:
+		if string(resp.Result) != `{"timestamp":1}` {
+			t.Fatalf("resp.Result = %s, want the FIRST response's payload", resp.Result)
+		}
+	default:
+		t.Fatal("expected the first response to still be delivered")
+	}
+}
+
 // TestHandleLineRoutesResponseToPendingCall pins handleLine's other
 // branch: a line carrying an "id" (a response, not a notification) is
 // routed to the matching pending call's channel, not treated as an
@@ -709,5 +749,31 @@ func TestJSONRPCTransportRunFailsFastOnUnreachableDaemon(t *testing.T) {
 	err := tr.Run(context.Background())
 	if err == nil {
 		t.Fatal("expected Run to return an error for an unreachable daemon")
+	}
+}
+
+// TestJSONRPCTransportRunClosesEventsOnDialFailure pins a fix:
+// cmd/jlp/main.go calls Adapter.Start with context.Background() (never
+// cancelled), and Start's own dispatch goroutine is only released by
+// EITHER ctx.Done() OR Events() closing (ports/channels.Channel's own
+// "Events... closed once Run returns" contract). A dial failure that
+// returned early without closing t.events would leak that goroutine
+// forever, every single time the sidecar isn't reachable at boot — a
+// realistic case, since docker-compose.yml has no startup ordering
+// between the app and the signal-cli service. Reading from Events()
+// after a failed Run must return immediately with ok=false, not hang.
+func TestJSONRPCTransportRunClosesEventsOnDialFailure(t *testing.T) {
+	tr := newJSONRPCTransport("127.0.0.1:1", "+15555550199")
+	if err := tr.Run(context.Background()); err == nil {
+		t.Fatal("expected Run to return an error for an unreachable daemon")
+	}
+
+	select {
+	case _, ok := <-tr.Events():
+		if ok {
+			t.Fatal("Events() yielded a value, want the channel simply closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Events() did not close after a failed dial — a dispatch goroutine reading it would leak forever")
 	}
 }

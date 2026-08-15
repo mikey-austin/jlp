@@ -42,6 +42,7 @@ package signal
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -275,6 +276,16 @@ func (t *jsonrpcTransport) Run(ctx context.Context) error {
 	dialer := net.Dialer{Timeout: dialTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", t.addr)
 	if err != nil {
+		// Adapter.Start already spawned dispatch, which is blocked
+		// selecting on ctx.Done()/Events() — cmd/jlp/main.go calls
+		// Start with context.Background() (never cancelled), so with no
+		// close here dispatch would leak forever on a failed initial
+		// dial (e.g. the sidecar not reachable yet, or a misconfigured
+		// RPCURL). Closing t.events makes dispatch's own `ok` check
+		// (channels.go's doc comment: "Events... closed once Run
+		// returns") fire and return cleanly, exactly like the normal
+		// shutdown path below does.
+		close(t.events)
 		return fmt.Errorf("signal: dial %s: %w", t.addr, err)
 	}
 	t.connMu.Lock()
@@ -357,8 +368,14 @@ func (t *jsonrpcTransport) subscribeReceive(ctx context.Context) error {
 func (t *jsonrpcTransport) call(ctx context.Context, method string, params any) (json.RawMessage, error) {
 	id := atomic.AddInt64(&t.nextID, 1)
 	req := rpcRequest{JSONRPC: "2.0", Method: method, Params: params, ID: id}
-	line, err := json.Marshal(req)
-	if err != nil {
+	// json.Encoder.Encode, unlike json.Marshal, appends the trailing
+	// newline this line-delimited protocol needs as part of the same
+	// write into buf — json.Marshal's own returned slice is cap==len,
+	// so a separate append(line, '\n') on it (the original shape here)
+	// forces a second allocation and copy on every single call this
+	// transport ever makes.
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(req); err != nil {
 		return nil, fmt.Errorf("signal: marshal %s request: %w", method, err)
 	}
 
@@ -391,7 +408,7 @@ func (t *jsonrpcTransport) call(ctx context.Context, method string, params any) 
 		t.connMu.Unlock()
 		return nil, fmt.Errorf("signal: %s: not connected", method)
 	}
-	_, err = conn.Write(append(line, '\n'))
+	_, err := conn.Write(buf.Bytes())
 	t.connMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("signal: write %s request: %w", method, err)
@@ -425,7 +442,7 @@ func (t *jsonrpcTransport) readLoop(conn net.Conn) {
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		if len(strings.TrimSpace(string(line))) == 0 {
+		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
 		t.handleLine(line)
@@ -471,7 +488,21 @@ func (t *jsonrpcTransport) handleLine(line []byte) {
 			slog.Warn("signal: response to an unknown or already-completed request id, dropping", "id", *msg.ID)
 			return
 		}
-		ch <- rpcResponse{Result: msg.Result, Error: msg.Error}
+		// Non-blocking, same shape as the receive-notification send
+		// above: respCh is buffered exactly 1 (see call), sized for the
+		// single well-formed response call expects. A daemon that ever
+		// sends two response lines for the same id (a bug, or a
+		// retransmit) must not be able to block THIS goroutine — the
+		// only one reading every line on the connection, both responses
+		// and inbound messages — on a full channel nobody but call's
+		// own already-satisfied select will ever drain again; that
+		// would stall every other pending call and every future inbound
+		// message behind it, not just this one bad line.
+		select {
+		case ch <- rpcResponse{Result: msg.Result, Error: msg.Error}:
+		default:
+			slog.Warn("signal: dropping a duplicate or unexpected extra response for request id", "id", *msg.ID)
+		}
 		return
 	}
 

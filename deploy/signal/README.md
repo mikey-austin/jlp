@@ -30,7 +30,7 @@ own "Signal channel adapter" section.
 ## 1. Start the sidecar
 
 ```sh
-make up-signal   # starts postgres + app + signal-cli, app pointed at tcp://signal-cli:6006
+make up-signal   # starts postgres + app + signal-cli — the app stays dormant (no Signal config set yet), only the sidecar is up
 ```
 
 This starts `signal-cli` in multi-account daemon mode

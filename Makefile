@@ -36,8 +36,8 @@ up-mqtt: ## Start the dev stack plus mosquitto (MQTT event bridge, PRD §31-33/�
 mqtt-tap: ## Tail every learner/# MQTT topic (needs `make up-mqtt` first)
 	$(COMPOSE) --profile mqtt exec mosquitto mosquitto_sub -t 'learner/#' -v
 
-up-signal: ## Start the dev stack plus the signal-cli JSON-RPC sidecar (Signal channel adapter, PRD §20/§20.1), app pointed at it
-	APP_SIGNAL_RPCURL=signal-cli:6006 $(COMPOSE) --profile signal up -d
+up-signal: ## Start the dev stack plus the signal-cli JSON-RPC sidecar (Signal channel adapter, PRD §20/§20.1); set APP_SIGNAL_RPCURL + APP_SIGNAL_NUMBER together in .env once a device is linked (see deploy/signal/README.md), then `make restart`
+	$(COMPOSE) --profile signal up -d
 
 signal-register: ## One-time Signal device link: prints a QR/URI to scan with the Signal app on the account's phone (needs `make up-signal` first; see deploy/signal/README.md)
 	$(COMPOSE) --profile signal exec signal-cli signal-cli --config /var/lib/signal-cli link -n "JLP"

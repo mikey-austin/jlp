@@ -33,7 +33,7 @@ up                 Start the dev stack (app + postgres)
 up-auth            Start dev stack including Caddy + Authelia (https://jlp.localhost:8443)
 up-mail            Start the dev stack plus Mailpit (SMTP capture UI at http://localhost:8025) for the weekly summary
 up-mqtt            Start the dev stack plus mosquitto (MQTT event bridge, PRD §31-33/§12/§59), app pointed at it
-up-signal          Start the dev stack plus the signal-cli JSON-RPC sidecar (Signal channel adapter, PRD §20/§20.1), app pointed at it
+up-signal          Start the dev stack plus the signal-cli JSON-RPC sidecar (Signal channel adapter, PRD §20/§20.1); set APP_SIGNAL_RPCURL + APP_SIGNAL_NUMBER together in .env once a device is linked (see deploy/signal/README.md), then `make restart`
 signal-register    One-time Signal device link: prints a QR/URI to scan with the Signal app on the account's phone (needs `make up-signal` first; see deploy/signal/README.md)
 ollama-pull        Pull a local model into the ollama service (m=qwen3:4b), starting it if needed
 down               Stop the stack (including profile-gated services like Caddy/Authelia)
@@ -525,9 +525,9 @@ look like `signal:+15555550100=dev`, keyed on the sender's own number
 (the untrusted edge, same contract as Slack's — see that section above).
 
 ```sh
-make up-signal          # starts postgres + app + signal-cli, app pointed at tcp://signal-cli:6006
+make up-signal          # starts postgres + app + signal-cli (app stays dormant — Signal config is still unset)
 make signal-register    # one-time device link — prints a QR/URI to scan with the account's phone (see deploy/signal/README.md)
-# then set APP_SIGNAL_RPCURL, APP_SIGNAL_NUMBER, APP_CHANNELS_ALLOWFROM in .env and:
+# then set APP_SIGNAL_RPCURL=signal-cli:6006, APP_SIGNAL_NUMBER, and APP_CHANNELS_ALLOWFROM TOGETHER in .env and:
 make restart
 ```
 
