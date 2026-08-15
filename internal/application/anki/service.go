@@ -38,6 +38,21 @@ var ErrInvalidStatus = errors.New(`anki: status must be "approved" or "rejected"
 // page).
 var ErrAnkiConnectNotConfigured = errors.New("anki: AnkiConnect is not configured")
 
+// ErrCorrectionGated is returned by GenerateFromCorrection when the
+// correction is still under Phase 2's socratic active-recall gate (PRD
+// §9/§53) — storage.CorrectionRecord.IsGated() true, i.e. it carries a
+// hint, is still Status "presented", and hasn't been Revealed. The
+// /anki UI only ever offers the 「Ankiカード作成」 button on an accepted
+// correction, but nothing at the HTTP layer previously stopped a direct
+// POST /corrections/{id}/anki against a still-gated one — that would
+// have written Replacement/ExplanationJA/ExplanationEN straight onto the
+// generated card's Back, spelling out the answer at /anki, without ever
+// flipping Revealed or recording answer.revealed. This is deliberately
+// NOT auto-revealed here: silently revealing on the learner's behalf
+// would corrupt the same active-recall data in the other direction. The
+// caller (the HTTP handler) maps this to 409 Conflict.
+var ErrCorrectionGated = errors.New("anki: correction is still gated behind its socratic hint")
+
 // sourceTypeCorrection is the only AnkiCard.SourceType
 // GenerateFromCorrection ever produces — PRD §19 lists other future
 // sources (recurring grammar problems, vocabulary, tutor lessons,
@@ -88,12 +103,16 @@ func (s *Service) SetConnector(c AnkiConnector) {
 // GenerateFromCorrection reads correctionID's stored context (identity-
 // scoped via storage.FeedbackRepository.GetCorrection — a wrong
 // identity or unknown correction both miss with storage.ErrNotFound),
-// asks the Anki agent to write one flashcard from it, persists the
-// result as a "draft" card, and records anki.card.created.
+// refuses with ErrCorrectionGated if rec.IsGated() (see that error's doc
+// comment), asks the Anki agent to write one flashcard from it, persists
+// the result as a "draft" card, and records anki.card.created.
 func (s *Service) GenerateFromCorrection(ctx context.Context, identity learner.IdentityID, correctionID string) (storage.AnkiCard, error) {
 	rec, err := s.feedback.GetCorrection(ctx, identity, correctionID)
 	if err != nil {
 		return storage.AnkiCard{}, err
+	}
+	if rec.IsGated() {
+		return storage.AnkiCard{}, ErrCorrectionGated
 	}
 
 	front, back, notes, _, err := s.agent.Generate(ctx, anki.GenerateInput{

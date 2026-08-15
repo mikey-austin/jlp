@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -134,12 +135,21 @@ func (s *Server) ankiExportTSV(w http.ResponseWriter, r *http.Request) {
 // still reports how many WERE accepted even though the whole batch gets
 // reverted back to "approved", so the learner sees that count rather
 // than a bare, uninformative failure message.
+//
+// The partial's .Error value is a fixed Japanese phrase, never
+// err.Error() (final-review fix, Finding 4): PushToAnkiConnect's errors
+// wrap AddNotes' raw AnkiConnect/network failure text (see that
+// method's doc comment), which is internal detail with no business
+// leaking into the UI — the detail is logged instead, matching every
+// other handler in this file/package (see correctionAnki's
+// ErrCorrectionGated handling above for the same convention).
 func (s *Server) ankiPush(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
 	added, err := s.opts.Anki.PushToAnkiConnect(r.Context(), ident.ID)
 	if err != nil {
-		RenderPartial(w, r, "anki_push_result", map[string]any{"Error": err.Error(), "Added": added})
+		slog.Error("push to ankiconnect", "identity", ident.ID, "added", added, "err", err)
+		RenderPartial(w, r, "anki_push_result", map[string]any{"Error": "しばらくしてから再度お試しください。", "Added": added})
 		return
 	}
 	RenderPartial(w, r, "anki_push_result", map[string]any{"Added": added})
@@ -148,6 +158,16 @@ func (s *Server) ankiPush(w http.ResponseWriter, r *http.Request) {
 // correctionAnki handles a correction card's 「Ankiカード作成」 button:
 // POST /corrections/{id}/anki, no form fields. Renders the "anki_toast"
 // partial confirming the generated draft.
+//
+// appanki.ErrCorrectionGated (final-review fix) comes back 409
+// Conflict: the /anki page's button only ever appears on an accepted
+// correction, but nothing stops a direct same-origin POST against a
+// correction still under Phase 2's socratic pre-reveal gate — without
+// this check the generated card's Back would spell out the answer
+// without ever flipping Revealed or recording answer.revealed,
+// corrupting the active-recall data the gate exists to protect. The
+// message is fixed, not err.Error(), matching every other handler in
+// this file/package (see also ankiPush's own fix below).
 func (s *Server) correctionAnki(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	id := chi.URLParam(r, "id")
@@ -156,6 +176,10 @@ func (s *Server) correctionAnki(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			http.NotFound(w, r)
+			return
+		}
+		if errors.Is(err, appanki.ErrCorrectionGated) {
+			http.Error(w, "まだ答えを見ていない訂正からはカードを作成できません", http.StatusConflict)
 			return
 		}
 		http.Error(w, "could not generate anki card", http.StatusInternalServerError)

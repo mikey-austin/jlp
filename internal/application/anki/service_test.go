@@ -300,6 +300,63 @@ func TestGenerateFromCorrectionUnknownIDMisses(t *testing.T) {
 	}
 }
 
+// TestGenerateFromCorrectionRefusesGatedCorrection pins the final-review
+// fix: a still-gated socratic correction (HasHint() && Status ==
+// "presented" && !Revealed — the exact predicate correction_card.html.tmpl
+// and the JSON API's isGatedCorrection use) must never reach the Anki
+// agent. Before this fix, POSTing /corrections/{id}/anki directly (the
+// /anki page's button only ever appears for accepted corrections, but
+// nothing stopped a same-origin request against a still-gated one) would
+// spell out Replacement/ExplanationJA/ExplanationEN on the generated
+// card's Back, defeating the socratic gate without ever flipping
+// Revealed or recording answer.revealed — silently corrupting Phase 2's
+// active-recall data. No card and no event may be persisted.
+func TestGenerateFromCorrectionRefusesGatedCorrection(t *testing.T) {
+	h := newTestHarness()
+	gated := testCorrection("corr-gated")
+	gated.Status = "presented"
+	gated.HintJA = "ヒント：形容詞の活用を確認してください。"
+	gated.HintEN = "Hint: check the adjective conjugation."
+	gated.Revealed = false
+	h.feedback.seed(testIdentity, gated)
+
+	_, err := h.svc.GenerateFromCorrection(context.Background(), testIdentity, "corr-gated")
+	if !errors.Is(err, appanki.ErrCorrectionGated) {
+		t.Fatalf("err = %v, want ErrCorrectionGated", err)
+	}
+
+	if len(h.cards.byID) != 0 {
+		t.Fatalf("cards persisted = %d, want 0 (a gated correction must not produce a draft card)", len(h.cards.byID))
+	}
+	if len(h.events.appended) != 0 {
+		t.Fatalf("events appended = %d, want 0 (a gated correction must not record anki.card.created)", len(h.events.appended))
+	}
+}
+
+// TestGenerateFromCorrectionAllowsRevealedSocraticCorrection pins the
+// other half of the gate: once RevealCorrection has flipped Revealed
+// (or the learner solved it and Status advanced past "presented"), the
+// exact same socratic correction generates a card normally — the fix
+// must refuse only WHILE gated, never permanently, and must never
+// auto-reveal on the learner's behalf.
+func TestGenerateFromCorrectionAllowsRevealedSocraticCorrection(t *testing.T) {
+	h := newTestHarness()
+	revealed := testCorrection("corr-revealed")
+	revealed.Status = "presented"
+	revealed.HintJA = "ヒント"
+	revealed.HintEN = "hint"
+	revealed.Revealed = true
+	h.feedback.seed(testIdentity, revealed)
+
+	card, err := h.svc.GenerateFromCorrection(context.Background(), testIdentity, "corr-revealed")
+	if err != nil {
+		t.Fatalf("GenerateFromCorrection returned error: %v, want nil (a revealed socratic correction is no longer gated)", err)
+	}
+	if card.Status != "draft" {
+		t.Fatalf("Status = %q, want draft", card.Status)
+	}
+}
+
 // TestGenerateFromCorrectionSurvivesEventRecordFailure pins the
 // code-review fix: repo.Insert has already committed the draft card by
 // the time the anki.card.created Record call runs, so a Recorder
