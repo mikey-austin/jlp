@@ -22,16 +22,25 @@ type diffSpanView struct{ Class, Text string }
 // correctionCardView is a single correction.Correction as the
 // correction_card partial renders it — and as Task 15's rating widget
 // will consume it. HintJA/HintEN, Attempts, and Revealed are Phase 2
-// Task 8's active-recall fields (PRD §9/§53): HintJA non-empty is the
-// template's own signal that this is a socratic correction — see
-// correction_card.html.tmpl's pre-reveal gate — rather than a separate
-// bool the view and template could drift out of agreement on.
+// Task 8's active-recall fields (PRD §9/§53). HasHint is copied
+// straight from correction.Correction.HasHint() — the domain's own
+// JA-OR-EN-non-empty definition of "this is a socratic correction" —
+// rather than re-derived here from HintJA alone: a hint-ful response
+// with an empty JA but populated EN (the schema permits it; nothing
+// stops a real model from doing this even though fakeai never does)
+// would otherwise pass the domain's HasHint() check (and so fire
+// hint.shown — see RequestFeedback) while this view's own gate stayed
+// closed on an empty HintJA, showing the answer in the clear the
+// instant hint.shown claimed one had been shown. See
+// correction_card.html.tmpl's pre-reveal gate, which reads HasHint,
+// never HintJA, for exactly this reason.
 type correctionCardView struct {
 	ID, Type, Severity, Original, Replacement string
 	ExplanationJA, ExplanationEN, Status      string
 	DiffSpans                                 []diffSpanView
 	Concepts                                  []string // grammar concept slugs; chips link /grammar/{slug} (Task 3)
 	HintJA, HintEN                            string
+	HasHint                                   bool
 	Attempts                                  int
 	Revealed                                  bool
 }
@@ -78,6 +87,7 @@ func toCorrectionCardView(cv feedback.CorrectionView) correctionCardView {
 		Concepts:      cv.Concepts,
 		HintJA:        cv.Hint.JA,
 		HintEN:        cv.Hint.EN,
+		HasHint:       cv.HasHint(),
 		Attempts:      cv.Attempts,
 		Revealed:      cv.Revealed,
 	}
@@ -85,7 +95,7 @@ func toCorrectionCardView(cv feedback.CorrectionView) correctionCardView {
 
 // toFeedbackView maps a feedback.Feedback onto the "feedback" partial's
 // view. HasGatedCard is true when ANY card is still in
-// correction_card.html.tmpl's socratic pre-reveal gate (HintJA set,
+// correction_card.html.tmpl's socratic pre-reveal gate (HasHint(),
 // Status "presented", not yet Revealed) — when it is, the whole-
 // selection "修正案" diff block above the individual cards is
 // suppressed entirely (see the "feedback" partial): that block renders
@@ -104,7 +114,7 @@ func toFeedbackView(fb feedback.Feedback) feedbackView {
 	gated := false
 	for _, c := range fb.Corrections {
 		cards = append(cards, toCorrectionCardView(c))
-		if c.Hint.JA != "" && c.Status == "presented" && !c.Revealed {
+		if c.HasHint() && c.Status == "presented" && !c.Revealed {
 			gated = true
 		}
 	}

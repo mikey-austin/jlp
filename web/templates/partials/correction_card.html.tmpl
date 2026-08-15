@@ -2,7 +2,7 @@
 <article class="correction" id="corr-{{.ID}}" data-status="{{.Status}}">
   <header><span class="badge type">{{.Type}}</span>
           <span class="badge sev sev-{{.Severity}}">{{.Severity}}</span></header>
-  {{if and .HintJA (eq .Status "presented") (not .Revealed)}}
+  {{if and .HasHint (eq .Status "presented") (not .Revealed)}}
   {{/* Socratic pre-reveal gate (Phase 2 Task 8, PRD §9/§53): Replacement,
        the inline diff, and Explanation are ALL withheld here — not just
        <ins>{{.Replacement}}</ins> — because Explanation routinely spells
@@ -35,7 +35,7 @@
     <button hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"rejected"}'
             hx-target="#corr-{{.ID}}" hx-swap="outerHTML">同意しない</button>
   </footer>
-  {{if .HintJA}}
+  {{if .HasHint}}
   <form class="retry" hx-post="/corrections/{{.ID}}/retry" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
     <input type="text" name="attempt" placeholder="正しい形を書いてください" required autocomplete="off">
     <button type="submit">送信</button>

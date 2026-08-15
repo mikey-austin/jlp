@@ -20,6 +20,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
+	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
@@ -745,6 +746,44 @@ func TestNonSocraticCorrectionCardHasNoRetryAffordance(t *testing.T) {
 	}
 	if !strings.Contains(body, "納得した") {
 		t.Fatalf("non-socratic card missing the plain accept button: %s", body)
+	}
+}
+
+// TestToCorrectionCardViewHasHintMatchesDomainNotHintJAAlone pins the
+// code-review fix: HasHint must come from correction.Correction.
+// HasHint() (JA-OR-EN non-empty), not be re-derived from HintJA alone.
+// schemas/defs/correction_result.v2.json's hint object requires BOTH
+// "ja" and "en" but enforces no minLength on either — fakeai never
+// produces an asymmetric hint, but nothing stops a real model from
+// returning hint={ja:"", en:"..."} , and if HasHint had stayed keyed
+// off HintJA alone, such a correction would still fire hint.shown
+// (application/feedback.Service.RequestFeedback uses the same
+// HasHint()) while this view's gate — and correction_card.html.tmpl's,
+// which reads HasHint directly — stayed closed, printing
+// Replacement/diff/Explanation in the clear the instant hint.shown
+// claimed one had been shown.
+func TestToCorrectionCardViewHasHintMatchesDomainNotHintJAAlone(t *testing.T) {
+	cv := appfeedback.CorrectionView{
+		Correction: correction.Correction{
+			ID:          "corr-1",
+			Original:    "面白いでした",
+			Replacement: "面白かったです",
+			Hint:        correction.Explanation{JA: "", EN: "some real hint text"},
+		},
+		Status: "presented",
+	}
+	if !cv.HasHint() {
+		t.Fatal("precondition failed: domain HasHint() should be true when EN is set even with an empty JA")
+	}
+
+	view := toCorrectionCardView(cv)
+	if !view.HasHint {
+		t.Fatalf("correctionCardView.HasHint = false, want true (domain HasHint() is true): %+v", view)
+	}
+
+	fbView := toFeedbackView(appfeedback.Feedback{Corrections: []appfeedback.CorrectionView{cv}})
+	if !fbView.HasGatedCard {
+		t.Fatal("feedbackView.HasGatedCard = false, want true — a hint-ful, unresolved, unrevealed correction with an empty HintJA must still gate the whole-selection diff block, or it leaks Replacement via fb.Diff while the per-card gate (keyed off the same HasHint) is closed")
 	}
 }
 

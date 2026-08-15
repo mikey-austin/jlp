@@ -32,18 +32,24 @@ const (
 	schemaV1 = "correction_result.v1"
 	schemaV2 = "correction_result.v2"
 
-	// socraticMarker is the substring internal/agent/teacher's
+	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
-	// "Teacher mode: {{.TeacherMode}}" line; see its doc comment). It
+	// "Teacher mode: {{.TeacherMode}}" line; see its doc comment). This
+	// must be the full "Teacher mode: socratic" phrase, not a bare
+	// "socratic" substring: a bare substring would also match the word
+	// "socratic" appearing anywhere else in User — including inside
+	// session.Session.Purpose, learner-supplied free text rendered
+	// verbatim into the SAME template's "Session purpose: {{.Purpose}}"
+	// line (e.g. a "teacher"-mode session whose Purpose happens to be
+	// "practicing the socratic method" would otherwise get hints
+	// attached despite not being in socratic mode at all) — and it
 	// cannot collide with the v3 SYSTEM template's own, always-present
-	// "Teacher mode 'socratic': ..." hint instruction (different
-	// punctuation — quote vs colon right after "mode" — and that
-	// sentence lives in System, not User) or with any other static User
-	// text, so a plain substring check on req.User is an unambiguous
-	// read of the CURRENT session's mode, not just of whether the
-	// capability exists.
-	socraticMarker = "socratic"
+	// "Teacher mode 'socratic': ..." hint instruction either (different
+	// punctuation — quote vs colon right after "mode" — though that
+	// sentence living in System, never checked here, already rules it
+	// out on its own).
+	socraticMarker = "Teacher mode: socratic"
 )
 
 // supportedSchemas is the set schemaV1/schemaV2 above name; presented as

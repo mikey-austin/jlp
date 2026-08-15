@@ -257,6 +257,45 @@ func TestFakeAdapterNonSocraticModeOmitsHint(t *testing.T) {
 	}
 }
 
+// TestFakeAdapterPurposeContainingSocraticDoesNotFalsePositive pins the
+// code-review fix: session.Session.Purpose is learner-supplied free
+// text, rendered verbatim into the SAME v3 USER template as the
+// "Teacher mode: {{.TeacherMode}}" line (see teacher.feedback.v3.user.md's
+// "Session purpose: {{.Purpose}}" line, right below it) — a "teacher"
+// mode session whose Purpose happens to contain the word "socratic"
+// (e.g. "practicing the socratic method") must NOT get hints attached.
+// Before the fix, socraticMarker was a bare "socratic" substring check
+// over the whole rendered User, which this Purpose text alone would
+// have satisfied regardless of the actual TeacherMode.
+func TestFakeAdapterPurposeContainingSocraticDoesNotFalsePositive(t *testing.T) {
+	gen := New()
+	req := ai.StructuredRequest{
+		PromptName:    "teacher.feedback",
+		PromptVersion: "v3",
+		System:        "system prompt",
+		User:          "Teacher mode: teacher\n\nSession purpose: practicing the socratic method\n\nSelection to review:\nとても面白いでした",
+		SchemaName:    "correction_result.v2",
+		Agent:         "teacher",
+	}
+	resp, err := gen.GenerateStructured(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStructured returned error: %v", err)
+	}
+	if err := schemas.Validate("correction_result.v2", resp.JSON); err != nil {
+		t.Fatalf("response JSON failed schema validation: %v\nJSON: %s", err, resp.JSON)
+	}
+	var got wantResult
+	if err := json.Unmarshal(resp.JSON, &got); err != nil {
+		t.Fatalf("unmarshal response JSON: %v", err)
+	}
+	if len(got.Corrections) != 1 {
+		t.Fatalf("Corrections = %+v, want exactly 1", got.Corrections)
+	}
+	if got.Corrections[0].Hint != nil {
+		t.Fatalf("Hint = %+v, want nil — TeacherMode is \"teacher\", the word \"socratic\" only appears inside the unrelated Purpose text", got.Corrections[0].Hint)
+	}
+}
+
 // TestFakeAdapterSchemaV1StillSupported: fakeai must keep answering
 // schemaV1 requests exactly as before Task 8 — v1's item schema has no
 // "hint" property at all, so a v1-shaped response must never carry one,
