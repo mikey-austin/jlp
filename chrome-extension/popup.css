@@ -1,0 +1,67 @@
+/* popup.css — hand-written, mirroring web/static/css/app.css's tokens and
+   correction-card classes (accent #b7282e, insertion/deletion colors,
+   severity badges) so a correction rendered by the extension looks like
+   the same feature rendered in the app itself. No shared stylesheet: the
+   extension vendors nothing and has no build step, so these rules are a
+   deliberate, small, hand-kept copy — see README.md's vendoring note. */
+:root {
+  --bg: #ffffff;
+  --fg: #1a1a1a;
+  --accent: #b7282e;
+  --muted: #666;
+  --border: #ddd;
+  font-family: "Hiragino Sans", "Noto Sans JP", system-ui, sans-serif;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  min-width: 380px;
+  max-width: 480px;
+  background: var(--bg);
+  color: var(--fg);
+  font-size: 14px;
+}
+.popup-header {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .5rem .8rem;
+  border-bottom: 1px solid var(--border);
+}
+.popup-header .brand { font-weight: 700; color: var(--accent); }
+main { padding: .8rem; }
+.hint { color: var(--muted); font-size: .9rem; margin: 0 0 .6rem; }
+
+.cards { display: flex; flex-direction: column; gap: .8rem; }
+.correction { border: 1px solid var(--border); border-left: 3px solid var(--border); padding: .6rem .8rem; }
+.correction header { display: flex; gap: .5rem; margin-bottom: .4rem; }
+.badge { display: inline-block; padding: .1rem .5rem; border-radius: 1rem; font-size: .8rem; background: #eee; color: var(--fg); }
+.badge.sev-incorrect { background: var(--accent); color: #fff; }
+.badge.sev-unnatural { background: #e69500; color: #fff; }
+.correction .pair { font-size: 1rem; margin: .3rem 0; }
+.correction .pair del { color: var(--accent); text-decoration: line-through; }
+.correction .pair ins { color: #1a7a1a; text-decoration: none; }
+.correction .expl { margin: .3rem 0; }
+.correction .expl.en { color: var(--muted); font-size: .85rem; }
+.correction .hint { border-left: 3px solid var(--accent); padding: .3rem .6rem; margin: .4rem 0; background: #fdf4f0; }
+.correction .hint.en { color: var(--muted); font-size: .85rem; }
+.all-good { color: var(--muted); }
+
+.error-banner { color: var(--accent); font-weight: 700; }
+
+form.jlp-form { display: flex; flex-direction: column; gap: .5rem; max-width: 26rem; }
+form.jlp-form label { display: flex; flex-direction: column; gap: .2rem; font-size: .9rem; }
+form.jlp-form input {
+  padding: .35rem .5rem;
+  border: 1px solid var(--border);
+  font-size: 1rem;
+}
+form.jlp-form button {
+  align-self: flex-start;
+  padding: .35rem 1rem;
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: .3rem;
+  cursor: pointer;
+}

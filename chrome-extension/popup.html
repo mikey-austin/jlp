@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>JLP</title>
+<script>
+  // Conditional shim load: document.write only fires (and only then
+  // does the browser request shim/chrome-shim.js at all) when this page
+  // is NOT running inside a real extension context. A packed extension
+  // (chrome-extension:// origin, real window.chrome.storage present)
+  // never triggers this, so `make ext-build` can safely exclude shim/
+  // from the zip without breaking anything. See README.md.
+  if (!(window.chrome && window.chrome.storage)) {
+    document.write('<script src="shim/chrome-shim.js"><\/script>');
+  }
+</script>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header class="popup-header"><span class="brand">JLP</span></header>
+<main>
+  <section id="feedback-view" hidden>
+    <p id="feedback-status" class="hint"></p>
+    <div id="feedback-results" class="cards"></div>
+  </section>
+
+  <section id="vocab-view" hidden>
+    <p id="vocab-status" class="hint"></p>
+    <form id="vocab-form" class="jlp-form">
+      <label>表現<input type="text" id="vocab-expression" required></label>
+      <button type="submit">保存</button>
+    </form>
+  </section>
+
+  <p id="empty-state" class="hint">日本語テキストを選択して右クリックしてください。</p>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>

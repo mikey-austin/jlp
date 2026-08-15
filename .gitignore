@@ -6,3 +6,4 @@ deploy/authelia/users.dev.yml
 deploy/authelia/users.prod.yml
 deploy/.env.prod
 eval/reports/
+dist/

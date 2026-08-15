@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<title>JLP 設定</title>
+<script>
+  // See popup.html for why this conditional load is safe to leave in a
+  // packed extension: it never fires (and shim/chrome-shim.js is never
+  // requested) once a real window.chrome.storage exists.
+  if (!(window.chrome && window.chrome.storage)) {
+    document.write('<script src="shim/chrome-shim.js"><\/script>');
+  }
+</script>
+<link rel="stylesheet" href="popup.css">
+</head>
+<body>
+<header class="popup-header"><span class="brand">JLP 設定</span></header>
+<main>
+  <form id="options-form" class="jlp-form">
+    <label>Base URL
+      <input type="url" id="base-url" required placeholder="http://localhost:8080">
+    </label>
+    <label>デフォルトセッション ID（任意）
+      <input type="text" id="session-id" placeholder="未設定なら最新のセッションを使用">
+    </label>
+    <button type="submit">保存</button>
+  </form>
+  <p id="options-status" class="hint"></p>
+</main>
+<script src="options.js"></script>
+</body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "JLP — Japanese Learning Platform",
+  "version": "1.0.0",
+  "description": "Right-click Japanese text anywhere on the web to get JLP corrections or save it to your vocabulary list. A pure client of the JLP JSON API — no learning-domain logic lives in the extension (PRD §40).",
+  "permissions": ["contextMenus", "storage", "activeTab", "scripting"],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "JLP"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  }
+}

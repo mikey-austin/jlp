@@ -51,6 +51,7 @@ sqlc               Regenerate sqlc query code
 db-shell           psql into the dev database
 test-integration   Adapter tests against compose services
 vendor-js          Vendor pinned htmx + alpine into web/static/js
+ext-build          Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
 deploy-local       Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
 deploy             Deploy to $(DEPLOY_HOST) over SSH (set in .env)
 deploy-logs        Tail remote app logs
@@ -221,6 +222,25 @@ provider's Japanese. Point `APP_AI_PROVIDER` (or `APP_AI_ROUTES` for
 `teacher.feedback`) at `anthropic`/`ollama` to get a real quality
 signal. `jlp eval` is a batch CLI command with no browser step.
 
+## Chrome extension
+
+`chrome-extension/` is a pure client of the `/api/v1` JSON API (PRD
+§40 — no learning-domain logic lives there): right-click Japanese text
+on any page to get JLP corrections or save it to your vocabulary list,
+styled to match the app. No build tooling — plain ES modules loaded
+straight off disk by Chrome.
+
+```sh
+make ext-build   # -> dist/jlp-extension.zip (dist/ gitignored)
+```
+
+See **[`chrome-extension/README.md`](chrome-extension/README.md)** for
+the manual `chrome://extensions` install checklist, the
+`document_id`-resolution workaround (there's no
+`GET /api/v1/sessions/{id}/document` endpoint yet), and the CORS-vs-
+extension-host-permissions distinction that governs how its API calls
+work (and how they're verified without a real install).
+
 ## Deploying
 
 The production stack (`deploy/compose.prod.yml`) is a separate compose
@@ -318,6 +338,7 @@ internal/prompts/            embedded, versioned prompt templates
 internal/schemas/            embedded JSON Schemas + validator
 web/templates/                layout, pages, HTMX partials
 web/static/                   CSS, vendored htmx/alpine, PWA assets
+chrome-extension/             MV3 extension: pure /api/v1 JSON client, no build step
 db/queries/                   sqlc query files
 internal/adapters/postgres/migrationsfs/  goose SQL migrations (embedded)
 deploy/                        production compose, Caddyfile, Authelia config
