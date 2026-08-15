@@ -44,6 +44,11 @@ services:
       APP_SUMMARY_TO: ${APP_SUMMARY_TO:-}
       APP_SUMMARY_FROM: ${APP_SUMMARY_FROM:-}
       APP_SMTP_ADDR: ${APP_SMTP_ADDR:-}
+      # Empty (the default) keeps the MQTT event bridge entirely
+      # dormant — see internal/config.MQTT's doc comment. `make up-mqtt`
+      # (the "mqtt" profile) sets this to the in-network mosquitto
+      # service's address.
+      APP_MQTT_URL: ${APP_MQTT_URL:-}
     depends_on:
       postgres: { condition: service_healthy }
 
@@ -86,6 +91,12 @@ services:
       APP_SUMMARY_TO: ${APP_SUMMARY_TO:-}
       APP_SUMMARY_FROM: ${APP_SUMMARY_FROM:-}
       APP_SMTP_ADDR: ${APP_SMTP_ADDR:-}
+      # `make test-integration` (and `make mqtt-tap`/`make mqtt-demo`,
+      # which exec into the mosquitto service directly rather than
+      # this one) run in THIS container too; the MQTT integration test
+      # (internal/adapters/mqtt/mqtt_test.go) skips itself unless this
+      # is set — see that file's testBrokerURL doc comment.
+      APP_MQTT_URL: ${APP_MQTT_URL:-}
 
   caddy:
     image: caddy:2
@@ -112,6 +123,19 @@ services:
     image: axllent/mailpit
     profiles: ["mail"]
     ports: ["8025:8025"]
+
+  mosquitto:
+    # MQTT broker for the event bridge (Phase 3 Task 6, PRD
+    # §31-33/§12/§59): internal/adapters/mqtt.Bridge dials this at
+    # tcp://mosquitto:1883 (APP_MQTT_URL, set by `make up-mqtt` below).
+    # No host port published — in-network only, same "join it
+    # explicitly" posture as ollama/mailpit above (`--profile mqtt`).
+    # See deploy/mosquitto/mosquitto.conf for the (LAN-dev-only,
+    # allow_anonymous) broker config.
+    image: eclipse-mosquitto:2
+    profiles: ["mqtt"]
+    volumes:
+      - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
   authelia:
     # Pinned to the same 4.39 minor as deploy/compose.prod.yml (parity

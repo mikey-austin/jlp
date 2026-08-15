@@ -17,6 +17,7 @@ type Config struct {
 	Anki     Anki
 	Summary  Summary
 	SMTP     SMTP
+	MQTT     MQTT
 }
 
 type Server struct {
@@ -142,6 +143,22 @@ type SMTP struct {
 	Addr string
 }
 
+// MQTT configures the optional MQTT event bridge
+// (internal/adapters/mqtt, Phase 3 Task 6, PRD §31-33/§12/§59). URL
+// empty — the default — keeps the bridge entirely dormant: main.go
+// never constructs a mqtt.Bridge, no broker connection is ever
+// attempted, and no learning event is ever published outside the
+// process. This mirrors Anki.ConnectURL's and Summary's own
+// "dormant unless explicitly configured" contract above — not
+// validated as required by validate below for the same reason.
+//
+// URL is a paho broker URI, e.g. "tcp://mosquitto:1883" — see
+// docker-compose.yml's "mqtt" profile and `make up-mqtt`, which set
+// it to exactly that for the in-network mosquitto service.
+type MQTT struct {
+	URL string
+}
+
 func Load() (Config, error) {
 	v := viper.New()
 	v.SetDefault("server.port", 8080)
@@ -183,7 +200,7 @@ func Load() (Config, error) {
 		"auth.mode", "auth.static.id", "auth.static.displayname",
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
 		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes",
-		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr"} {
+		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}

@@ -32,6 +32,7 @@ build              Build all images
 up                 Start the dev stack (app + postgres)
 up-auth            Start dev stack including Caddy + Authelia (https://jlp.localhost:8443)
 up-mail            Start the dev stack plus Mailpit (SMTP capture UI at http://localhost:8025) for the weekly summary
+up-mqtt            Start the dev stack plus mosquitto (MQTT event bridge, PRD §31-33/§12/§59), app pointed at it
 ollama-pull        Pull a local model into the ollama service (m=qwen3:4b), starting it if needed
 down               Stop the stack (including profile-gated services like Caddy/Authelia)
 restart            Restart the app service
@@ -55,6 +56,8 @@ vendor-js          Vendor pinned htmx + alpine into web/static/js
 vendor-fonts       Vendor pinned Instrument Sans + JetBrains Mono woff2 into web/static/fonts (design system, PRD §39/§45: no CDN fonts at runtime)
 ext-build          Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
 send-summary       Trigger one weekly summary send immediately (needs APP_SUMMARY_TO set; brings up Mailpit + postgres first)
+mqtt-tap           Tail every learner/# MQTT topic (needs `make up-mqtt` first)
+mqtt-demo          Publish a sample vocabulary.lookup ingest event over MQTT (needs `make up-mqtt` first); appears on /vocabulary for the "dev" identity
 deploy-local       Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
 deploy             Deploy to $(DEPLOY_HOST) over SSH (set in .env)
 deploy-logs        Tail remote app logs
@@ -332,6 +335,57 @@ paths target the single static identity (`APP_AUTH_STATIC_ID`) —
 per-learner scheduling across multiple real accounts is a Phase 4
 concern.
 
+## MQTT event bridge (PRD §31-33, §12, §59)
+
+`internal/adapters/mqtt.Bridge` mirrors every learning event onto MQTT
+and accepts external vocabulary ingestion back — dormant by default,
+like the weekly summary and AnkiConnect push above: with no
+`APP_MQTT_URL` set, `cmd/jlp/main.go` never constructs it and zero
+broker connections are ever attempted.
+
+**Outbound**: every one of `event.AllTypes()` (writing, feedback,
+correction, grammar, vocabulary, hint, answer, confidence, quiz, anki,
+tutor — the full learning-event catalog) is republished, QoS1, to
+
+```text
+learner/{identity}/{category}/{type}
+```
+
+where `{category}` is the type's first dot-segment (e.g.
+`vocabulary.looked-up` → `vocabulary`). The payload is a
+transport-independent JSON envelope —
+`{id, identity_id, session_id, type, subject, evidence, occurred_at}`
+— built entirely inside the adapter; the domain `event.LearningEvent`
+type itself carries no MQTT/JSON-tag knowledge.
+
+**Inbound**: the bridge subscribes `learner/+/vocabulary/ingest` and
+routes whatever arrives there through the *same*
+`application/vocabulary.Service.Ingest` write path (and the same wire
+shape) as `POST /api/v1/vocabulary/events` — this is what lets an
+external reading app on your LAN publish a lookup directly to the
+broker instead of making an HTTP call. `{identity}` comes from the
+topic segment and must already exist (`identities.Get`); an unknown
+identity, or a payload that isn't valid JSON, is logged and dropped,
+never surfaced as an error to the publisher.
+
+**Trust model**: `deploy/mosquitto/mosquitto.conf` runs
+`allow_anonymous true` with no host port published — anyone who can
+reach the broker (any container on the compose network today) can
+publish as any identity string. This is appropriate for a private LAN
+dev broker, not for one exposed further; a production deployment that
+opens MQTT beyond the LAN needs its own broker-level authentication/
+ACLs, which this bridge does not provide.
+
+```sh
+make up-mqtt   # starts postgres + app + mosquitto, app pointed at tcp://mosquitto:1883
+make mqtt-tap  # tails every learner/# topic (mosquitto_sub -t 'learner/#' -v)
+make mqtt-demo # publishes a sample vocabulary.lookup ingest event; appears on /vocabulary
+```
+
+Reconnection after the initial connect is handled by paho's
+`AutoReconnect` — a mosquitto restart while the app is running self-
+heals without restarting the app.
+
 ## Deploying
 
 The production stack (`deploy/compose.prod.yml`) is a separate compose
@@ -413,6 +467,18 @@ make arch-check         # depguard only, PRD §75 dependency-direction rules
 All four are expected to pass before every commit; `test-integration`
 and `arch-check` are the ones easiest to forget locally since they need
 services running or a narrower lint pass, respectively.
+
+`internal/adapters/mqtt/mqtt_test.go`'s integration tests (build tag
+`integration`, same as every other adapter integration test) are
+included in `make test-integration`'s package list but skip themselves
+individually unless `APP_MQTT_URL` is set — so a plain
+`make test-integration` stays green with zero mosquitto dependency.
+To actually run them: `make up-mqtt` first (starts mosquitto), then
+
+```sh
+docker compose run --rm -e APP_MQTT_URL=tcp://mosquitto:1883 tools \
+    go test -tags integration ./internal/adapters/mqtt/...
+```
 
 ## Project layout
 

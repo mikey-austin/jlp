@@ -11,6 +11,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	adaptermqtt "github.com/mikeyaustin/jlp/internal/adapters/mqtt"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	smtpadapter "github.com/mikeyaustin/jlp/internal/adapters/smtp"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
@@ -124,6 +125,27 @@ func main() {
 		// produced, in the learner's own writing. vocabRepo itself was
 		// constructed above, alongside teachingPlanner.
 		vocabSvc := vocabulary.NewService(vocabRepo, recorder)
+
+		// MQTT event bridge (Phase 3 Task 6, PRD §31-33/§12/§59):
+		// adaptermqtt.NewBridge subscribes every event.AllTypes() entry
+		// on bus internally (see that constructor's own doc comment),
+		// so it's constructed here, after bus/vocabSvc/identities are
+		// all wired above. The whole block is skipped unless
+		// cfg.MQTT.URL is set — see config.MQTT's "dormant by default"
+		// doc comment: an operator who never sets APP_MQTT_URL gets
+		// zero MQTT connections attempted, ever, matching Anki.ConnectURL's
+		// and Summary.Enabled's own opt-in contracts above.
+		if cfg.MQTT.URL != "" {
+			mqttBridge, err := adaptermqtt.NewBridge(cfg.MQTT.URL, bus, vocabSvc, identities)
+			if err != nil {
+				slog.Error("mqtt", "err", err)
+				os.Exit(1)
+			}
+			if err := mqttBridge.Start(context.Background()); err != nil {
+				slog.Error("mqtt", "err", err)
+				os.Exit(1)
+			}
+		}
 
 		teacherAgent := teacher.New(aiGen)
 		// feedbackRepo is named (rather than inlined like the other

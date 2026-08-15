@@ -123,6 +123,35 @@ func TestAnkiConnectURLEnvOverride(t *testing.T) {
 	}
 }
 
+// TestMQTTURLDefaultsEmptyAndDoesNotRequireValidation pins the MQTT
+// bridge's "dormant by default" contract (PRD §31-33/§12/§59, Phase 3
+// Task 6): with no APP_MQTT_URL set, Config.MQTT.URL is "" and Load
+// still succeeds — mirrors TestAnkiConnectURLDefaultsEmptyAndDoesNotRequireValidation
+// above for the analogous "empty means main.go never constructs the
+// adapter" contract.
+func TestMQTTURLDefaultsEmptyAndDoesNotRequireValidation(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MQTT.URL != "" {
+		t.Fatalf("MQTT.URL default = %q, want empty", cfg.MQTT.URL)
+	}
+}
+
+func TestMQTTURLEnvOverride(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_MQTT_URL", "tcp://mosquitto:1883")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.MQTT.URL != "tcp://mosquitto:1883" {
+		t.Fatalf("MQTT.URL = %q, want override applied", cfg.MQTT.URL)
+	}
+}
+
 func TestEmptyEnvVarDoesNotClobberDefault(t *testing.T) {
 	t.Setenv("APP_DATABASE_URL", "postgres://x")
 	// docker-compose.yml passes APP_AI_ANTHROPIC_MODEL/BASEURL through as

@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth up-mail down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary
+.PHONY: help init build up up-auth up-mail up-mqtt down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -29,6 +29,16 @@ ollama-pull: ## Pull a local model into the ollama service (m=qwen3:4b), startin
 	@test -n "$(m)" || (echo "usage: make ollama-pull m=qwen3:4b"; exit 1)
 	$(COMPOSE) --profile ollama up -d ollama
 	$(COMPOSE) --profile ollama exec ollama ollama pull $(m)
+
+up-mqtt: ## Start the dev stack plus mosquitto (MQTT event bridge, PRD §31-33/§12/§59), app pointed at it
+	APP_MQTT_URL=tcp://mosquitto:1883 $(COMPOSE) --profile mqtt up -d
+
+mqtt-tap: ## Tail every learner/# MQTT topic (needs `make up-mqtt` first)
+	$(COMPOSE) --profile mqtt exec mosquitto mosquitto_sub -t 'learner/#' -v
+
+mqtt-demo: ## Publish a sample vocabulary.lookup ingest event over MQTT (needs `make up-mqtt` first); appears on /vocabulary for the "dev" identity
+	$(COMPOSE) --profile mqtt exec mosquitto mosquitto_pub -t 'learner/dev/vocabulary/ingest' -m \
+		'{"type":"vocabulary.lookup","expression":"待ち遠しい","reading":"まちどおしい","definition":"looking forward to, can hardly wait","example":"日曜日が待ち遠しいです。","source":{"type":"mqtt-demo","title":"make mqtt-demo"}}'
 
 down: ## Stop the stack (including profile-gated services like Caddy/Authelia)
 	$(COMPOSE) --profile auth down
