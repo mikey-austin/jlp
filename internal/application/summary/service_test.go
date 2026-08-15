@@ -7,15 +7,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"    //nolint:depguard // fakeai/inprocbus are port-shaped test doubles; PRD §75 forbids agents/application importing real adapters, not fakes constructed in tests
-	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus" //nolint:depguard // see fakeai above
+	"github.com/mikeyaustin/jlp/internal/adapters/fakeai" //nolint:depguard // fakeai is a port-shaped test double; PRD §75 forbids agents/application importing real adapters, not fakes constructed in tests
 	agentsummary "github.com/mikeyaustin/jlp/internal/agent/summary"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
-	"github.com/mikeyaustin/jlp/internal/application/learning"
 	appsummary "github.com/mikeyaustin/jlp/internal/application/summary"
-	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
-	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/notifications"
@@ -95,22 +91,6 @@ func (f *fakeNotifier) Send(_ context.Context, n notifications.Notification) err
 	return nil
 }
 
-// fakeEventRepo backs the *learning.Recorder NewService requires —
-// SendWeekly never calls rec.Record (see Service.rec's own doc
-// comment), so every method here panics: a call would mean that
-// contract changed without this test noticing.
-type fakeEventRepo struct{}
-
-func (fakeEventRepo) Append(context.Context, event.LearningEvent) error {
-	panic("SendWeekly must not record a learning event")
-}
-func (fakeEventRepo) ListRecent(context.Context, learner.IdentityID, *session.ID, int) ([]event.LearningEvent, error) {
-	panic("not used by summary service tests")
-}
-func (fakeEventRepo) ListAll(context.Context, learner.IdentityID) ([]event.LearningEvent, error) {
-	panic("not used by summary service tests")
-}
-
 // spyGenerator wraps a real ai.StructuredGenerator (fakeai, for its
 // canned weekly_summary.v1 response) while recording the last request
 // it saw, so tests can assert on exactly what SendWeekly rendered into
@@ -141,9 +121,8 @@ func newTestHarness() *testHarness {
 	vocab := &fakeVocabRepo{}
 	notifier := &fakeNotifier{}
 	spy := &spyGenerator{inner: fakeai.New()}
-	rec := learning.NewRecorder(fakeEventRepo{}, inprocbus.New())
 	agent := agentsummary.New(spy)
-	svc := appsummary.NewService(analytics.NewService(analyticRepo), prios, vocab, agent, notifier, rec)
+	svc := appsummary.NewService(analytics.NewService(analyticRepo), prios, vocab, agent, notifier)
 	return &testHarness{svc: svc, analytic: analyticRepo, prios: prios, vocab: vocab, notifier: notifier, spy: spy}
 }
 

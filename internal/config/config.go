@@ -117,15 +117,16 @@ type Anki struct {
 // only requires To to be set (validate below does not require it; see
 // runSendSummary's own fail-fast check).
 //
-// From is the sender identity to report for outbound summary emails
-// (logged at scheduler/CLI start). internal/adapters/smtp — the
-// deliberately minimal, no-auth, LAN/Mailpit-oriented adapter this
-// task ships — sends with a fixed envelope sender, since
-// notifications.Notification (the port every Notifier implements)
-// carries no From field by design: a future channel (Slack, SMS) has
-// no use for an email-shaped sender address, so it isn't part of the
-// transport-agnostic port. From is reserved here for wiring into a
-// configurable-sender transport later.
+// From is currently INFORMATIONAL ONLY — setting it has no effect on
+// outbound mail. internal/adapters/smtp — the deliberately minimal,
+// no-auth, LAN/Mailpit-oriented adapter this task ships — always sends
+// with a fixed envelope/header sender, since notifications.Notification
+// (the port every Notifier implements) carries no From field by
+// design: a future channel (Slack, SMS) has no use for an email-shaped
+// sender address, so it isn't part of the transport-agnostic port.
+// From is reserved here, unused, for wiring into a configurable-sender
+// transport later — cmd/jlp/summary.go deliberately does NOT log it
+// alongside cron/to, so as not to imply it currently does anything.
 type Summary struct {
 	Enabled bool
 	Cron    string

@@ -4,15 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime/debug"
 
 	robfigcron "github.com/robfig/cron/v3"
 
-	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	smtpadapter "github.com/mikeyaustin/jlp/internal/adapters/smtp"
 	agentsummary "github.com/mikeyaustin/jlp/internal/agent/summary"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
-	"github.com/mikeyaustin/jlp/internal/application/learning"
 	appsummary "github.com/mikeyaustin/jlp/internal/application/summary"
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
@@ -27,6 +26,61 @@ import (
 // application/summary's own service_test.go's job).
 type weeklySummarySender interface {
 	SendWeekly(ctx context.Context, identity learner.IdentityID, to string) error
+}
+
+// slogCronLogger adapts slog's package-level logger to robfig/cron's
+// own Logger interface, so cron.Recover's panic log (see newSummaryCron
+// below) lands in the same structured JSON stream every other JLP log
+// line uses instead of cron.DefaultLogger's separate, unstructured
+// "cron: ..." line to stdout.
+type slogCronLogger struct{}
+
+func (slogCronLogger) Info(msg string, keysAndValues ...any) {
+	slog.Info("cron: "+msg, keysAndValues...)
+}
+
+func (slogCronLogger) Error(err error, msg string, keysAndValues ...any) {
+	slog.Error("cron: "+msg, append([]any{"err", err}, keysAndValues...)...)
+}
+
+// newSummaryCron returns a *cron.Cron wired with cron.WithChain(cron.
+// Recover(...)) — WITHOUT this, robfig/cron v3's default chain is
+// empty and every job runs via Cron.startJob's bare `go func(){
+// j.Run() }()`, with nothing above it to recover a panic: an
+// unrecovered panic anywhere in a scheduled SendWeekly call —
+// agent.Generate unmarshaling an unexpected AI response shape, a
+// template render, an SMTP write, any of it, unattended, once a week —
+// would crash a bare goroutine with no recover in its call stack, which
+// takes the ENTIRE process down, live HTTP server included, not just
+// the summary feature. cron.Recover wraps every job so a panic is
+// caught, logged (with a stack trace) via slogCronLogger above, and the
+// scheduler keeps running everything else exactly as before — see
+// summary_test.go's TestMaybeStartSummarySchedulerSurvivesSendWeeklyPanic
+// and TestNewSummaryCronRecoversPanicsAndKeepsRunningOtherJobs for the
+// proof (both go through this exact constructor, not just a bare
+// recover() call in isolation).
+func newSummaryCron() *robfigcron.Cron {
+	return robfigcron.New(robfigcron.WithChain(robfigcron.Recover(slogCronLogger{})))
+}
+
+// summaryJob returns the cron job function for identity/to: it calls
+// svc.SendWeekly and logs a failure. This closure ALSO carries its own
+// defer/recover — belt-and-suspenders on top of newSummaryCron's
+// cron.Recover chain wrapper above — so a panic is logged here with
+// this job's own identity/to context (which the generic chain-level
+// logger has no way to know about) before cron.Recover's own catch (if
+// this recover somehow didn't run first) would log it more generically.
+func summaryJob(svc weeklySummarySender, identity learner.IdentityID, to string) func() {
+	return func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("summary: scheduled send panicked", "identity", identity, "to", to, "panic", r, "stack", string(debug.Stack()))
+			}
+		}()
+		if err := svc.SendWeekly(context.Background(), identity, to); err != nil {
+			slog.Error("summary: scheduled send failed", "identity", identity, "to", to, "err", err)
+		}
+	}
 }
 
 // maybeStartSummaryScheduler wires the weekly-summary cron job (PRD
@@ -55,16 +109,16 @@ func maybeStartSummaryScheduler(cfg config.Config, svc weeklySummarySender) (*ro
 	}
 
 	identity := learner.IdentityID(cfg.Auth.Static.ID)
-	c := robfigcron.New()
-	if _, err := c.AddFunc(cfg.Summary.Cron, func() {
-		if err := svc.SendWeekly(context.Background(), identity, cfg.Summary.To); err != nil {
-			slog.Error("summary: scheduled send failed", "identity", identity, "to", cfg.Summary.To, "err", err)
-		}
-	}); err != nil {
+	c := newSummaryCron()
+	if _, err := c.AddFunc(cfg.Summary.Cron, summaryJob(svc, identity, cfg.Summary.To)); err != nil {
 		return nil, fmt.Errorf("summary: invalid APP_SUMMARY_CRON %q: %w", cfg.Summary.Cron, err)
 	}
 	c.Start()
-	slog.Info("summary: weekly scheduler started", "cron", cfg.Summary.Cron, "to", cfg.Summary.To, "from", cfg.Summary.From)
+	// "from" is deliberately NOT logged here: config.Summary.From is not
+	// currently wired into the SMTP transport at all (see that field's
+	// doc comment) — logging it alongside cron/to would misleadingly
+	// imply it takes effect.
+	slog.Info("summary: weekly scheduler started", "cron", cfg.Summary.Cron, "to", cfg.Summary.To)
 	return c, nil
 }
 
@@ -86,9 +140,6 @@ func runSendSummary(ctx context.Context, cfg config.Config) error {
 	}
 	defer pool.Close()
 
-	eventRepo := postgres.NewLearningEventRepository(pool)
-	recorder := learning.NewRecorder(eventRepo, inprocbus.New())
-
 	aiRequestRepo := postgres.NewAIRequestRepository(pool)
 	aiGen, err := buildAIGenerator(cfg, aiRequestRepo)
 	if err != nil {
@@ -101,13 +152,14 @@ func runSendSummary(ctx context.Context, cfg config.Config) error {
 		postgres.NewVocabularyRepository(pool),
 		agentsummary.New(aiGen),
 		smtpadapter.New(cfg.SMTP),
-		recorder,
 	)
 
 	identity := learner.IdentityID(cfg.Auth.Static.ID)
 	if err := svc.SendWeekly(ctx, identity, cfg.Summary.To); err != nil {
 		return fmt.Errorf("send-summary: %w", err)
 	}
-	slog.Info("send-summary: sent", "identity", identity, "to", cfg.Summary.To, "from", cfg.Summary.From)
+	// "from" is deliberately NOT logged here — see
+	// maybeStartSummaryScheduler's matching comment above.
+	slog.Info("send-summary: sent", "identity", identity, "to", cfg.Summary.To)
 	return nil
 }

@@ -215,7 +215,7 @@ func main() {
 		// operator who never sets APP_SUMMARY_ENABLED gets a nil
 		// scheduler and this line logs nothing.
 		summaryAgent := agentsummary.New(aiGen)
-		summarySvc := appsummary.NewService(analyticsSvc, prioRepo, vocabRepo, summaryAgent, smtpadapter.New(cfg.SMTP), recorder)
+		summarySvc := appsummary.NewService(analyticsSvc, prioRepo, vocabRepo, summaryAgent, smtpadapter.New(cfg.SMTP))
 		if _, err := maybeStartSummaryScheduler(cfg, summarySvc); err != nil {
 			slog.Error("summary", "err", err)
 			os.Exit(1)

@@ -12,7 +12,6 @@ import (
 
 	agentsummary "github.com/mikeyaustin/jlp/internal/agent/summary"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
-	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/ports/notifications"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
@@ -35,31 +34,29 @@ const (
 // SMTP dial) is worth attempting.
 var ErrRecipientRequired = errors.New("summary: recipient address is required")
 
-// Service wires the weekly email summary pipeline.
+// Service wires the weekly email summary pipeline. Unlike every other
+// application service in this codebase (anki, lessons, vocabulary,
+// feedback, practice), it takes no *learning.Recorder: SendWeekly does
+// not record a learning event for the summary send itself — the task
+// brief is explicit that this task adds nothing new to
+// internal/domain/event ("event.go (nothing new)"), and unlike a
+// persisted anki card or lesson guide, a sent email leaves no in-app
+// artifact for a later event to reference by ID; it's an outbound side
+// effect, not something the learner did within the app. A prior draft
+// carried an unused *learning.Recorder field for constructor-signature
+// symmetry with those other services — dropped per code review, since
+// nothing in this package ever called it.
 type Service struct {
 	analytics *analytics.Service
 	prios     storage.PriorityRepository
 	vocab     storage.VocabularyRepository
 	agent     *agentsummary.Agent
 	notifier  notifications.Notifier
-	// rec is accepted for constructor-signature symmetry with every
-	// other application service in this codebase (anki, lessons,
-	// vocabulary, feedback, practice all take a *learning.Recorder), but
-	// SendWeekly does not currently record a learning event for the
-	// summary send itself: the task brief is explicit that this task
-	// adds nothing new to internal/domain/event ("event.go (nothing
-	// new)"), and unlike a persisted anki card or lesson guide, a sent
-	// email leaves no in-app artifact for a later event to reference by
-	// ID — it's an outbound side effect, not something the learner did
-	// within the app. Reserved here rather than dropped from the
-	// signature entirely, should a future task want an audit trail of
-	// summary sends.
-	rec *learning.Recorder
 }
 
 // NewService wires the weekly email summary pipeline.
-func NewService(analyticsSvc *analytics.Service, prios storage.PriorityRepository, vocab storage.VocabularyRepository, agent *agentsummary.Agent, notifier notifications.Notifier, rec *learning.Recorder) *Service {
-	return &Service{analytics: analyticsSvc, prios: prios, vocab: vocab, agent: agent, notifier: notifier, rec: rec}
+func NewService(analyticsSvc *analytics.Service, prios storage.PriorityRepository, vocab storage.VocabularyRepository, agent *agentsummary.Agent, notifier notifications.Notifier) *Service {
+	return &Service{analytics: analyticsSvc, prios: prios, vocab: vocab, agent: agent, notifier: notifier}
 }
 
 // SendWeekly gathers identity's current context — aggregate Statistics
