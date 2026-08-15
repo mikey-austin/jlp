@@ -1,13 +1,25 @@
 {{define "content"}}<div class="workspace">
-  <section id="editor-pane">
-    <textarea id="editor" lang="ja" spellcheck="false" data-doc-id="{{.Document.ID}}"
-              placeholder="ここに日本語で書いてください…">{{.Document.Content}}</textarea>
-    <div class="editor-status"><span id="save-state" data-state="saved">保存済み</span>
-         <span id="rune-count">{{.Document.RuneCount}}</span>字</div>
-  </section>
-  <aside id="context-pane">
+  <div class="workspace__main">
+    <section id="editor-pane" class="card">
+      <textarea id="editor" lang="ja" spellcheck="false" data-doc-id="{{.Document.ID}}"
+                placeholder="ここに日本語で書いてください…">{{.Document.Content}}</textarea>
+      <div class="editor-status"><span id="save-state" data-state="saved">保存済み</span>
+           <span id="rune-count">{{.Document.RuneCount}}</span>字</div>
+    </section>
+    <section id="feedback-pane" class="card">
+      <div class="feedback-trigger">
+        <button id="feedback-btn" class="btn" hx-post="/sessions/{{.Session.ID}}/feedback"
+                hx-target="#feedback-results" hx-swap="innerHTML"
+                hx-vals="js:{...window.jlp.selectionPayload()}">
+          フィードバックを取得</button>
+        <span class="hint">（選択なし＝全文をレビュー）</span>
+      </div>
+      <div id="feedback-results"></div>
+    </section>
+  </div>
+  <aside id="context-pane" class="card">
     <h2>{{.Session.Title}}</h2>
-    <dl>
+    <dl class="context-fields">
       <dt>目的</dt><dd>{{.Session.Purpose}}</dd>
       <dt>Teacher mode</dt><dd>{{.Session.Profile.TeacherMode}}</dd>
       <dt>Explanation language</dt><dd>{{.Session.Profile.ExplanationLanguage}}</dd>
@@ -19,13 +31,5 @@
     <h3>アクティビティ</h3>
     <div id="activity" hx-get="/sessions/{{.Session.ID}}/activity" hx-trigger="load, every 30s"></div>
   </aside>
-  <section id="feedback-pane">
-    <button id="feedback-btn" hx-post="/sessions/{{.Session.ID}}/feedback"
-            hx-target="#feedback-results" hx-swap="innerHTML"
-            hx-vals="js:{...window.jlp.selectionPayload()}">
-      フィードバックを取得</button>
-    <span class="hint">（選択なし＝全文をレビュー）</span>
-    <div id="feedback-results"></div>
-  </section>
 </div>
 {{end}}

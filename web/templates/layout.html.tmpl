@@ -36,6 +36,15 @@
     </div>
   </header>
   <main>{{template "content" .}}</main>
+  <!-- Nav active-state: highlights the topnav link matching the current
+       path. Kept as a tiny inline script (like the pre-paint theme
+       script above) rather than a server-side field on every handler's
+       data map, so Step 1's "layout nav states" requirement needs no
+       Go change at all — every page already renders the same topnav
+       partial-in-layout, and this runs once against the live DOM right
+       after it's parsed. Root "/" only matches exactly (else it would
+       also light up for every other path). -->
+  <script>(function(){var p=location.pathname;document.querySelectorAll("#topnav a").forEach(function(a){var href=a.getAttribute("href");var hit=href==="/"?p==="/":(p===href||p.indexOf(href+"/")===0);if(hit){a.classList.add("is-active");}});})();</script>
   <script src="/static/js/htmx.min.js" defer></script>
   <script src="/static/js/alpine.min.js" defer></script>
   <script src="/static/js/theme.js" defer></script>

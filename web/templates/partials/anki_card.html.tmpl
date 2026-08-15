@@ -1,12 +1,12 @@
 {{define "anki_card"}}
-<article class="anki-card" id="anki-{{.ID}}" data-status="{{.Status}}">
+<article class="anki-card card" id="anki-{{.ID}}" data-status="{{.Status}}">
   <p class="front">{{.Front}}</p>
   <p class="back">{{.Back}}</p>
   {{if .Notes}}<p class="notes">{{.Notes}}</p>{{end}}
   {{if eq .Status "draft"}}<footer>
-    <button hx-post="/anki/{{.ID}}/status" hx-vals='{"status":"approved"}'
+    <button class="btn btn--sm" hx-post="/anki/{{.ID}}/status" hx-vals='{"status":"approved"}'
             hx-target="#anki-{{.ID}}" hx-swap="outerHTML">承認</button>
-    <button hx-post="/anki/{{.ID}}/status" hx-vals='{"status":"rejected"}'
+    <button class="btn btn--secondary btn--sm" hx-post="/anki/{{.ID}}/status" hx-vals='{"status":"rejected"}'
             hx-target="#anki-{{.ID}}" hx-swap="outerHTML">却下</button>
   </footer>
   {{else}}<footer class="resolved">{{.Status}}</footer>{{end}}

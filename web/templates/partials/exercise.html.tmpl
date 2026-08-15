@@ -1,5 +1,5 @@
 {{define "exercise"}}
-<div class="exercise" id="exercise-{{.ID}}" data-exercise-id="{{.ID}}" data-type="{{.Type}}">
+<div class="exercise card" id="exercise-{{.ID}}" data-exercise-id="{{.ID}}" data-type="{{.Type}}">
   <p class="instructions ja">{{.InstructionsJA}}</p>
   <p class="instructions en">{{.InstructionsEN}}</p>
   <p class="prompt">{{.Prompt}}</p>
@@ -9,12 +9,12 @@
       {{range .Choices}}<label class="choice"><input type="radio" name="response" value="{{.}}" required> {{.}}</label>{{end}}
     </div>
     {{else if eq .Type "free-production"}}
-    <textarea name="response" rows="4" required></textarea>
+    <textarea class="textarea" name="response" rows="4" required></textarea>
     {{else}}
-    <input type="text" name="response" required autocomplete="off">
+    <input class="input" type="text" name="response" required autocomplete="off">
     {{end}}
-    <label class="confidence-select">自信度（任意）
-      <select name="confidence">
+    <label class="field confidence-select">自信度（任意）
+      <select class="select" name="confidence">
         <option value="0">—</option>
         <option value="1">1</option>
         <option value="2">2</option>
@@ -23,16 +23,16 @@
         <option value="5">5</option>
       </select>
     </label>
-    <button type="submit">送信</button>
+    <button type="submit" class="btn">送信</button>
   </form>
 </div>
 {{end}}
 
 {{define "exercise_result"}}
-<div class="exercise-result" data-correct="{{.Correct}}">
+<div class="exercise-result card" data-correct="{{.Correct}}">
   {{if .Correct}}<p class="result-banner correct">正解！</p>{{else}}<p class="result-banner retry">もう一度挑戦しましょう。</p>{{end}}
   <p class="feedback ja">{{.FeedbackJA}}</p>
   <p class="feedback en">{{.FeedbackEN}}</p>
-  <button hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML">次の問題へ</button>
+  <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML">次の問題へ</button>
 </div>
 {{end}}

@@ -20,61 +20,138 @@ body {
 }
 
 main {
-  padding: 1rem;
+  padding: 1.5rem;
   max-width: 1400px;
   margin: 0 auto;
 }
 
-.sessions-table {
-  border-collapse: collapse;
-  width: 100%;
-  margin-bottom: 1.5rem;
+/* Shared heading rhythm across every page — the design's screens use a
+ * consistent scale (26px page title, 15-18px section headers) rather
+ * than each page inventing its own; kept here since it's generic
+ * layout, not a named component. */
+main h1 {
+  margin: 0 0 20px;
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
-.sessions-table th,
-.sessions-table td {
-  text-align: left;
-  padding: 0.4rem 0.6rem;
-  border-bottom: 1px solid var(--border);
+main h2 {
+  margin: 28px 0 14px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
 }
+main h3 {
+  margin: 18px 0 10px;
+  font-size: 15px;
+  font-weight: 600;
+}
+main p.description {
+  color: var(--fg-muted);
+  max-width: 60ch;
+}
+
+/* ============================== Tables ================================= */
+/* .table-card (components.css) supplies the border/radius/th/td rules;
+ * this is just the page-specific text-wrap tweak the AI tables need. */
+.ai-table td,
+.ai-table th {
+  white-space: nowrap;
+}
+.ai-table .empty {
+  color: var(--fg-muted);
+  white-space: normal;
+}
+.table-card td a {
+  color: var(--primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+.table-card td a:hover {
+  text-decoration: underline;
+}
+
+/* ============================== Forms ================================== */
 
 .session-form {
   display: flex;
   flex-direction: column;
-  gap: 0.6rem;
+  gap: 14px;
   max-width: 28rem;
 }
-.session-form label {
+
+/* ============================== Filter tabs (vocabulary) =============== */
+
+.filter-tabs {
   display: flex;
-  flex-direction: column;
-  gap: 0.2rem;
-  font-size: 0.9rem;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 20px;
 }
+.filter-tabs a {
+  padding: 7px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-muted);
+  text-decoration: none;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  white-space: nowrap;
+}
+.filter-tabs a:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.filter-tabs a.active {
+  background: var(--primary-soft);
+  color: var(--primary);
+  border-color: transparent;
+  font-weight: 600;
+}
+
+/* ============================== Writing workspace ======================= */
 
 .workspace {
   display: grid;
   grid-template-columns: 1fr 300px;
-  gap: 1rem;
+  gap: 18px;
+  align-items: start;
+}
+.workspace__main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
 }
 #editor-pane {
-  grid-column: 1;
-  grid-row: 1;
-  border: 1px solid var(--border);
-  padding: 1rem;
-  min-height: 320px;
+  padding: 20px;
 }
 #editor {
   width: 100%;
-  min-height: 60vh;
-  font-size: 1.1rem;
-  line-height: 1.9;
+  min-height: 45vh;
+  border: none;
+  background: transparent;
+  color: var(--fg);
+  padding: 0;
+  font: inherit;
+  font-family: "Noto Sans JP", "Instrument Sans", sans-serif;
+  font-size: 16px;
+  line-height: 2;
+  resize: vertical;
+}
+#editor:focus-visible {
+  outline: none;
 }
 .editor-status {
   display: flex;
-  gap: 0.5rem;
+  gap: 10px;
   align-items: center;
-  margin-top: 0.4rem;
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
   color: var(--fg-muted);
-  font-size: 0.9rem;
+  font-size: 12.5px;
 }
 #save-state[data-state="dirty"] {
   color: var(--warning);
@@ -83,26 +160,59 @@ main {
   color: var(--danger);
   font-weight: 700;
 }
-#context-pane {
-  grid-column: 2;
-  grid-row: 1;
-  border: 1px solid var(--border);
-  padding: 1rem;
+#save-state[data-state="saved"]::before {
+  content: "● ";
+  color: var(--success);
 }
+#rune-count {
+  margin-left: auto;
+  font-family: "JetBrains Mono", monospace;
+}
+
 #feedback-pane {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  border: 1px solid var(--border);
-  padding: 1rem;
-  min-height: 120px;
+  padding: 18px;
 }
-#feedback-pane .hint {
-  color: var(--fg-muted);
-  font-size: 0.9rem;
-  margin-left: 0.5rem;
+.feedback-trigger {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.feedback-trigger .hint {
+  color: var(--fg-subtle);
+  font-size: 12px;
+}
+#feedback-results:empty {
+  margin: 0;
 }
 #feedback-results {
-  margin-top: 1rem;
+  margin-top: 4px;
+}
+
+#context-pane {
+  padding: 18px;
+  height: fit-content;
+}
+#context-pane h2 {
+  margin: 0 0 14px;
+  font-size: 16px;
+}
+.context-fields {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  row-gap: 10px;
+  column-gap: 14px;
+  margin: 0 0 18px;
+  font-size: 13px;
+}
+.context-fields dt {
+  color: var(--fg-subtle);
+  font-weight: 400;
+}
+.context-fields dd {
+  margin: 0;
+  text-align: right;
+  color: var(--fg);
 }
 
 .inline-diff {
@@ -110,6 +220,13 @@ main {
 }
 .all-good {
   color: var(--fg-muted);
+}
+.diff-block {
+  padding: 16px 18px;
+  margin: 0 0 16px;
+}
+.diff-block h3 {
+  margin: 0 0 8px;
 }
 .cards {
   display: flex;
@@ -123,18 +240,36 @@ main {
   flex-wrap: wrap;
 }
 
+/* ============================== Dashboard ================================ */
+
+.dashboard-columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+@media (max-width: 720px) {
+  .dashboard-columns {
+    grid-template-columns: 1fr;
+  }
+}
+
 .error-types,
 .recent-sessions {
   list-style: none;
   padding: 0;
-  margin: 0 0 1.5rem;
+  margin: 0;
 }
 .error-types li,
 .recent-sessions li {
   display: flex;
   justify-content: space-between;
-  padding: 0.4rem 0.2rem;
+  align-items: center;
+  padding: 10px 0;
   border-bottom: 1px solid var(--border);
+}
+.error-types li:last-child,
+.recent-sessions li:last-child {
+  border-bottom: none;
 }
 .error-types li.empty,
 .recent-sessions li.empty {
@@ -143,7 +278,19 @@ main {
 }
 .error-types .error-count {
   color: var(--fg-muted);
+  font-family: "JetBrains Mono", monospace;
+  font-size: 13px;
 }
+.recent-sessions a {
+  color: var(--primary);
+  font-weight: 500;
+  text-decoration: none;
+}
+.recent-sessions a:hover {
+  text-decoration: underline;
+}
+
+/* ============================== Ratings / confidence stars ============== */
 
 .rating,
 .confidence {
@@ -151,6 +298,8 @@ main {
   display: flex;
   gap: 0.4rem;
   align-items: center;
+  font-size: 13.5px;
+  color: var(--fg-muted);
 }
 .rating .star,
 .confidence .star {
@@ -167,11 +316,139 @@ main {
   color: var(--warning);
 }
 
-.ai-table td,
-.ai-table th {
-  white-space: nowrap;
+/* ============================== Practice / exercises ===================== */
+
+.practice-intro-card {
+  padding: 20px;
 }
-.ai-table .empty {
+.practice-intro {
   color: var(--fg-muted);
-  white-space: normal;
+  margin: 0 0 14px;
+}
+.exercise {
+  padding: 20px;
+}
+.exercise .instructions.en,
+.exercise-result .feedback.en {
+  color: var(--fg-muted);
+  font-size: 13px;
+}
+.exercise .prompt {
+  font-size: 17px;
+  margin: 10px 0 16px;
+}
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+.choice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  font-size: 14px;
+}
+.choice:hover {
+  border-color: var(--primary);
+}
+.confidence-select {
+  margin: 6px 0 14px;
+}
+.exercise-form .btn {
+  margin-top: 4px;
+}
+.exercise-result {
+  padding: 20px;
+}
+.result-banner {
+  font-weight: 700;
+  font-size: 16px;
+  margin: 0 0 10px;
+}
+.result-banner.correct {
+  color: var(--success);
+}
+.result-banner.retry {
+  color: var(--fg-muted);
+}
+.exercise-result .btn {
+  margin-top: 12px;
+}
+
+/* ============================== Anki ====================================== */
+
+.anki-card {
+  padding: 18px;
+}
+.anki-card .front {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+.anki-card .back {
+  color: var(--fg-muted);
+  margin: 0 0 8px;
+}
+.anki-card .notes {
+  font-size: 13px;
+  color: var(--fg-subtle);
+  margin: 0 0 10px;
+}
+.anki-card footer {
+  display: flex;
+  gap: 10px;
+}
+.anki-card footer.resolved {
+  color: var(--fg-muted);
+  font-size: 13px;
+  text-transform: capitalize;
+}
+.anki-export-actions {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 16px;
+}
+.toast {
+  background: var(--success-soft);
+  color: var(--success);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  margin-top: 0.75rem;
+}
+.error {
+  background: var(--danger-soft);
+  color: var(--danger);
+  padding: 10px 14px;
+  border-radius: 10px;
+  font-size: 13.5px;
+  margin-top: 0.75rem;
+}
+p.empty {
+  color: var(--fg-muted);
+}
+
+/* ============================== Offline shell ============================= */
+
+.offline {
+  display: flex;
+  justify-content: center;
+  padding-top: 10vh;
+}
+.offline-card {
+  padding: 32px;
+  max-width: 32rem;
+  text-align: center;
+}
+.offline-card h1 {
+  margin: 0 0 10px;
+}
+.offline-card p {
+  color: var(--fg-muted);
+  margin: 0;
 }

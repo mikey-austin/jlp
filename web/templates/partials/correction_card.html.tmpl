@@ -1,7 +1,7 @@
 {{define "correction_card"}}
-<article class="correction" id="corr-{{.ID}}" data-status="{{.Status}}">
-  <header><span class="badge type">{{.Type}}</span>
-          <span class="badge sev sev-{{.Severity}}">{{.Severity}}</span></header>
+<article class="correction correction--{{.Status}}" id="corr-{{.ID}}" data-status="{{.Status}}">
+  <header><span class="badge badge--type">{{.Type}}</span>
+          <span class="badge badge--severity-{{.Severity}}">{{.Severity}}</span></header>
   {{if and .HasHint (eq .Status "presented") (not .Revealed)}}
   {{/* Socratic pre-reveal gate (Phase 2 Task 8, PRD §9/§53): Replacement,
        the inline diff, and Explanation are ALL withheld here — not just
@@ -15,12 +15,12 @@
   <p class="hint ja">💡 {{.HintJA}}</p>
   <p class="hint en">{{.HintEN}}</p>
   <form class="retry" hx-post="/corrections/{{.ID}}/retry" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
-    <input type="text" name="attempt" placeholder="正しい形を書いてください" required autocomplete="off">
-    <button type="submit">送信</button>
+    <input class="input" type="text" name="attempt" placeholder="正しい形を書いてください" required autocomplete="off">
+    <button type="submit" class="btn btn--sm">送信</button>
   </form>
   {{if gt .Attempts 0}}<p class="attempts">試行回数: {{.Attempts}}</p>{{end}}
   <form hx-post="/corrections/{{.ID}}/reveal" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
-    <button type="submit" class="reveal">答えを見る</button>
+    <button type="submit" class="btn btn--ghost btn--sm reveal">答えを見る</button>
   </form>
   {{else}}
   {{if and (eq .Status "accepted") (gt .Attempts 0)}}<p class="correct-banner">正解！</p>{{end}}
@@ -30,15 +30,15 @@
   <p class="expl en">{{.ExplanationEN}}</p>
   {{if .Concepts}}<p class="concepts">{{range .Concepts}}<a class="chip" href="/grammar/{{.}}">{{.}}</a>{{end}}</p>{{end}}
   {{if eq .Status "presented"}}<footer>
-    <button hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"accepted"}'
+    <button class="btn btn--sm" hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"accepted"}'
             hx-target="#corr-{{.ID}}" hx-swap="outerHTML">納得した</button>
-    <button hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"rejected"}'
+    <button class="btn btn--secondary btn--sm" hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"rejected"}'
             hx-target="#corr-{{.ID}}" hx-swap="outerHTML">同意しない</button>
   </footer>
   {{if .HasHint}}
   <form class="retry" hx-post="/corrections/{{.ID}}/retry" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
-    <input type="text" name="attempt" placeholder="正しい形を書いてください" required autocomplete="off">
-    <button type="submit">送信</button>
+    <input class="input" type="text" name="attempt" placeholder="正しい形を書いてください" required autocomplete="off">
+    <button type="submit" class="btn btn--sm">送信</button>
   </form>
   {{if gt .Attempts 0}}<p class="attempts">試行回数: {{.Attempts}}</p>{{end}}
   {{end}}
@@ -53,7 +53,7 @@
           body: new URLSearchParams({confidence: n})})">★</button></template>
   </div>
   <form hx-post="/corrections/{{.ID}}/anki" hx-target="#anki-toast-{{.ID}}" hx-swap="innerHTML">
-    <button type="submit" class="anki-create">Ankiカード作成</button>
+    <button type="submit" class="btn btn--secondary btn--sm anki-create">Ankiカード作成</button>
   </form>
   <div id="anki-toast-{{.ID}}"></div>
   {{end}}

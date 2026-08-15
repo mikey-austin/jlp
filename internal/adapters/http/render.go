@@ -5,14 +5,19 @@ import (
 	"html/template"
 	"log/slog"
 	"net/http"
+	"strings"
 )
 
 // funcs are the helpers every page/partial template can call.
-// html/template has no arithmetic of its own, so ratio-to-percentage
-// display conversion (e.g. the dashboard's 納得率 tile) lives here once
-// rather than being recomputed ad hoc in each handler that needs it.
+// html/template has no arithmetic (or string-casing) of its own, so
+// display conversions live here once rather than being recomputed ad
+// hoc in each handler that needs them: "percent" turns the dashboard's
+// 納得率 ratio into a display percentage, and "lower" turns a JLPT
+// chip's display text ("N5") into the lowercase suffix Task 9's
+// per-level badge classes use (.badge--jlpt-n5).
 var funcs = template.FuncMap{
 	"percent": func(ratio float64) string { return fmt.Sprintf("%.0f", ratio*100) },
+	"lower":   strings.ToLower,
 }
 
 // Render executes page against the shared layout. It also loads every

@@ -2,20 +2,25 @@
   <h1>ホーム</h1>
 
   <div class="stat-grid">
-    <div class="stat-tile"><span class="stat-value">{{.Stats.RunesWritten}}</span><span class="stat-label">書いた文字数</span></div>
-    <div class="stat-tile"><span class="stat-value">{{.Stats.SessionCount}}</span><span class="stat-label">セッション</span></div>
-    <div class="stat-tile"><span class="stat-value">{{.Stats.FeedbackRequests}}</span><span class="stat-label">フィードバック</span></div>
-    <div class="stat-tile"><span class="stat-value">{{percent .Stats.AcceptanceRate}}%</span><span class="stat-label">納得率</span></div>
-    <div class="stat-tile"><span class="stat-value">{{printf "%.1f" .Stats.CorrectionsPer1000}}</span><span class="stat-label">修正/1000字</span></div>
+    <div class="stat"><span class="stat__value">{{.Stats.RunesWritten}}</span><span class="stat__label">書いた文字数</span></div>
+    <div class="stat"><span class="stat__value">{{.Stats.SessionCount}}</span><span class="stat__label">セッション</span></div>
+    <div class="stat"><span class="stat__value">{{.Stats.FeedbackRequests}}</span><span class="stat__label">フィードバック</span></div>
+    <div class="stat"><span class="stat__value">{{percent .Stats.AcceptanceRate}}%</span><span class="stat__label">納得率</span></div>
+    <div class="stat"><span class="stat__value">{{printf "%.1f" .Stats.CorrectionsPer1000}}</span><span class="stat__label">修正/1000字</span></div>
   </div>
 
-  <h2>よくある間違い</h2>
-  <ul class="error-types">
-    {{range .Stats.TopErrorTypes}}<li><span class="error-type">{{.Type}}</span><span class="error-count">{{.Count}}</span></li>{{else}}<li class="empty">まだデータがありません</li>{{end}}
-  </ul>
-
-  <h2>最近のセッション</h2>
-  <ul class="recent-sessions">
-    {{range .RecentSessions}}<li><a href="/sessions/{{.ID}}">{{.Title}}</a></li>{{else}}<li class="empty">セッションがありません</li>{{end}}
-  </ul>
+  <div class="dashboard-columns">
+    <div>
+      <h2>よくある間違い</h2>
+      <ul class="error-types">
+        {{range .Stats.TopErrorTypes}}<li><span class="badge badge--type">{{.Type}}</span><span class="error-count">{{.Count}}</span></li>{{else}}<li class="empty">まだデータがありません</li>{{end}}
+      </ul>
+    </div>
+    <div>
+      <h2>最近のセッション</h2>
+      <ul class="recent-sessions">
+        {{range .RecentSessions}}<li><a href="/sessions/{{.ID}}">{{.Title}}</a></li>{{else}}<li class="empty">セッションがありません</li>{{end}}
+      </ul>
+    </div>
+  </div>
 </section>{{end}}

@@ -1,7 +1,9 @@
 {{define "content"}}<section class="practice">
   <h1>練習</h1>
   <div id="exercise-area">
-    <p class="practice-intro">文法の練習をしましょう。「練習する」を押すと、あなたの学習状況に合わせた問題が出題されます。</p>
-    <button hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML">練習する</button>
+    <div class="card practice-intro-card">
+      <p class="practice-intro">文法の練習をしましょう。「練習する」を押すと、あなたの学習状況に合わせた問題が出題されます。</p>
+      <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML">練習する</button>
+    </div>
   </div>
 </section>{{end}}
