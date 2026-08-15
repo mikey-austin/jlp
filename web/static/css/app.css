@@ -53,5 +53,15 @@ main { padding:1rem; max-width:1400px; margin:0 auto; }
 .rating { margin-top:1rem; display:flex; gap:.4rem; align-items:center; }
 .rating .star { border:none; background:none; font-size:1.4rem; line-height:1; padding:0; cursor:pointer; color:var(--border); }
 .rating .star.on { color:var(--accent); }
+.correction .correct-banner { color:#1a7a1a; font-weight:700; font-size:1.1rem; margin:0 0 .4rem; }
+.correction .hint { border-left:3px solid var(--accent); padding:.3rem .6rem; margin:.4rem 0; background:#fdf4f0; }
+.correction .hint.en { color:var(--muted); font-size:.9rem; }
+.correction .retry { display:flex; gap:.4rem; margin:.6rem 0 .3rem; }
+.correction .retry input { flex:1; padding:.3rem .5rem; border:1px solid var(--border); }
+.correction .attempts { color:var(--muted); font-size:.85rem; margin:.2rem 0; }
+.correction .reveal { background:none; border:1px solid var(--border); padding:.2rem .7rem; cursor:pointer; color:var(--muted); }
+.confidence { margin-top:1rem; display:flex; gap:.4rem; align-items:center; }
+.confidence .star { border:none; background:none; font-size:1.4rem; line-height:1; padding:0; cursor:pointer; color:var(--border); }
+.confidence .star.on { color:var(--accent); }
 .ai-table td, .ai-table th { white-space:nowrap; }
 .ai-table .empty { color:var(--muted); white-space:normal; }

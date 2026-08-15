@@ -2,6 +2,28 @@
 <article class="correction" id="corr-{{.ID}}" data-status="{{.Status}}">
   <header><span class="badge type">{{.Type}}</span>
           <span class="badge sev sev-{{.Severity}}">{{.Severity}}</span></header>
+  {{if and .HintJA (eq .Status "presented") (not .Revealed)}}
+  {{/* Socratic pre-reveal gate (Phase 2 Task 8, PRD §9/§53): Replacement,
+       the inline diff, and Explanation are ALL withheld here — not just
+       <ins>{{.Replacement}}</ins> — because Explanation routinely spells
+       the corrected form out in prose (e.g. "...so X must be Y."), which
+       would leak the answer into the DOM just as surely as showing the
+       diff would. Only the hint, the learner's own original text, and a
+       retry/reveal affordance are rendered until Status leaves
+       "presented" or Revealed flips true (the "else" branch below). */}}
+  <p class="pair"><del>{{.Original}}</del></p>
+  <p class="hint ja">💡 {{.HintJA}}</p>
+  <p class="hint en">{{.HintEN}}</p>
+  <form class="retry" hx-post="/corrections/{{.ID}}/retry" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
+    <input type="text" name="attempt" placeholder="正しい形を書いてください" required autocomplete="off">
+    <button type="submit">送信</button>
+  </form>
+  {{if gt .Attempts 0}}<p class="attempts">試行回数: {{.Attempts}}</p>{{end}}
+  <form hx-post="/corrections/{{.ID}}/reveal" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
+    <button type="submit" class="reveal">答えを見る</button>
+  </form>
+  {{else}}
+  {{if and (eq .Status "accepted") (gt .Attempts 0)}}<p class="correct-banner">正解！</p>{{end}}
   <p class="pair"><del>{{.Original}}</del> → <ins>{{.Replacement}}</ins></p>
   <p class="inline-diff">{{range .DiffSpans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
   <p class="expl ja">{{.ExplanationJA}}</p>
@@ -12,6 +34,24 @@
             hx-target="#corr-{{.ID}}" hx-swap="outerHTML">納得した</button>
     <button hx-post="/corrections/{{.ID}}/status" hx-vals='{"status":"rejected"}'
             hx-target="#corr-{{.ID}}" hx-swap="outerHTML">同意しない</button>
-  </footer>{{else}}<footer class="resolved">{{.Status}}</footer>{{end}}
+  </footer>
+  {{if .HintJA}}
+  <form class="retry" hx-post="/corrections/{{.ID}}/retry" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
+    <input type="text" name="attempt" placeholder="正しい形を書いてください" required autocomplete="off">
+    <button type="submit">送信</button>
+  </form>
+  {{if gt .Attempts 0}}<p class="attempts">試行回数: {{.Attempts}}</p>{{end}}
+  {{end}}
+  {{else}}<footer class="resolved">{{.Status}}</footer>{{end}}
+  {{end}}
+  {{if eq .Status "accepted"}}
+  <div class="confidence" x-data="{ score: 0 }">
+    <span>どのくらい自信がありましたか？</span>
+    <template x-for="n in 5"><button type="button" class="star"
+       :class="{ on: n <= score }"
+       @click="score = n; fetch('/corrections/{{.ID}}/confidence', {method:'POST',
+          body: new URLSearchParams({confidence: n})})">★</button></template>
+  </div>
+  {{end}}
 </article>
 {{end}}

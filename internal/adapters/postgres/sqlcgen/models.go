@@ -46,6 +46,11 @@ type Correction struct {
 	ExplanationEn     string
 	Status            string
 	CreatedAt         pgtype.Timestamptz
+	HintJa            string
+	HintEn            string
+	Attempts          int32
+	Confidence        pgtype.Int4
+	Revealed          bool
 }
 
 type CorrectionConcept struct {

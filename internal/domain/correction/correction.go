@@ -29,6 +29,22 @@ type Correction struct {
 	Severity    Severity
 	Explanation Explanation
 	Concepts    []string
+	// Hint is a socratic-mode nudge that names the problem area WITHOUT
+	// giving away Replacement (PRD §9/§53's active recall). It's the
+	// zero Explanation{} for every non-socratic teacher mode — see
+	// agent/teacher's promptv3 system template and
+	// adapters/fakeai's socratic-marker detection, the two places that
+	// populate it — never populated by inspecting Replacement itself.
+	Hint Explanation
+}
+
+// HasHint reports whether c carries a socratic hint distinct from the
+// zero Explanation{} — the single check every caller (the feedback
+// service's hint.shown event, the correction_card template's
+// pre-reveal gate) uses to decide "is this a socratic correction",
+// rather than each duplicating the JA-non-empty convention itself.
+func (c Correction) HasHint() bool {
+	return c.Hint != (Explanation{})
 }
 
 // Result represents the result of applying corrections to a selection

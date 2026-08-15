@@ -41,9 +41,9 @@ func (q *Queries) GetCorrectionConcepts(ctx context.Context, correctionID pgtype
 const insertCorrection = `-- name: InsertCorrection :exec
 INSERT INTO corrections (
     id, feedback_request_id, position, original, replacement,
-    type, severity, explanation_ja, explanation_en, status, created_at
+    type, severity, explanation_ja, explanation_en, hint_ja, hint_en, status, created_at
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 `
 
 type InsertCorrectionParams struct {
@@ -56,6 +56,8 @@ type InsertCorrectionParams struct {
 	Severity          string
 	ExplanationJa     string
 	ExplanationEn     string
+	HintJa            string
+	HintEn            string
 	Status            string
 	CreatedAt         pgtype.Timestamptz
 }
@@ -71,6 +73,8 @@ func (q *Queries) InsertCorrection(ctx context.Context, arg InsertCorrectionPara
 		arg.Severity,
 		arg.ExplanationJa,
 		arg.ExplanationEn,
+		arg.HintJa,
+		arg.HintEn,
 		arg.Status,
 		arg.CreatedAt,
 	)
@@ -132,12 +136,194 @@ func (q *Queries) InsertFeedbackRequest(ctx context.Context, arg InsertFeedbackR
 	return err
 }
 
+const recordConfidence = `-- name: RecordConfidence :one
+UPDATE corrections c SET confidence = $3
+FROM feedback_requests f
+WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2
+RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
+          c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+          c.status, c.attempts, c.confidence, c.revealed, f.session_id
+`
+
+type RecordConfidenceParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+	Confidence pgtype.Int4
+}
+
+type RecordConfidenceRow struct {
+	ID                pgtype.UUID
+	FeedbackRequestID pgtype.UUID
+	Position          int32
+	Original          string
+	Replacement       string
+	Type              string
+	Severity          string
+	ExplanationJa     string
+	ExplanationEn     string
+	HintJa            string
+	HintEn            string
+	Status            string
+	Attempts          int32
+	Confidence        pgtype.Int4
+	Revealed          bool
+	SessionID         pgtype.UUID
+}
+
+func (q *Queries) RecordConfidence(ctx context.Context, arg RecordConfidenceParams) (RecordConfidenceRow, error) {
+	row := q.db.QueryRow(ctx, recordConfidence, arg.ID, arg.IdentityID, arg.Confidence)
+	var i RecordConfidenceRow
+	err := row.Scan(
+		&i.ID,
+		&i.FeedbackRequestID,
+		&i.Position,
+		&i.Original,
+		&i.Replacement,
+		&i.Type,
+		&i.Severity,
+		&i.ExplanationJa,
+		&i.ExplanationEn,
+		&i.HintJa,
+		&i.HintEn,
+		&i.Status,
+		&i.Attempts,
+		&i.Confidence,
+		&i.Revealed,
+		&i.SessionID,
+	)
+	return i, err
+}
+
+const retryCorrection = `-- name: RetryCorrection :one
+UPDATE corrections c SET
+    attempts = c.attempts + 1,
+    status = CASE WHEN $3 = c.replacement THEN 'accepted' ELSE c.status END
+FROM feedback_requests f
+WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2 AND c.status = 'presented'
+RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
+          c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+          c.status, c.attempts, c.confidence, c.revealed, f.session_id
+`
+
+type RetryCorrectionParams struct {
+	ID          pgtype.UUID
+	IdentityID  string
+	Replacement string
+}
+
+type RetryCorrectionRow struct {
+	ID                pgtype.UUID
+	FeedbackRequestID pgtype.UUID
+	Position          int32
+	Original          string
+	Replacement       string
+	Type              string
+	Severity          string
+	ExplanationJa     string
+	ExplanationEn     string
+	HintJa            string
+	HintEn            string
+	Status            string
+	Attempts          int32
+	Confidence        pgtype.Int4
+	Revealed          bool
+	SessionID         pgtype.UUID
+}
+
+// Atomic "increment attempts, and accept if (and only if) this attempt
+// exactly matches replacement" — see storage.FeedbackRepository's doc
+// comment on why this is one UPDATE (a single, non-racy statement, with
+// the SQL '=' comparison itself deciding correctness) rather than a
+// read-then-write pair. status = 'presented' in the WHERE clause is
+// what confines retries to corrections still awaiting resolution.
+func (q *Queries) RetryCorrection(ctx context.Context, arg RetryCorrectionParams) (RetryCorrectionRow, error) {
+	row := q.db.QueryRow(ctx, retryCorrection, arg.ID, arg.IdentityID, arg.Replacement)
+	var i RetryCorrectionRow
+	err := row.Scan(
+		&i.ID,
+		&i.FeedbackRequestID,
+		&i.Position,
+		&i.Original,
+		&i.Replacement,
+		&i.Type,
+		&i.Severity,
+		&i.ExplanationJa,
+		&i.ExplanationEn,
+		&i.HintJa,
+		&i.HintEn,
+		&i.Status,
+		&i.Attempts,
+		&i.Confidence,
+		&i.Revealed,
+		&i.SessionID,
+	)
+	return i, err
+}
+
+const revealCorrection = `-- name: RevealCorrection :one
+UPDATE corrections c SET revealed = true
+FROM feedback_requests f
+WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2 AND c.status = 'presented'
+RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
+          c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+          c.status, c.attempts, c.confidence, c.revealed, f.session_id
+`
+
+type RevealCorrectionParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+}
+
+type RevealCorrectionRow struct {
+	ID                pgtype.UUID
+	FeedbackRequestID pgtype.UUID
+	Position          int32
+	Original          string
+	Replacement       string
+	Type              string
+	Severity          string
+	ExplanationJa     string
+	ExplanationEn     string
+	HintJa            string
+	HintEn            string
+	Status            string
+	Attempts          int32
+	Confidence        pgtype.Int4
+	Revealed          bool
+	SessionID         pgtype.UUID
+}
+
+func (q *Queries) RevealCorrection(ctx context.Context, arg RevealCorrectionParams) (RevealCorrectionRow, error) {
+	row := q.db.QueryRow(ctx, revealCorrection, arg.ID, arg.IdentityID)
+	var i RevealCorrectionRow
+	err := row.Scan(
+		&i.ID,
+		&i.FeedbackRequestID,
+		&i.Position,
+		&i.Original,
+		&i.Replacement,
+		&i.Type,
+		&i.Severity,
+		&i.ExplanationJa,
+		&i.ExplanationEn,
+		&i.HintJa,
+		&i.HintEn,
+		&i.Status,
+		&i.Attempts,
+		&i.Confidence,
+		&i.Revealed,
+		&i.SessionID,
+	)
+	return i, err
+}
+
 const updateCorrectionStatus = `-- name: UpdateCorrectionStatus :one
 UPDATE corrections c SET status = $3
 FROM feedback_requests f
 WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2
 RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
-          c.type, c.severity, c.explanation_ja, c.explanation_en, c.status, f.session_id
+          c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+          c.status, c.attempts, c.confidence, c.revealed, f.session_id
 `
 
 type UpdateCorrectionStatusParams struct {
@@ -156,7 +342,12 @@ type UpdateCorrectionStatusRow struct {
 	Severity          string
 	ExplanationJa     string
 	ExplanationEn     string
+	HintJa            string
+	HintEn            string
 	Status            string
+	Attempts          int32
+	Confidence        pgtype.Int4
+	Revealed          bool
 	SessionID         pgtype.UUID
 }
 
@@ -173,7 +364,12 @@ func (q *Queries) UpdateCorrectionStatus(ctx context.Context, arg UpdateCorrecti
 		&i.Severity,
 		&i.ExplanationJa,
 		&i.ExplanationEn,
+		&i.HintJa,
+		&i.HintEn,
 		&i.Status,
+		&i.Attempts,
+		&i.Confidence,
+		&i.Revealed,
 		&i.SessionID,
 	)
 	return i, err

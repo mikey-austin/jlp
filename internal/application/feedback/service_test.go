@@ -168,6 +168,72 @@ func (f *fakeFeedbackRepo) UpdateCorrectionStatus(_ context.Context, identity le
 	return c, nil
 }
 
+// identityScopedPresented mirrors the real repo's RetryCorrection/
+// RevealCorrection WHERE clause: correctionID must exist, belong to
+// identity (via the same feedback-record join UpdateCorrectionStatus
+// uses), and still be Status "presented" — any other case is
+// storage.ErrNotFound, collapsing "not yours"/"not found"/"not
+// retriable" into one signal exactly like the real query does.
+func (f *fakeFeedbackRepo) identityScopedPresented(identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, session.ID, bool) {
+	c, ok := f.corrections[correctionID]
+	if !ok || c.Status != "presented" {
+		return storage.CorrectionRecord{}, "", false
+	}
+	fb, ok := f.feedback[c.FeedbackID]
+	if !ok || fb.IdentityID != identity {
+		return storage.CorrectionRecord{}, "", false
+	}
+	return c, fb.SessionID, true
+}
+
+// RetryCorrection mirrors db/queries/feedback.sql's RetryCorrection:
+// one atomic "increment attempts, accept iff trimmedAttempt ==
+// Replacement" step.
+func (f *fakeFeedbackRepo) RetryCorrection(_ context.Context, identity learner.IdentityID, correctionID, trimmedAttempt string) (storage.CorrectionRecord, error) {
+	c, sessionID, ok := f.identityScopedPresented(identity, correctionID)
+	if !ok {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	c.Attempts++
+	if trimmedAttempt == c.Replacement {
+		c.Status = "accepted"
+	}
+	c.SessionID = sessionID
+	f.corrections[correctionID] = c
+	return c, nil
+}
+
+// RevealCorrection mirrors db/queries/feedback.sql's RevealCorrection.
+func (f *fakeFeedbackRepo) RevealCorrection(_ context.Context, identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, error) {
+	c, sessionID, ok := f.identityScopedPresented(identity, correctionID)
+	if !ok {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	c.Revealed = true
+	c.SessionID = sessionID
+	f.corrections[correctionID] = c
+	return c, nil
+}
+
+// RecordConfidence mirrors db/queries/feedback.sql's RecordConfidence:
+// identity-scoped but NOT restricted to Status "presented" (a learner
+// rates confidence AFTER a correction resolves).
+func (f *fakeFeedbackRepo) RecordConfidence(_ context.Context, identity learner.IdentityID, correctionID string, confidence int) (storage.CorrectionRecord, error) {
+	c, ok := f.corrections[correctionID]
+	if !ok {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	fb, ok := f.feedback[c.FeedbackID]
+	if !ok || fb.IdentityID != identity {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	v := confidence
+	c.Confidence = &v
+	c.SessionID = fb.SessionID
+	f.corrections[correctionID] = c
+	return c, nil
+}
+
 // conceptRow is one persisted (correction, slug, resolved) tuple,
 // letting tests assert exactly what InsertFeedback's concepts argument
 // contained.
@@ -217,7 +283,7 @@ func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.L
 
 // fakeGrammarRepo is an in-memory storage.GrammarRepository: only
 // ListConcepts is exercised by the feedback pipeline (it builds the
-// teacher.feedback.v2 prompt's candidate list and the known-slug set
+// teacher.feedback.v3 prompt's candidate list and the known-slug set
 // used to classify each tag as resolved/unresolved), so every other
 // method panics if called — a test that needs it should say so
 // explicitly rather than silently getting a zero value.
@@ -863,7 +929,7 @@ func (c *capturingGen) GenerateStructured(_ context.Context, req ai.StructuredRe
 // TestRequestFeedbackRecentErrorsReachRenderedPrompt is Phase 2 Task
 // 5's closing-the-adapt-loop pin (PRD §16): a top priority seeded into
 // the PriorityRepository must actually reach the rendered
-// teacher.feedback.v2 USER prompt the AI generator receives — not just
+// teacher.feedback.v3 USER prompt the AI generator receives — not just
 // the in-memory ReviewInput.RecentErrors slice, which the v1 prompt
 // bug could have silently dropped. Captured via a stub generator, per
 // the brief's Step 3.
@@ -892,8 +958,8 @@ func TestRequestFeedbackRecentErrorsReachRenderedPrompt(t *testing.T) {
 	if !strings.Contains(gen.lastReq.User, wantLine) {
 		t.Fatalf("rendered prompt User = %q, missing the priority line %q", gen.lastReq.User, wantLine)
 	}
-	if gen.lastReq.PromptVersion != "v2" {
-		t.Fatalf("PromptVersion = %q, want v2 (the version whose user template renders RecentErrors)", gen.lastReq.PromptVersion)
+	if gen.lastReq.PromptVersion != "v3" {
+		t.Fatalf("PromptVersion = %q, want v3 (the version whose user template renders RecentErrors)", gen.lastReq.PromptVersion)
 	}
 }
 
@@ -1162,7 +1228,7 @@ func TestRequestFeedbackVocabularyDetectionFailureIsNonFatal(t *testing.T) {
 // 7's closing-the-loop pin (PRD §55/§17.5): an activation candidate
 // seeded into the VocabularyRepository (via planner.ActivationCandidates,
 // a thin passthrough over List(filter="activate")) must actually reach
-// the rendered teacher.feedback.v2 USER prompt, formatted
+// the rendered teacher.feedback.v3 USER prompt, formatted
 // "expression (reading) — meaning" — not just live in the in-memory
 // ReviewInput.ExpressionsToEncourage slice a template bug could
 // silently drop. Captured via a stub generator, mirroring
@@ -1195,8 +1261,8 @@ func TestRequestFeedbackExpressionsToEncourageReachRenderedPrompt(t *testing.T) 
 	if !strings.Contains(gen.lastReq.User, wantLine) {
 		t.Fatalf("rendered prompt User = %q, missing %q", gen.lastReq.User, wantLine)
 	}
-	if gen.lastReq.PromptVersion != "v2" {
-		t.Fatalf("PromptVersion = %q, want v2", gen.lastReq.PromptVersion)
+	if gen.lastReq.PromptVersion != "v3" {
+		t.Fatalf("PromptVersion = %q, want v3", gen.lastReq.PromptVersion)
 	}
 }
 
@@ -1293,5 +1359,382 @@ func TestRequestFeedbackActivationCandidatesErrorPropagates(t *testing.T) {
 	}
 	if len(h.repo.feedback) != 0 {
 		t.Fatalf("persisted feedback count = %d, want 0 (nothing should persist before the review even starts)", len(h.repo.feedback))
+	}
+}
+
+// --- Phase 2 Task 8: active recall (hints, retry, reveal) + confidence
+// tracking (PRD §9/§53). ---
+
+// testSocraticProfile is testProfile with TeacherMode "socratic" — the
+// mode adapters/fakeai keys hint attachment off of (via the rendered
+// v3 USER prompt's "Teacher mode: socratic" line).
+func testSocraticProfile() session.Profile {
+	p := testProfile()
+	p.TeacherMode = "socratic"
+	return p
+}
+
+// socraticFeedback wires a socratic-mode session/document over the
+// known-bad conjugation content, requests feedback, and returns the
+// resulting single CorrectionView — the common setup every Task 8 test
+// below builds on.
+func socraticFeedback(t *testing.T, h *testHarness) appfeedback.CorrectionView {
+	t.Helper()
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testSocraticProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	fb, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	if len(fb.Corrections) != 1 {
+		t.Fatalf("len(Corrections) = %d, want 1: %+v", len(fb.Corrections), fb.Corrections)
+	}
+	return fb.Corrections[0]
+}
+
+// TestRequestFeedbackSocraticEmitsHintShownEvent pins the hint.shown
+// event (fired alongside correction.presented — see RequestFeedback)
+// for a socratic-mode correction, and that the initial CorrectionView
+// itself already carries the hint.
+func TestRequestFeedbackSocraticEmitsHintShownEvent(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+
+	if !cv.HasHint() {
+		t.Fatalf("initial view has no hint in socratic mode: %+v", cv)
+	}
+
+	var found bool
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeHintShown {
+			found = true
+			if ev.Subject != cv.ID {
+				t.Fatalf("hint.shown Subject = %q, want %q", ev.Subject, cv.ID)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a hint.shown event, found none: %+v", h.events.events)
+	}
+}
+
+// TestRequestFeedbackNonSocraticOmitsHintShownEvent: the default
+// "teacher" mode harness (used throughout this file) must never record
+// hint.shown — fakeai never attaches a hint outside socratic mode (see
+// that package's own tests), and this pins the service-level
+// consequence of that.
+func TestRequestFeedbackNonSocraticOmitsHintShownEvent(t *testing.T) {
+	h := newTestHarness()
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeHintShown {
+			t.Fatalf("recorded an unexpected hint.shown event in non-socratic mode: %+v", ev)
+		}
+	}
+}
+
+// TestRetryCorrectionCorrectFlipsStatusAndRecordsIndependentEvent pins
+// the brief's Step 2 "retry correct flips status + event with
+// independent=true" scenario: a first-try correct retry (never
+// revealed) accepts the correction and records correction.retried with
+// Evidence {attempts:1, correct:true, independent:true} — and does NOT
+// also record a separate correction.accepted (see RetryCorrection's
+// doc comment on why retry-correct is its own signal).
+func TestRetryCorrectionCorrectFlipsStatusAndRecordsIndependentEvent(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+	baseline := len(h.events.events)
+
+	result, err := h.svc.RetryCorrection(context.Background(), testIdentity, cv.ID, cv.Replacement)
+	if err != nil {
+		t.Fatalf("RetryCorrection returned error: %v", err)
+	}
+	if !result.Correct {
+		t.Fatal("Correct = false, want true for a matching retry")
+	}
+	if result.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", result.Attempts)
+	}
+	if result.CorrectionView.Status != "accepted" {
+		t.Fatalf("CorrectionView.Status = %q, want accepted", result.CorrectionView.Status)
+	}
+
+	if len(h.events.events) != baseline+1 {
+		t.Fatalf("recorded %d new events, want 1: %+v", len(h.events.events)-baseline, h.events.events[baseline:])
+	}
+	last := h.events.events[len(h.events.events)-1]
+	if last.Type != event.TypeCorrectionRetried {
+		t.Fatalf("event Type = %q, want %q", last.Type, event.TypeCorrectionRetried)
+	}
+	if last.Subject != cv.ID {
+		t.Fatalf("event Subject = %q, want %q", last.Subject, cv.ID)
+	}
+	if last.SessionID == nil || *last.SessionID != testSessionID {
+		t.Fatalf("event SessionID = %v, want %q", last.SessionID, testSessionID)
+	}
+	if got := last.Evidence["attempts"]; got != 1 {
+		t.Fatalf("Evidence[attempts] = %v, want 1", got)
+	}
+	if got := last.Evidence["correct"]; got != true {
+		t.Fatalf("Evidence[correct] = %v, want true", got)
+	}
+	if got := last.Evidence["independent"]; got != true {
+		t.Fatalf("Evidence[independent] = %v, want true (never revealed)", got)
+	}
+
+	// No separate correction.accepted must have been recorded — retry's
+	// own correction.retried is the sole signal for this resolution.
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeCorrectionAccepted {
+			t.Fatalf("unexpectedly recorded a correction.accepted event alongside correction.retried: %+v", ev)
+		}
+	}
+}
+
+// TestRetryCorrectionAfterRevealIndependentFalse pins the brief's
+// "retry after reveal → independent=false" scenario: RevealCorrection
+// first (so the learner has seen the answer), THEN a correct retry —
+// still Correct=true (it matches), but independent must be false since
+// the answer was revealed before this attempt.
+func TestRetryCorrectionAfterRevealIndependentFalse(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+
+	if _, err := h.svc.RevealCorrection(context.Background(), testIdentity, cv.ID); err != nil {
+		t.Fatalf("RevealCorrection returned error: %v", err)
+	}
+
+	result, err := h.svc.RetryCorrection(context.Background(), testIdentity, cv.ID, cv.Replacement)
+	if err != nil {
+		t.Fatalf("RetryCorrection returned error: %v", err)
+	}
+	if !result.Correct {
+		t.Fatal("Correct = false, want true for a matching retry")
+	}
+
+	last := h.events.events[len(h.events.events)-1]
+	if last.Type != event.TypeCorrectionRetried {
+		t.Fatalf("event Type = %q, want %q", last.Type, event.TypeCorrectionRetried)
+	}
+	if got := last.Evidence["independent"]; got != false {
+		t.Fatalf("Evidence[independent] = %v, want false (answer was revealed)", got)
+	}
+}
+
+// TestRetryCorrectionWrongAttemptIncrementsAttemptsStatusUnchanged
+// pins the brief's "wrong attempt increments attempts, status
+// unchanged" scenario, across TWO consecutive wrong attempts (proving
+// the count actually accumulates, not just "goes from 0 to 1").
+func TestRetryCorrectionWrongAttemptIncrementsAttemptsStatusUnchanged(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+
+	result, err := h.svc.RetryCorrection(context.Background(), testIdentity, cv.ID, "面白いです")
+	if err != nil {
+		t.Fatalf("RetryCorrection returned error: %v", err)
+	}
+	if result.Correct {
+		t.Fatal("Correct = true, want false for a non-matching retry")
+	}
+	if result.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", result.Attempts)
+	}
+	if result.CorrectionView.Status != "presented" {
+		t.Fatalf("CorrectionView.Status = %q, want unchanged presented", result.CorrectionView.Status)
+	}
+
+	result2, err := h.svc.RetryCorrection(context.Background(), testIdentity, cv.ID, "まだ違います")
+	if err != nil {
+		t.Fatalf("RetryCorrection (2nd) returned error: %v", err)
+	}
+	if result2.Correct {
+		t.Fatal("Correct = true on 2nd wrong attempt, want false")
+	}
+	if result2.Attempts != 2 {
+		t.Fatalf("Attempts = %d, want 2 (accumulated across two wrong retries)", result2.Attempts)
+	}
+	if result2.CorrectionView.Status != "presented" {
+		t.Fatalf("CorrectionView.Status = %q, want still presented", result2.CorrectionView.Status)
+	}
+}
+
+// TestRetryCorrectionAttemptIsTrimmed: surrounding whitespace on the
+// submitted attempt must not defeat a correct retry — form input
+// commonly carries a trailing newline/space a learner didn't intend.
+func TestRetryCorrectionAttemptIsTrimmed(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+
+	result, err := h.svc.RetryCorrection(context.Background(), testIdentity, cv.ID, "  "+cv.Replacement+"\n")
+	if err != nil {
+		t.Fatalf("RetryCorrection returned error: %v", err)
+	}
+	if !result.Correct {
+		t.Fatal("Correct = false, want true once surrounding whitespace is trimmed")
+	}
+}
+
+// TestRetryCorrectionCrossIdentityReturnsErrNotFound pins the brief's
+// "cross-identity retry → ErrNotFound" scenario.
+func TestRetryCorrectionCrossIdentityReturnsErrNotFound(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+
+	_, err := h.svc.RetryCorrection(context.Background(), "learner-mallory", cv.ID, cv.Replacement)
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("err = %v, want storage.ErrNotFound", err)
+	}
+	if h.repo.corrections[cv.ID].Attempts != 0 {
+		t.Fatalf("Attempts = %d, want unchanged 0 after a cross-identity attempt", h.repo.corrections[cv.ID].Attempts)
+	}
+}
+
+// TestRetryCorrectionOnAlreadyAcceptedReturnsErrNotFound: once a
+// correction has left Status "presented" (here, via a first correct
+// retry), a further retry attempt has nothing to act on — the retry
+// endpoint's WHERE clause (status = 'presented') excludes it, same
+// ErrNotFound miss shape as everything else in this family.
+func TestRetryCorrectionOnAlreadyAcceptedReturnsErrNotFound(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+
+	if _, err := h.svc.RetryCorrection(context.Background(), testIdentity, cv.ID, cv.Replacement); err != nil {
+		t.Fatalf("first RetryCorrection returned error: %v", err)
+	}
+
+	_, err := h.svc.RetryCorrection(context.Background(), testIdentity, cv.ID, cv.Replacement)
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("retry on an already-accepted correction: err = %v, want storage.ErrNotFound", err)
+	}
+}
+
+// TestRevealCorrectionRecordsAnswerRevealedEvent pins the reveal
+// endpoint's service-level contract: Status stays "presented" (reveal
+// alone doesn't resolve the correction — the learner still has to
+// retry or explicitly accept), Revealed flips true, and answer.revealed
+// is recorded.
+func TestRevealCorrectionRecordsAnswerRevealedEvent(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+	baseline := len(h.events.events)
+
+	view, err := h.svc.RevealCorrection(context.Background(), testIdentity, cv.ID)
+	if err != nil {
+		t.Fatalf("RevealCorrection returned error: %v", err)
+	}
+	if !view.Revealed {
+		t.Fatal("Revealed = false, want true")
+	}
+	if view.Status != "presented" {
+		t.Fatalf("Status = %q, want unchanged presented", view.Status)
+	}
+
+	if len(h.events.events) != baseline+1 {
+		t.Fatalf("recorded %d new events, want 1", len(h.events.events)-baseline)
+	}
+	last := h.events.events[len(h.events.events)-1]
+	if last.Type != event.TypeAnswerRevealed {
+		t.Fatalf("event Type = %q, want %q", last.Type, event.TypeAnswerRevealed)
+	}
+	if last.Subject != cv.ID {
+		t.Fatalf("event Subject = %q, want %q", last.Subject, cv.ID)
+	}
+	if last.SessionID == nil || *last.SessionID != testSessionID {
+		t.Fatalf("event SessionID = %v, want %q", last.SessionID, testSessionID)
+	}
+}
+
+// TestRevealCorrectionCrossIdentityReturnsErrNotFound mirrors the
+// retry-side cross-identity pin, for reveal.
+func TestRevealCorrectionCrossIdentityReturnsErrNotFound(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+
+	_, err := h.svc.RevealCorrection(context.Background(), "learner-mallory", cv.ID)
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("err = %v, want storage.ErrNotFound", err)
+	}
+	if h.repo.corrections[cv.ID].Revealed {
+		t.Fatal("Revealed = true after a cross-identity attempt, want unchanged false")
+	}
+}
+
+// TestRecordConfidenceValidRangePersistsAndRecordsEvent pins the
+// brief's "confidence 1..5 persisted + event" scenario.
+func TestRecordConfidenceValidRangePersistsAndRecordsEvent(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+	baseline := len(h.events.events)
+
+	if err := h.svc.RecordConfidence(context.Background(), testIdentity, cv.ID, 4); err != nil {
+		t.Fatalf("RecordConfidence returned error: %v", err)
+	}
+
+	rec := h.repo.corrections[cv.ID]
+	if rec.Confidence == nil || *rec.Confidence != 4 {
+		t.Fatalf("persisted Confidence = %v, want pointer to 4", rec.Confidence)
+	}
+
+	if len(h.events.events) != baseline+1 {
+		t.Fatalf("recorded %d new events, want 1", len(h.events.events)-baseline)
+	}
+	last := h.events.events[len(h.events.events)-1]
+	if last.Type != event.TypeConfidenceRecorded {
+		t.Fatalf("event Type = %q, want %q", last.Type, event.TypeConfidenceRecorded)
+	}
+	if last.Subject != cv.ID {
+		t.Fatalf("event Subject = %q, want %q", last.Subject, cv.ID)
+	}
+	if got := last.Evidence["confidence"]; got != 4 {
+		t.Fatalf("Evidence[confidence] = %v, want 4", got)
+	}
+}
+
+// TestRecordConfidenceOutOfRangeReturnsErrorAndRecordsNoEvent pins the
+// brief's "0/6 → error" scenario for both boundary violations, and
+// that neither call reaches the repository/recorder at all.
+func TestRecordConfidenceOutOfRangeReturnsErrorAndRecordsNoEvent(t *testing.T) {
+	for _, bad := range []int{0, 6, -1, 100} {
+		h := newTestHarness()
+		cv := socraticFeedback(t, h)
+		baseline := len(h.events.events)
+
+		err := h.svc.RecordConfidence(context.Background(), testIdentity, cv.ID, bad)
+		if !errors.Is(err, appfeedback.ErrInvalidConfidence) {
+			t.Fatalf("confidence=%d: err = %v, want ErrInvalidConfidence", bad, err)
+		}
+		if len(h.events.events) != baseline {
+			t.Fatalf("confidence=%d: recorded %d new events, want 0", bad, len(h.events.events)-baseline)
+		}
+		if h.repo.corrections[cv.ID].Confidence != nil {
+			t.Fatalf("confidence=%d: persisted Confidence = %v, want unchanged nil", bad, h.repo.corrections[cv.ID].Confidence)
+		}
+	}
+}
+
+// TestRecordConfidenceCrossIdentityReturnsErrNotFound mirrors the
+// retry/reveal-side cross-identity pin, for confidence.
+func TestRecordConfidenceCrossIdentityReturnsErrNotFound(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h)
+
+	err := h.svc.RecordConfidence(context.Background(), "learner-mallory", cv.ID, 3)
+	if !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("err = %v, want storage.ErrNotFound", err)
 	}
 }

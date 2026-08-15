@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -48,6 +49,10 @@ var ErrInvalidSelection = errors.New("feedback: invalid selection range")
 // ErrInvalidStatus is returned when SetCorrectionStatus is asked to set
 // anything other than "accepted" or "rejected".
 var ErrInvalidStatus = errors.New(`feedback: status must be "accepted" or "rejected"`)
+
+// ErrInvalidConfidence is returned when RecordConfidence is asked to
+// record anything outside 1..5.
+var ErrInvalidConfidence = errors.New("feedback: confidence must be between 1 and 5")
 
 type Service struct {
 	sessions   storage.SessionRepository
@@ -98,11 +103,17 @@ type Request struct {
 
 // CorrectionView is a correction.Correction with the pipeline's added
 // context: its current Status and a rune-level Diff between Original
-// and Replacement, ready for a UI to render directly.
+// and Replacement, ready for a UI to render directly. Attempts,
+// Confidence, and Revealed are Phase 2 Task 8's active-recall/
+// confidence-tracking state (PRD §9/§53) — see storage.CorrectionRecord,
+// which these are copied from verbatim by correctionViewFromRecord.
 type CorrectionView struct {
 	correction.Correction
-	Status string
-	Diff   []diff.Segment
+	Status     string
+	Diff       []diff.Segment
+	Attempts   int
+	Confidence *int
+	Revealed   bool
 }
 
 // Feedback is the result of a review: the reviewed text, the corrected
@@ -164,7 +175,7 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 	}
 	contextText := windowContext(runes, start, end, contextWindow)
 
-	// conceptCandidates offers the teacher.feedback.v2 prompt the full
+	// conceptCandidates offers the teacher.feedback.v3 prompt the full
 	// catalog of taggable grammar concepts; knownSlugs is the same
 	// catalog as a set, used below to decide whether each concept the
 	// teacher tags a correction with is resolved (in the catalog) or
@@ -235,6 +246,8 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 			Severity:      string(c.Severity),
 			ExplanationJA: c.Explanation.JA,
 			ExplanationEN: c.Explanation.EN,
+			HintJA:        c.Hint.JA,
+			HintEN:        c.Hint.EN,
 			Status:        "presented",
 		})
 		if len(c.Concepts) > 0 {
@@ -286,6 +299,27 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 			},
 		}); err != nil {
 			return Feedback{}, fmt.Errorf("feedback: record %s: %w", event.TypeCorrectionPresented, err)
+		}
+
+		// hint.shown fires once per socratic correction (PRD §9/§53),
+		// alongside correction.presented above — c.HasHint() is true only
+		// for a socratic-mode teacher response (see
+		// agent/teacher.ReviewWriting's DTO mapping and
+		// adapters/fakeai's socratic-marker detection), never inferred
+		// from Replacement or any other field here.
+		if c.HasHint() {
+			if err := s.rec.Record(ctx, event.LearningEvent{
+				IdentityID: req.Identity,
+				SessionID:  &req.SessionID,
+				Type:       event.TypeHintShown,
+				Subject:    c.ID,
+				Evidence: map[string]any{
+					"type":     string(c.Type),
+					"severity": string(c.Severity),
+				},
+			}); err != nil {
+				return Feedback{}, fmt.Errorf("feedback: record %s: %w", event.TypeHintShown, err)
+			}
 		}
 
 		// One grammar.concept.encountered event per RESOLVED slug — a
@@ -448,6 +482,138 @@ func (s *Service) SetCorrectionStatus(ctx context.Context, identity learner.Iden
 	return correctionViewFromRecord(rec, concepts), nil
 }
 
+// RetryResult is what RetryCorrection returns: whether attempt matched
+// (Correct), the correction's new (post-increment) Attempts count, and
+// the refreshed CorrectionView ready to re-render.
+type RetryResult struct {
+	Correct        bool
+	Attempts       int
+	CorrectionView CorrectionView
+}
+
+// RetryCorrection is Phase 2 Task 8's active-recall retry (PRD §9/§53):
+// the learner re-types a presented correction from memory (optionally
+// after seeing its hint). repo.RetryCorrection does the actual
+// correctness check and increments Attempts atomically (see its doc
+// comment) — this method's job is trimming the raw form input,
+// recording correction.retried, and assembling the result.
+//
+// A correct retry flips the correction's Status to "accepted" as a
+// SIDE EFFECT of repo.RetryCorrection's own UPDATE (see
+// db/queries/feedback.sql), but this method deliberately does NOT also
+// call SetCorrectionStatus / record a separate correction.accepted
+// event: correction.retried's own Evidence already carries
+// correct=true, which is a strictly more informative signal (attempt
+// count, whether it was independent of a reveal) than a bare
+// correction.accepted would be — recording both would double-count the
+// same "the learner got this right" moment under two different event
+// types, and any downstream consumer (Task 14's statistics, the
+// learner model) would have to know to deduplicate them.
+//
+// independent — part of correction.retried's Evidence — is true only
+// when the retry was BOTH correct AND the answer was never revealed for
+// this correction (rec.Revealed, read from the SAME row
+// repo.RetryCorrection just updated, so there's no separate query that
+// could race against a reveal happening in between): a learner who
+// peeked via 答えを見る before typing the right answer didn't recall it
+// independently, even though the retry itself is still "correct".
+func (s *Service) RetryCorrection(ctx context.Context, identity learner.IdentityID, correctionID, attempt string) (RetryResult, error) {
+	trimmed := strings.TrimSpace(attempt)
+	rec, err := s.repo.RetryCorrection(ctx, identity, correctionID, trimmed)
+	if err != nil {
+		return RetryResult{}, err
+	}
+
+	correct := rec.Status == "accepted"
+	independent := correct && !rec.Revealed
+
+	if err := s.rec.Record(ctx, event.LearningEvent{
+		IdentityID: identity,
+		SessionID:  &rec.SessionID,
+		Type:       event.TypeCorrectionRetried,
+		Subject:    rec.ID,
+		Evidence: map[string]any{
+			"attempts":    rec.Attempts,
+			"correct":     correct,
+			"independent": independent,
+		},
+	}); err != nil {
+		return RetryResult{}, fmt.Errorf("feedback: record %s: %w", event.TypeCorrectionRetried, err)
+	}
+
+	concepts, err := s.repo.GetCorrectionConcepts(ctx, rec.ID)
+	if err != nil {
+		return RetryResult{}, fmt.Errorf("feedback: get correction concepts: %w", err)
+	}
+
+	return RetryResult{
+		Correct:        correct,
+		Attempts:       rec.Attempts,
+		CorrectionView: correctionViewFromRecord(rec, concepts),
+	}, nil
+}
+
+// RevealCorrection marks a presented correction's answer revealed (the
+// socratic card's 答えを見る button) and records answer.revealed.
+// repo.RevealCorrection is identity-scoped and restricted to Status
+// "presented", same miss semantics as RetryCorrection.
+func (s *Service) RevealCorrection(ctx context.Context, identity learner.IdentityID, correctionID string) (CorrectionView, error) {
+	rec, err := s.repo.RevealCorrection(ctx, identity, correctionID)
+	if err != nil {
+		return CorrectionView{}, err
+	}
+
+	if err := s.rec.Record(ctx, event.LearningEvent{
+		IdentityID: identity,
+		SessionID:  &rec.SessionID,
+		Type:       event.TypeAnswerRevealed,
+		Subject:    rec.ID,
+		Evidence: map[string]any{
+			"type":     rec.Type,
+			"severity": rec.Severity,
+		},
+	}); err != nil {
+		return CorrectionView{}, fmt.Errorf("feedback: record %s: %w", event.TypeAnswerRevealed, err)
+	}
+
+	concepts, err := s.repo.GetCorrectionConcepts(ctx, rec.ID)
+	if err != nil {
+		return CorrectionView{}, fmt.Errorf("feedback: get correction concepts: %w", err)
+	}
+
+	return correctionViewFromRecord(rec, concepts), nil
+}
+
+// RecordConfidence records the learner's self-rated confidence (1..5,
+// PRD §9/§53) on a correction, after it's resolved. Validated here
+// (not left to the DB's CHECK constraint) so an out-of-range value
+// comes back as a clean ErrInvalidConfidence rather than an opaque
+// constraint-violation error from the repository.
+func (s *Service) RecordConfidence(ctx context.Context, identity learner.IdentityID, correctionID string, confidence int) error {
+	if confidence < 1 || confidence > 5 {
+		return fmt.Errorf("%w: got %d", ErrInvalidConfidence, confidence)
+	}
+
+	rec, err := s.repo.RecordConfidence(ctx, identity, correctionID, confidence)
+	if err != nil {
+		return err
+	}
+
+	if err := s.rec.Record(ctx, event.LearningEvent{
+		IdentityID: identity,
+		SessionID:  &rec.SessionID,
+		Type:       event.TypeConfidenceRecorded,
+		Subject:    rec.ID,
+		Evidence: map[string]any{
+			"confidence": confidence,
+		},
+	}); err != nil {
+		return fmt.Errorf("feedback: record %s: %w", event.TypeConfidenceRecorded, err)
+	}
+
+	return nil
+}
+
 func correctionViewFromRecord(rec storage.CorrectionRecord, concepts []string) CorrectionView {
 	return CorrectionView{
 		Correction: correction.Correction{
@@ -458,16 +624,20 @@ func correctionViewFromRecord(rec storage.CorrectionRecord, concepts []string) C
 			Severity:    correction.Severity(rec.Severity),
 			Explanation: correction.Explanation{JA: rec.ExplanationJA, EN: rec.ExplanationEN},
 			Concepts:    concepts,
+			Hint:        correction.Explanation{JA: rec.HintJA, EN: rec.HintEN},
 		},
-		Status: rec.Status,
-		Diff:   diff.Runes(rec.Original, rec.Replacement),
+		Status:     rec.Status,
+		Diff:       diff.Runes(rec.Original, rec.Replacement),
+		Attempts:   rec.Attempts,
+		Confidence: rec.Confidence,
+		Revealed:   rec.Revealed,
 	}
 }
 
 // recentErrors formats identity's top priorities (PRD §16's heuristic
 // teaching planner — internal/application/planner keeps
 // storage.PriorityRepository current) as the human-readable lines the
-// teacher.feedback.v2 prompt's RecentErrors range renders directly
+// teacher.feedback.v3 prompt's RecentErrors range renders directly
 // into the system context ("weigh these when deciding severity"). A
 // learner with no priorities yet (the common case for a brand-new
 // identity, or before the learner model has flagged anything) gets an
@@ -488,7 +658,7 @@ func (s *Service) recentErrors(ctx context.Context, identity learner.IdentityID)
 // expressionsToEncourage formats identity's top activation candidates
 // (PRD §55/§17.5's vocabulary activator — application/planner.Planner's
 // ActivationCandidates, capped at activationCandidatesLimit) as the
-// human-readable lines the teacher.feedback.v2 prompt's
+// human-readable lines the teacher.feedback.v3 prompt's
 // ExpressionsToEncourage range renders directly: "expression (reading)
 // — meaning", with the parenthetical reading dropped when it's empty or
 // identical to the expression itself (a pure-kana entry has nothing to

@@ -20,6 +20,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
+	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
@@ -131,6 +132,62 @@ func (f *fakeFeedbackRepo) UpdateCorrectionStatus(_ context.Context, identity le
 	return c, nil
 }
 
+// identityScopedPresented mirrors the real repo's RetryCorrection/
+// RevealCorrection WHERE clause — see the identically-named helper in
+// application/feedback/service_test.go, which this is a copy of.
+func (f *fakeFeedbackRepo) identityScopedPresented(identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, session.ID, bool) {
+	c, ok := f.corrections[correctionID]
+	if !ok || c.Status != "presented" {
+		return storage.CorrectionRecord{}, "", false
+	}
+	fb, ok := f.feedback[c.FeedbackID]
+	if !ok || fb.IdentityID != identity {
+		return storage.CorrectionRecord{}, "", false
+	}
+	return c, fb.SessionID, true
+}
+
+func (f *fakeFeedbackRepo) RetryCorrection(_ context.Context, identity learner.IdentityID, correctionID, trimmedAttempt string) (storage.CorrectionRecord, error) {
+	c, sessionID, ok := f.identityScopedPresented(identity, correctionID)
+	if !ok {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	c.Attempts++
+	if trimmedAttempt == c.Replacement {
+		c.Status = "accepted"
+	}
+	c.SessionID = sessionID
+	f.corrections[correctionID] = c
+	return c, nil
+}
+
+func (f *fakeFeedbackRepo) RevealCorrection(_ context.Context, identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, error) {
+	c, sessionID, ok := f.identityScopedPresented(identity, correctionID)
+	if !ok {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	c.Revealed = true
+	c.SessionID = sessionID
+	f.corrections[correctionID] = c
+	return c, nil
+}
+
+func (f *fakeFeedbackRepo) RecordConfidence(_ context.Context, identity learner.IdentityID, correctionID string, confidence int) (storage.CorrectionRecord, error) {
+	c, ok := f.corrections[correctionID]
+	if !ok {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	fb, ok := f.feedback[c.FeedbackID]
+	if !ok || fb.IdentityID != identity {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	v := confidence
+	c.Confidence = &v
+	c.SessionID = fb.SessionID
+	f.corrections[correctionID] = c
+	return c, nil
+}
+
 // GetCorrectionConcepts mirrors the real query's "resolved only,
 // slug-ascending" contract.
 func (f *fakeFeedbackRepo) GetCorrectionConcepts(_ context.Context, correctionID string) ([]string, error) {
@@ -150,8 +207,27 @@ func (f *fakeFeedbackRepo) GetCorrectionConcepts(_ context.Context, correctionID
 // edges" shape the rest of the HTTP-layer tests use. It creates a
 // session, opens its document, and autosaves content into it, then
 // returns the handler plus the session and document id the test posts
-// against.
+// against. TeacherMode is fixed "teacher" — see
+// socraticFeedbackTestServer for Task 8's socratic-mode variant.
 func feedbackTestServer(t *testing.T, content string) (http.Handler, session.Session, string) {
+	t.Helper()
+	h, sess, docID, _ := feedbackTestServerWithMode(t, content, "teacher")
+	return h, sess, docID
+}
+
+// socraticFeedbackTestServer is feedbackTestServer with TeacherMode
+// "socratic" — the mode adapters/fakeai keys hint attachment off of, so
+// a review of the known-bad conjugation comes back with a hint (Phase 2
+// Task 8, PRD §9/§53). It also returns the fake event repo (unlike
+// feedbackTestServer) so retry/reveal/confidence tests can assert on
+// hint.shown/correction.retried/answer.revealed/confidence.recorded
+// Evidence directly, not just the rendered card.
+func socraticFeedbackTestServer(t *testing.T, content string) (http.Handler, session.Session, string, *fakeEventRepo) {
+	t.Helper()
+	return feedbackTestServerWithMode(t, content, "socratic")
+}
+
+func feedbackTestServerWithMode(t *testing.T, content, teacherMode string) (http.Handler, session.Session, string, *fakeEventRepo) {
 	t.Helper()
 	opts := testOptions()
 	sessionRepo := newFakeSessionRepo()
@@ -173,7 +249,7 @@ func feedbackTestServer(t *testing.T, content string) (http.Handler, session.Ses
 	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec)
 
 	sess, err := opts.Sessions.Create(context.Background(), "dev", "日記", "Diary", session.Profile{
-		TeacherMode:         "teacher",
+		TeacherMode:         teacherMode,
 		Strictness:          "balanced",
 		ExplanationLanguage: "both",
 	})
@@ -190,7 +266,7 @@ func feedbackTestServer(t *testing.T, content string) (http.Handler, session.Ses
 	}
 
 	srv := NewServer(opts)
-	return srv.HandlerForTest(), sess, string(doc.ID)
+	return srv.HandlerForTest(), sess, string(doc.ID), events
 }
 
 func postForm(t *testing.T, h http.Handler, path string, form url.Values) *httptest.ResponseRecorder {
@@ -374,6 +450,301 @@ func TestFeedbackRequestBadStartReturnsBadRequest(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// --- Phase 2 Task 8: active recall (hints, retry, reveal) + confidence
+// tracking (PRD §9/§53). ---
+
+// socraticRoundTrip posts feedback against a fresh socratic session and
+// returns the rendered card body plus the correction ID extracted from
+// it, plus the events repo — the setup every test below builds on.
+func socraticRoundTrip(t *testing.T, content string) (h http.Handler, body, correctionID string, events *fakeEventRepo) {
+	t.Helper()
+	h, sess, docID, events := socraticFeedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	form := url.Values{}
+	form.Set("document_id", docID)
+	form.Set("start", "0")
+	form.Set("end", strconv.Itoa(runeLen))
+	form.Set("text", content)
+	rec := postForm(t, h, "/sessions/"+string(sess.ID)+"/feedback", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST feedback status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body = rec.Body.String()
+	return h, body, extractCorrectionID(t, body), events
+}
+
+// TestSocraticFeedbackHidesAnswerShowsHint pins the brief's Step 4
+// "feedback → card shows the HINT, no 面白かったです visible" scenario:
+// the initial card renders the hint and a retry/reveal affordance, but
+// neither the corrected form (bare, nor inside the diff, nor inside the
+// English/Japanese explanation prose) appears anywhere in the body.
+func TestSocraticFeedbackHidesAnswerShowsHint(t *testing.T) {
+	_, body, correctionID, events := socraticRoundTrip(t, "とても面白いでした")
+
+	if correctionID == "" {
+		t.Fatal("no correction id found in body")
+	}
+	if !strings.Contains(body, "い形容詞の過去形の作り方を思い出してください") {
+		t.Fatalf("body missing the JA hint: %s", body)
+	}
+	if !strings.Contains(body, "Recall how い-adjectives form the past tense") {
+		t.Fatalf("body missing the EN hint: %s", body)
+	}
+	if strings.Contains(body, "面白かったです") {
+		t.Fatalf("body leaks the corrected form 面白かったです pre-reveal: %s", body)
+	}
+	// The bare replacement text (かったです, the diff's own insert span
+	// content — see toDiffSpans) must not appear either: a whole-
+	// selection diff (rendered by the "feedback" partial ABOVE the
+	// individual card, from fb.Diff, not this card's own gated diff)
+	// segments finer than "面白かったです" as one unit, so checking only
+	// for the full contiguous replacement string would miss a diff-block
+	// leak whose d-ins span happens to start after the shared "面白"
+	// prefix — this pins the fix for exactly that gap (Step 4's browser
+	// verification originally caught it; this codifies it).
+	if strings.Contains(body, "d-ins") {
+		t.Fatalf("body contains a d-ins diff span pre-reveal (leaks the answer via the whole-selection diff block): %s", body)
+	}
+	if !strings.Contains(body, `name="attempt"`) {
+		t.Fatalf("body missing the retry input: %s", body)
+	}
+	if !strings.Contains(body, "答えを見る") {
+		t.Fatalf("body missing the reveal button: %s", body)
+	}
+	if strings.Contains(body, "納得した") {
+		t.Fatalf("socratic pre-reveal card should not show the plain accept button: %s", body)
+	}
+
+	var found bool
+	for _, ev := range events.byIdentity["dev"] {
+		if ev.Type == event.TypeHintShown && ev.Subject == correctionID {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a hint.shown event for %s, found none: %+v", correctionID, events.byIdentity["dev"])
+	}
+}
+
+// TestCorrectionRetryWrongAttemptShowsAttemptsStillHidesAnswer pins
+// "wrong retry → attempts 1, still hidden".
+func TestCorrectionRetryWrongAttemptShowsAttemptsStillHidesAnswer(t *testing.T) {
+	h, _, correctionID, _ := socraticRoundTrip(t, "とても面白いでした")
+
+	form := url.Values{}
+	form.Set("attempt", "面白いです")
+	rec := postForm(t, h, "/corrections/"+correctionID+"/retry", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST retry status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "試行回数: 1") {
+		t.Fatalf("body missing attempts count: %s", body)
+	}
+	if strings.Contains(body, "面白かったです") {
+		t.Fatalf("body leaks the corrected form after a wrong retry: %s", body)
+	}
+	if !strings.Contains(body, `data-status="presented"`) {
+		t.Fatalf("body status should remain presented after a wrong retry: %s", body)
+	}
+	if strings.Contains(body, "正解") {
+		t.Fatalf("body should not show the correct-banner after a wrong retry: %s", body)
+	}
+}
+
+// TestCorrectionRetryCorrectShowsBannerAcceptedAndConfidenceWidget pins
+// "correct retry → 正解 banner + accepted + confidence stars", and that
+// correction.retried recorded independent=true (never revealed).
+func TestCorrectionRetryCorrectShowsBannerAcceptedAndConfidenceWidget(t *testing.T) {
+	h, _, correctionID, events := socraticRoundTrip(t, "とても面白いでした")
+
+	form := url.Values{}
+	form.Set("attempt", "面白かったです")
+	rec := postForm(t, h, "/corrections/"+correctionID+"/retry", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST retry status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "正解！") {
+		t.Fatalf("body missing the 正解！ banner: %s", body)
+	}
+	if !strings.Contains(body, `data-status="accepted"`) {
+		t.Fatalf("body missing data-status=\"accepted\": %s", body)
+	}
+	if !strings.Contains(body, "面白かったです") {
+		t.Fatalf("body should show the corrected form once accepted: %s", body)
+	}
+	if !strings.Contains(body, "どのくらい自信がありましたか") {
+		t.Fatalf("body missing the confidence widget: %s", body)
+	}
+
+	var last event.LearningEvent
+	for _, ev := range events.byIdentity["dev"] {
+		if ev.Type == event.TypeCorrectionRetried {
+			last = ev
+		}
+	}
+	if last.Type != event.TypeCorrectionRetried {
+		t.Fatal("no correction.retried event recorded")
+	}
+	if got := last.Evidence["independent"]; got != true {
+		t.Fatalf("Evidence[independent] = %v, want true", got)
+	}
+	for _, ev := range events.byIdentity["dev"] {
+		if ev.Type == event.TypeCorrectionAccepted {
+			t.Fatalf("unexpectedly recorded a separate correction.accepted event: %+v", ev)
+		}
+	}
+}
+
+// TestCorrectionRevealShowsAnswerThenRetryRecordsIndependentFalse pins
+// the brief's Step 4 second-round scenario: 答えを見る reveals the
+// answer (still Status "presented"), and a SUBSEQUENT correct retry
+// records independent=false in correction.retried's Evidence.
+func TestCorrectionRevealShowsAnswerThenRetryRecordsIndependentFalse(t *testing.T) {
+	h, _, correctionID, events := socraticRoundTrip(t, "とても面白いでした")
+
+	revealRec := postForm(t, h, "/corrections/"+correctionID+"/reveal", url.Values{})
+	if revealRec.Code != http.StatusOK {
+		t.Fatalf("POST reveal status = %d, body=%s", revealRec.Code, revealRec.Body.String())
+	}
+	revealBody := revealRec.Body.String()
+	if !strings.Contains(revealBody, "面白かったです") {
+		t.Fatalf("body should show the answer after reveal: %s", revealBody)
+	}
+	if !strings.Contains(revealBody, `data-status="presented"`) {
+		t.Fatalf("reveal alone should not resolve the correction: %s", revealBody)
+	}
+	var revealed bool
+	for _, ev := range events.byIdentity["dev"] {
+		if ev.Type == event.TypeAnswerRevealed && ev.Subject == correctionID {
+			revealed = true
+		}
+	}
+	if !revealed {
+		t.Fatalf("expected an answer.revealed event, found none: %+v", events.byIdentity["dev"])
+	}
+
+	form := url.Values{}
+	form.Set("attempt", "面白かったです")
+	retryRec := postForm(t, h, "/corrections/"+correctionID+"/retry", form)
+	if retryRec.Code != http.StatusOK {
+		t.Fatalf("POST retry (after reveal) status = %d, body=%s", retryRec.Code, retryRec.Body.String())
+	}
+
+	var last event.LearningEvent
+	for _, ev := range events.byIdentity["dev"] {
+		if ev.Type == event.TypeCorrectionRetried {
+			last = ev
+		}
+	}
+	if last.Type != event.TypeCorrectionRetried {
+		t.Fatal("no correction.retried event recorded")
+	}
+	if got := last.Evidence["correct"]; got != true {
+		t.Fatalf("Evidence[correct] = %v, want true", got)
+	}
+	if got := last.Evidence["independent"]; got != false {
+		t.Fatalf("Evidence[independent] = %v, want false (answer was revealed before this attempt)", got)
+	}
+}
+
+// TestCorrectionConfidenceReturns204 pins "click 4 → 204".
+func TestCorrectionConfidenceReturns204(t *testing.T) {
+	h, _, correctionID, events := socraticRoundTrip(t, "とても面白いでした")
+
+	// Accept first via retry, mirroring the browser flow's order (the
+	// confidence widget only appears once accepted — see the template's
+	// {{if eq .Status "accepted"}} guard — but the handler/service don't
+	// themselves require it, and confidence.recorded firing here still
+	// pins the endpoint's core contract).
+	if rec := postForm(t, h, "/corrections/"+correctionID+"/retry", url.Values{"attempt": {"面白かったです"}}); rec.Code != http.StatusOK {
+		t.Fatalf("POST retry status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	form := url.Values{}
+	form.Set("confidence", "4")
+	rec := postForm(t, h, "/corrections/"+correctionID+"/confidence", form)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("POST confidence status = %d, want 204, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var found bool
+	for _, ev := range events.byIdentity["dev"] {
+		if ev.Type == event.TypeConfidenceRecorded {
+			found = true
+			if got := ev.Evidence["confidence"]; got != 4 {
+				t.Fatalf("Evidence[confidence] = %v, want 4", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("expected a confidence.recorded event, found none: %+v", events.byIdentity["dev"])
+	}
+}
+
+// TestCorrectionConfidenceOutOfRangeReturnsBadRequest.
+func TestCorrectionConfidenceOutOfRangeReturnsBadRequest(t *testing.T) {
+	h, _, correctionID, _ := socraticRoundTrip(t, "とても面白いでした")
+
+	form := url.Values{}
+	form.Set("confidence", "0")
+	rec := postForm(t, h, "/corrections/"+correctionID+"/confidence", form)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCorrectionRetryUnknownIDReturnsNotFound mirrors
+// TestFeedbackRequestCrossIdentitySessionNotFound's shape for the new
+// retry route.
+func TestCorrectionRetryUnknownIDReturnsNotFound(t *testing.T) {
+	h, _, _, _ := socraticFeedbackTestServer(t, "とても面白いでした")
+
+	form := url.Values{}
+	form.Set("attempt", "面白かったです")
+	rec := postForm(t, h, "/corrections/"+uuidLikeMissingID+"/retry", form)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// uuidLikeMissingID is a syntactically-plausible but never-inserted
+// correction id, used by TestCorrectionRetryUnknownIDReturnsNotFound.
+const uuidLikeMissingID = "00000000-0000-0000-0000-000000000000"
+
+// TestNonSocraticCorrectionCardHasNoRetryAffordance: a plain
+// (non-socratic) correction — the existing Phase 1 shape — must render
+// exactly as before Task 8, with no retry input, no hint, no reveal
+// button. Guards against the socratic gate accidentally firing for a
+// correction whose Hint is the zero Explanation{}.
+func TestNonSocraticCorrectionCardHasNoRetryAffordance(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, docID := feedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	form := url.Values{}
+	form.Set("document_id", docID)
+	form.Set("start", "0")
+	form.Set("end", strconv.Itoa(runeLen))
+	form.Set("text", content)
+	rec := postForm(t, h, "/sessions/"+string(sess.ID)+"/feedback", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST feedback status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, `name="attempt"`) {
+		t.Fatalf("non-socratic card unexpectedly has a retry input: %s", body)
+	}
+	if strings.Contains(body, "答えを見る") {
+		t.Fatalf("non-socratic card unexpectedly has a reveal button: %s", body)
+	}
+	if !strings.Contains(body, "納得した") {
+		t.Fatalf("non-socratic card missing the plain accept button: %s", body)
 	}
 }
 

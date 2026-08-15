@@ -3,6 +3,7 @@ package fakeai
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
@@ -19,6 +20,10 @@ type wantCorrection struct {
 		EN string `json:"en"`
 	} `json:"explanation"`
 	Concepts []string `json:"concepts,omitempty"`
+	Hint     *struct {
+		JA string `json:"ja"`
+		EN string `json:"en"`
+	} `json:"hint,omitempty"`
 }
 
 type wantResult struct {
@@ -174,5 +179,94 @@ func TestFakeAdapterEmptySchemaNameIsAccepted(t *testing.T) {
 	// rather than an error — the guard only rejects an explicit mismatch.
 	if _, err := New().GenerateStructured(context.Background(), ai.StructuredRequest{User: "hello"}); err != nil {
 		t.Fatalf("GenerateStructured with empty SchemaName returned error: %v", err)
+	}
+}
+
+// generateV2 mirrors generate above but against schemaV2, and prefixes
+// user with the same "Teacher mode: <mode>" line
+// internal/agent/teacher's teacher.feedback.v3 USER template renders —
+// see fakeai.go's socraticMarker doc comment for why this specific line
+// (not the v3 SYSTEM template's separate, always-present "Teacher mode
+// 'socratic': ..." instruction sentence) is what GenerateStructured
+// keys its hint-attachment decision off of.
+func generateV2(t *testing.T, teacherMode, user string) (ai.StructuredResponse, wantResult) {
+	t.Helper()
+	gen := New()
+	req := ai.StructuredRequest{
+		PromptName:    "teacher.feedback",
+		PromptVersion: "v3",
+		System:        "system prompt",
+		User:          "Teacher mode: " + teacherMode + "\n\n" + user,
+		SchemaName:    "correction_result.v2",
+		Agent:         "teacher",
+	}
+	resp, err := gen.GenerateStructured(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStructured returned error: %v", err)
+	}
+	if err := schemas.Validate("correction_result.v2", resp.JSON); err != nil {
+		t.Fatalf("response JSON failed schema validation: %v\nJSON: %s", err, resp.JSON)
+	}
+	var got wantResult
+	if err := json.Unmarshal(resp.JSON, &got); err != nil {
+		t.Fatalf("unmarshal response JSON: %v", err)
+	}
+	return resp, got
+}
+
+// TestFakeAdapterSocraticModeAttachesHint pins Step 1 of the Task 8
+// brief: a schemaV2 request whose rendered User carries "Teacher mode:
+// socratic" gets the brief's exact pinned hint text on the
+// い-adjective-past correction, and the response still validates
+// against correction_result.v2 (hint-ful corrections are the whole
+// point of the v2 schema over v1).
+func TestFakeAdapterSocraticModeAttachesHint(t *testing.T) {
+	_, got := generateV2(t, "socratic", "友達と映画を見ました。とても面白いでした。")
+	if len(got.Corrections) != 1 {
+		t.Fatalf("Corrections = %+v, want exactly 1", got.Corrections)
+	}
+	c := got.Corrections[0]
+	if c.Hint == nil {
+		t.Fatal("Hint was not attached in socratic mode")
+	}
+	wantJA := "い形容詞の過去形の作り方を思い出してください。"
+	wantEN := "Recall how い-adjectives form the past tense."
+	if c.Hint.JA != wantJA {
+		t.Errorf("Hint.JA = %q, want %q", c.Hint.JA, wantJA)
+	}
+	if c.Hint.EN != wantEN {
+		t.Errorf("Hint.EN = %q, want %q", c.Hint.EN, wantEN)
+	}
+	// The hint must never give away the answer: the corrected form must
+	// not appear anywhere in the hint text itself.
+	if strings.Contains(c.Hint.JA, "面白かった") || strings.Contains(c.Hint.EN, "面白かった") {
+		t.Fatalf("Hint leaks the corrected form: %+v", c.Hint)
+	}
+}
+
+// TestFakeAdapterNonSocraticModeOmitsHint: the same schemaV2 request,
+// but a non-socratic teacher mode, must come back with no hint at all —
+// v2 accepting a "hint" property doesn't mean every mode gets one.
+func TestFakeAdapterNonSocraticModeOmitsHint(t *testing.T) {
+	_, got := generateV2(t, "teacher", "友達と映画を見ました。とても面白いでした。")
+	if len(got.Corrections) != 1 {
+		t.Fatalf("Corrections = %+v, want exactly 1", got.Corrections)
+	}
+	if got.Corrections[0].Hint != nil {
+		t.Fatalf("Hint = %+v, want nil for a non-socratic teacher mode", got.Corrections[0].Hint)
+	}
+}
+
+// TestFakeAdapterSchemaV1StillSupported: fakeai must keep answering
+// schemaV1 requests exactly as before Task 8 — v1's item schema has no
+// "hint" property at all, so a v1-shaped response must never carry one,
+// regardless of teacher mode.
+func TestFakeAdapterSchemaV1StillSupported(t *testing.T) {
+	_, got := generate(t, "Teacher mode: socratic\n\nとても面白いでした。")
+	if len(got.Corrections) != 1 {
+		t.Fatalf("Corrections = %+v, want exactly 1", got.Corrections)
+	}
+	if got.Corrections[0].Hint != nil {
+		t.Fatalf("Hint = %+v, want nil for a v1 schema request even when the prompt mentions socratic", got.Corrections[0].Hint)
 	}
 }

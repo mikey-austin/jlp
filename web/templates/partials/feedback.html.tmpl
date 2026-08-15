@@ -1,10 +1,17 @@
 {{define "feedback"}}
 <div class="feedback" data-ai-request="{{.AIRequestID}}">
   {{if not .Cards}}<p class="all-good">問題は見つかりませんでした。よく書けています！</p>{{else}}
+  {{/* HasGatedCard (Phase 2 Task 8): suppress this whole-selection diff
+       when any card below is still hiding its own answer behind a
+       socratic hint gate — this diff is not itself gated, so showing it
+       would print that card's Replacement in the clear. See
+       toFeedbackView's doc comment. */}}
+  {{if not .HasGatedCard}}
   <div class="diff-block">
     <h3>修正案</h3>
     <p class="inline-diff">{{range .DiffSpans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
   </div>
+  {{end}}
   <div class="cards">{{range .Cards}}{{template "correction_card" .}}{{end}}</div>
   {{end}}
   {{if .AIRequestID}}

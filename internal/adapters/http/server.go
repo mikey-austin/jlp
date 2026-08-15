@@ -129,6 +129,12 @@ func (s *Server) routes() http.Handler {
 		r.Get("/sessions/{id}/activity", s.sessionsActivity)
 		r.Post("/sessions/{id}/feedback", s.feedbackRequest)
 		r.Post("/corrections/{id}/status", s.correctionStatus)
+		// retry/reveal/confidence: Phase 2 Task 8's active recall +
+		// confidence tracking (PRD §9/§53) — see feedback.go's handler
+		// doc comments and correction_card.html.tmpl's socratic gate.
+		r.Post("/corrections/{id}/retry", s.correctionRetry)
+		r.Post("/corrections/{id}/reveal", s.correctionReveal)
+		r.Post("/corrections/{id}/confidence", s.correctionConfidence)
 		r.Post("/documents/{id}", s.documentsSave)
 		r.Get("/ai", s.aiRequests)
 		r.Post("/ratings", s.ratingsCreate)

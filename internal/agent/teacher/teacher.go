@@ -23,9 +23,19 @@ import (
 )
 
 const (
-	promptName    = "teacher.feedback"
-	promptVersion = "v2"
-	schemaName    = "correction_result.v1"
+	promptName = "teacher.feedback"
+	// promptVersion/schemaName are ALWAYS v3/v2, for every teacher mode
+	// — not just "socratic" — per Phase 2 Task 8's controller
+	// resolution: schema v2 is a strict superset of v1 (an optional
+	// `hint` per correction), so a non-socratic response with no hints
+	// still validates, and keeping one prompt/schema pair in use (rather
+	// than branching per-mode) keeps prompt/schema comparisons
+	// apples-to-apples across every session. v1 stays registered (and
+	// fakeai still accepts it) only because it's still the direct
+	// subject of package schemas/fakeai's own tests, not because
+	// anything in this package still requests it.
+	promptVersion = "v3"
+	schemaName    = "correction_result.v2"
 	agentName     = "teacher"
 	maxTokens     = 2048
 )
@@ -52,12 +62,12 @@ type ReviewInput struct {
 	Selection    string
 	Context      string   // surrounding document text
 	RecentErrors []string // human-readable weakness summaries (empty in MVP; Phase 2 fills it)
-	// ConceptCandidates is the tagging vocabulary the teacher.feedback.v2
+	// ConceptCandidates is the tagging vocabulary the teacher.feedback.v3
 	// prompt offers the model: one "slug — name" line per grammar
 	// concept in the catalog (see application/feedback.Service, which
 	// builds this from storage.GrammarRepository.ListConcepts). The
 	// model may only tag a correction's concepts from this list — see
-	// the v2 system template's "chosen ONLY from the provided candidate
+	// the v3 system template's "chosen ONLY from the provided candidate
 	// list" instruction.
 	ConceptCandidates []string
 	// ExpressionsToEncourage is PRD §55/§17.5's vocabulary activator:
@@ -66,12 +76,12 @@ type ReviewInput struct {
 	// application/planner.Planner.ActivationCandidates, which
 	// application/feedback.Service formats this from). Unlike
 	// RecentErrors/ConceptCandidates, this is advisory, not
-	// instructional — the v2 user template asks the model to weave ONE
+	// instructional — the v3 user template asks the model to weave ONE
 	// in only when it fits naturally, never to force it.
 	ExpressionsToEncourage []string
 }
 
-// promptData mirrors exactly what templates/teacher.feedback.v2.*.md
+// promptData mirrors exactly what templates/teacher.feedback.v3.*.md
 // range/index over.
 type promptData struct {
 	TeacherMode            string
@@ -87,7 +97,7 @@ type promptData struct {
 	ExpressionsToEncourage []string
 }
 
-// The following DTOs mirror schemas/defs/correction_result.v1.json
+// The following DTOs mirror schemas/defs/correction_result.v2.json
 // field-for-field, so unmarshaling a schema-valid response can never
 // silently drop or misname a field.
 type explanationDTO struct {
@@ -96,12 +106,13 @@ type explanationDTO struct {
 }
 
 type correctionDTO struct {
-	Original    string         `json:"original"`
-	Replacement string         `json:"replacement"`
-	Type        string         `json:"type"`
-	Severity    string         `json:"severity"`
-	Explanation explanationDTO `json:"explanation"`
-	Concepts    []string       `json:"concepts,omitempty"`
+	Original    string          `json:"original"`
+	Replacement string          `json:"replacement"`
+	Type        string          `json:"type"`
+	Severity    string          `json:"severity"`
+	Explanation explanationDTO  `json:"explanation"`
+	Concepts    []string        `json:"concepts,omitempty"`
+	Hint        *explanationDTO `json:"hint,omitempty"`
 }
 
 type correctionResultDTO struct {
@@ -109,7 +120,7 @@ type correctionResultDTO struct {
 }
 
 // ReviewWriting renders the teacher.feedback prompt for in, asks gen
-// for a correction_result.v1-shaped response (Rule 4: schema
+// for a correction_result.v2-shaped response (Rule 4: schema
 // validation with one constrained-repair attempt and one full retry
 // before failing), then maps the result onto correction.NewResult so
 // the caller gets both the domain Result and the raw AI response (the
@@ -169,14 +180,18 @@ func (a *Agent) ReviewWriting(ctx context.Context, in ReviewInput) (correction.R
 
 	cs := make([]correction.Correction, 0, len(dto.Corrections))
 	for _, c := range dto.Corrections {
-		cs = append(cs, correction.Correction{
+		cc := correction.Correction{
 			Original:    c.Original,
 			Replacement: c.Replacement,
 			Type:        correction.Type(c.Type),
 			Severity:    correction.Severity(c.Severity),
 			Explanation: correction.Explanation{JA: c.Explanation.JA, EN: c.Explanation.EN},
 			Concepts:    c.Concepts,
-		})
+		}
+		if c.Hint != nil {
+			cc.Hint = correction.Explanation{JA: c.Hint.JA, EN: c.Hint.EN}
+		}
+		cs = append(cs, cc)
 	}
 
 	result, err := correction.NewResult(in.Selection, cs)

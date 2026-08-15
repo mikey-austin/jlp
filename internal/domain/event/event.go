@@ -30,6 +30,21 @@ const (
 	TypeVocabularyLookedUp          Type = "vocabulary.looked-up"
 	TypeVocabularyProduced          Type = "vocabulary.produced"
 	TypeVocabularyProducedCorrectly Type = "vocabulary.produced-correctly"
+
+	// The four Phase 2 Task 8 active-recall/confidence-tracking events
+	// (PRD §9/§53): TypeHintShown fires once per socratic correction,
+	// alongside its correction.presented (application/feedback.Service.
+	// RequestFeedback); TypeCorrectionRetried fires on every
+	// POST /corrections/{id}/retry, whether the attempt was right or
+	// wrong (Evidence carries which); TypeAnswerRevealed fires on
+	// POST /corrections/{id}/reveal; TypeConfidenceRecorded fires on
+	// POST /corrections/{id}/confidence. See
+	// application/feedback.Service's RetryCorrection/RevealCorrection/
+	// RecordConfidence for exactly what each Evidence map carries.
+	TypeHintShown          Type = "hint.shown"
+	TypeCorrectionRetried  Type = "correction.retried"
+	TypeAnswerRevealed     Type = "answer.revealed"
+	TypeConfidenceRecorded Type = "confidence.recorded"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

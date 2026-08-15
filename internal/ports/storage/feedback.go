@@ -30,18 +30,34 @@ type FeedbackRecord struct {
 // CorrectionRecord is one correction offered as part of a
 // FeedbackRecord. Status starts "presented" and transitions to
 // "accepted"/"rejected" as the learner responds — see
-// FeedbackRepository.UpdateCorrectionStatus. SessionID is only
-// populated by UpdateCorrectionStatus (via a join back to the owning
-// feedback_requests row): InsertFeedback's caller already has it on
-// the FeedbackRecord, so it isn't duplicated onto the CorrectionRecord
-// there.
+// FeedbackRepository.UpdateCorrectionStatus (a plain accept/reject),
+// RetryCorrection (accepted automatically by a correct retry — see that
+// method's doc comment), and RevealCorrection (leaves Status alone,
+// only flips Revealed). SessionID is only populated by the
+// identity-scoped read/write methods below (via a join back to the
+// owning feedback_requests row): InsertFeedback's caller already has it
+// on the FeedbackRecord, so it isn't duplicated onto the
+// CorrectionRecord there.
+//
+// HintJA/HintEN, Attempts, Confidence, and Revealed are Phase 2 Task
+// 8's active-recall/confidence-tracking columns (PRD §9/§53):
+// HintJA/HintEN mirror correction.Explanation but are always both-empty
+// for a non-socratic correction (InsertFeedback writes "" for both, the
+// column defaults match); Attempts only ever advances via
+// RetryCorrection; Confidence is nil until RecordConfidence sets it
+// (1..5, DB-enforced via a CHECK constraint — see migration 00012);
+// Revealed only ever flips true, via RevealCorrection.
 type CorrectionRecord struct {
 	ID, FeedbackID               string
 	Position                     int
 	Original, Replacement        string
 	Type, Severity               string
 	ExplanationJA, ExplanationEN string
+	HintJA, HintEN               string
 	Status                       string // "presented" | "accepted" | "rejected"
+	Attempts                     int
+	Confidence                   *int // nil until RecordConfidence sets it (1..5)
+	Revealed                     bool
 	SessionID                    session.ID
 }
 
@@ -81,8 +97,36 @@ type ConceptTag struct {
 // unresolved tag is deliberately excluded here, matching the same
 // "only resolved counts" semantics db/queries/grammar.sql's
 // ConceptStats/CorrectionsForConcept use.
+//
+// RetryCorrection, RevealCorrection, and RecordConfidence (Phase 2 Task
+// 8) share UpdateCorrectionStatus's identity-scoped join pattern —
+// wrong identity or unknown correction ID both come back ErrNotFound.
+// RetryCorrection and RevealCorrection additionally restrict the match
+// to corrections still Status "presented" (the only state active
+// recall applies to — see correction_card.html.tmpl's gate), so an
+// attempt against an already-resolved correction ALSO comes back
+// ErrNotFound, same as a wrong identity: callers can't and don't need
+// to distinguish "not yours" from "not found" from "not retriable"
+// here, matching this package's existing identity-scoped convention.
+// trimmedAttempt is compared to the stored Replacement by the
+// implementation (exact string equality — byte-exact is rune-exact for
+// valid UTF-8 — see application/feedback.Service.RetryCorrection's doc
+// comment for why the trim happens in the service, not here); the
+// returned CorrectionRecord's Status is "accepted" when it matched,
+// unchanged otherwise, and Attempts always reflects the NEW
+// (post-increment) count. RecordConfidence does NOT restrict by
+// Status — a learner may rate their confidence any time after a
+// correction resolves, and repeated calls simply overwrite the value;
+// confidence itself is validated by the caller (see
+// application/feedback.Service.RecordConfidence) before this method is
+// ever reached, since the DB's CHECK constraint alone would surface as
+// an opaque constraint-violation error rather than a clean, testable
+// application error.
 type FeedbackRepository interface {
 	InsertFeedback(ctx context.Context, rec FeedbackRecord, corrections []CorrectionRecord, concepts map[string][]ConceptTag) error
 	UpdateCorrectionStatus(ctx context.Context, identity learner.IdentityID, correctionID, status string) (CorrectionRecord, error)
 	GetCorrectionConcepts(ctx context.Context, correctionID string) ([]string, error)
+	RetryCorrection(ctx context.Context, identity learner.IdentityID, correctionID, trimmedAttempt string) (CorrectionRecord, error)
+	RevealCorrection(ctx context.Context, identity learner.IdentityID, correctionID string) (CorrectionRecord, error)
+	RecordConfidence(ctx context.Context, identity learner.IdentityID, correctionID string, confidence int) (CorrectionRecord, error)
 }

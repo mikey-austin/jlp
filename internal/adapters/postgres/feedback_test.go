@@ -520,3 +520,430 @@ func selectCorrectionConcepts(ctx context.Context, pool *pgxpool.Pool, correctio
 	}
 	return out, rows.Err()
 }
+
+// --- Phase 2 Task 8: active recall (hints, retry, reveal) + confidence
+// tracking (PRD §9/§53). ---
+
+// activeRecallFixture wires the FK chain (identities -> session ->
+// document -> feedback_requests -> corrections) up through ONE
+// "presented", hint-bearing correction, ready for
+// RetryCorrection/RevealCorrection/RecordConfidence tests — the setup
+// every test below needs, factored out since Task 8 adds several of
+// them against the identical shape.
+type activeRecallFixture struct {
+	repo         *FeedbackRepository
+	identityA    learner.Identity
+	identityB    learner.Identity // a second, unrelated identity for cross-identity checks
+	session      session.Session
+	correctionID string
+	replacement  string
+}
+
+func setupActiveRecallFixture(t *testing.T, ctx context.Context, pool *pgxpool.Pool) activeRecallFixture {
+	t.Helper()
+
+	identities := NewIdentityRepository(pool)
+	identityA := learner.Identity{ID: learner.IdentityID("test-recall-a-" + uuid.NewString()), DisplayName: "A"}
+	identityB := learner.Identity{ID: learner.IdentityID("test-recall-b-" + uuid.NewString()), DisplayName: "B"}
+	if err := identities.Upsert(ctx, identityA); err != nil {
+		t.Fatal(err)
+	}
+	if err := identities.Upsert(ctx, identityB); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := NewSessionRepository(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sess := session.Session{
+		ID:         session.ID(uuid.New().String()),
+		IdentityID: identityA.ID,
+		Title:      "ソクラテス式テスト",
+		Purpose:    "Diary",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := sessions.Create(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+
+	docs := NewDocumentRepository(pool)
+	doc, _, err := docs.GetOrCreateForSession(ctx, identityA.ID, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	feedback := NewFeedbackRepository(pool)
+	feedbackID := uuid.New().String()
+	correctionID := uuid.New().String()
+	rec := storage.FeedbackRecord{
+		ID:             feedbackID,
+		IdentityID:     identityA.ID,
+		SessionID:      sess.ID,
+		DocumentID:     doc.ID,
+		SelectionStart: 0,
+		SelectionEnd:   9,
+		SelectionText:  "とても面白いでした",
+		CorrectedText:  "とても面白かったです",
+	}
+	corrections := []storage.CorrectionRecord{{
+		ID:            correctionID,
+		FeedbackID:    feedbackID,
+		Position:      0,
+		Original:      "面白いでした",
+		Replacement:   "面白かったです",
+		Type:          "conjugation",
+		Severity:      "incorrect",
+		ExplanationJA: "い形容詞の過去形は「〜かった」を使います。",
+		ExplanationEN: "い-adjectives form the past tense with 〜かった.",
+		HintJA:        "い形容詞の過去形の作り方を思い出してください。",
+		HintEN:        "Recall how い-adjectives form the past tense.",
+		Status:        "presented",
+	}}
+	if err := feedback.InsertFeedback(ctx, rec, corrections, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	return activeRecallFixture{
+		repo:         feedback,
+		identityA:    identityA,
+		identityB:    identityB,
+		session:      sess,
+		correctionID: correctionID,
+		replacement:  "面白かったです",
+	}
+}
+
+// TestFeedbackInsertCorrectionPersistsHintColumns pins that
+// InsertFeedback actually writes hint_ja/hint_en through to the DB
+// (not just the request DTO in memory) — the fixture's hint round-trips
+// back via UpdateCorrectionStatus's RETURNING columns, and Attempts/
+// Confidence/Revealed all start at their migration 00012 defaults
+// (0/nil/false).
+func TestFeedbackInsertCorrectionPersistsHintColumns(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	// UpdateCorrectionStatus with the correction's OWN current status
+	// ("presented" -> "presented") is a no-op write that still returns
+	// the full row, letting this test read back every Task 8 column
+	// without needing a raw SQL SELECT of its own.
+	row, err := fx.repo.UpdateCorrectionStatus(ctx, fx.identityA.ID, fx.correctionID, "presented")
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantJA := "い形容詞の過去形の作り方を思い出してください。"
+	wantEN := "Recall how い-adjectives form the past tense."
+	if row.HintJA != wantJA || row.HintEN != wantEN {
+		t.Fatalf("HintJA/HintEN = %q/%q, want %q/%q", row.HintJA, row.HintEN, wantJA, wantEN)
+	}
+	if row.Attempts != 0 {
+		t.Fatalf("Attempts = %d, want 0", row.Attempts)
+	}
+	if row.Confidence != nil {
+		t.Fatalf("Confidence = %v, want nil", row.Confidence)
+	}
+	if row.Revealed {
+		t.Fatal("Revealed = true, want false")
+	}
+}
+
+// TestFeedbackRetryCorrectionCorrectAcceptsAndIncrementsAttempts pins
+// the single-UPDATE "increment attempts, accept iff exact match"
+// contract against a real database — including that a plain accept
+// (via UpdateCorrectionStatus) is NOT what flips it; RetryCorrection's
+// own comparison is.
+func TestFeedbackRetryCorrectionCorrectAcceptsAndIncrementsAttempts(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	row, err := fx.repo.RetryCorrection(ctx, fx.identityA.ID, fx.correctionID, fx.replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "accepted" {
+		t.Fatalf("Status = %q, want accepted", row.Status)
+	}
+	if row.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", row.Attempts)
+	}
+	if row.Revealed {
+		t.Fatal("Revealed = true, want unchanged false")
+	}
+	if row.SessionID != fx.session.ID {
+		t.Fatalf("SessionID = %q, want %q", row.SessionID, fx.session.ID)
+	}
+}
+
+// TestFeedbackRetryCorrectionWrongAttemptIncrementsOnly pins the
+// "wrong attempt" half at the DB level, across two consecutive wrong
+// attempts to prove attempts actually accumulates rather than resetting.
+func TestFeedbackRetryCorrectionWrongAttemptIncrementsOnly(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	row, err := fx.repo.RetryCorrection(ctx, fx.identityA.ID, fx.correctionID, "面白いです")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Status != "presented" {
+		t.Fatalf("Status = %q, want unchanged presented", row.Status)
+	}
+	if row.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1", row.Attempts)
+	}
+
+	row2, err := fx.repo.RetryCorrection(ctx, fx.identityA.ID, fx.correctionID, "違います")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row2.Status != "presented" {
+		t.Fatalf("Status (2nd) = %q, want unchanged presented", row2.Status)
+	}
+	if row2.Attempts != 2 {
+		t.Fatalf("Attempts (2nd) = %d, want 2", row2.Attempts)
+	}
+}
+
+// TestFeedbackRetryCorrectionCrossIdentityReturnsErrNotFound.
+func TestFeedbackRetryCorrectionCrossIdentityReturnsErrNotFound(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	if _, err := fx.repo.RetryCorrection(ctx, fx.identityB.ID, fx.correctionID, fx.replacement); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("err = %v, want storage.ErrNotFound", err)
+	}
+	// Must not have mutated the row: a subsequent retry from the RIGHT
+	// identity should still see Attempts=0, not 1.
+	row, err := fx.repo.RetryCorrection(ctx, fx.identityA.ID, fx.correctionID, fx.replacement)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Attempts != 1 {
+		t.Fatalf("Attempts = %d, want 1 (the cross-identity attempt must not have incremented it)", row.Attempts)
+	}
+}
+
+// TestFeedbackRetryCorrectionOnNonPresentedReturnsErrNotFound: once a
+// correction has left Status "presented" (here via a plain
+// UpdateCorrectionStatus accept, exercising the OTHER path to a
+// resolved correction besides RetryCorrection itself), a further retry
+// misses — the WHERE clause's status = 'presented' excludes it.
+func TestFeedbackRetryCorrectionOnNonPresentedReturnsErrNotFound(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	if _, err := fx.repo.UpdateCorrectionStatus(ctx, fx.identityA.ID, fx.correctionID, "accepted"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := fx.repo.RetryCorrection(ctx, fx.identityA.ID, fx.correctionID, fx.replacement); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("err = %v, want storage.ErrNotFound", err)
+	}
+}
+
+// TestFeedbackRevealCorrectionSetsRevealedTrue pins RevealCorrection's
+// DB-level contract: Revealed flips true, Status is left alone, and a
+// second reveal call is a harmless idempotent no-op (not an error).
+func TestFeedbackRevealCorrectionSetsRevealedTrue(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	row, err := fx.repo.RevealCorrection(ctx, fx.identityA.ID, fx.correctionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !row.Revealed {
+		t.Fatal("Revealed = false, want true")
+	}
+	if row.Status != "presented" {
+		t.Fatalf("Status = %q, want unchanged presented", row.Status)
+	}
+
+	// Idempotent: revealing again succeeds and stays revealed.
+	row2, err := fx.repo.RevealCorrection(ctx, fx.identityA.ID, fx.correctionID)
+	if err != nil {
+		t.Fatalf("second RevealCorrection returned error: %v", err)
+	}
+	if !row2.Revealed {
+		t.Fatal("Revealed (2nd call) = false, want true")
+	}
+}
+
+// TestFeedbackRevealCorrectionCrossIdentityReturnsErrNotFound.
+func TestFeedbackRevealCorrectionCrossIdentityReturnsErrNotFound(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	if _, err := fx.repo.RevealCorrection(ctx, fx.identityB.ID, fx.correctionID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("err = %v, want storage.ErrNotFound", err)
+	}
+}
+
+// TestFeedbackRecordConfidencePersistsValue pins RecordConfidence's
+// DB-level contract, INCLUDING that it is NOT restricted to Status
+// "presented" (accepted first, via RetryCorrection, then rated).
+func TestFeedbackRecordConfidencePersistsValue(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	if _, err := fx.repo.RetryCorrection(ctx, fx.identityA.ID, fx.correctionID, fx.replacement); err != nil {
+		t.Fatal(err)
+	}
+
+	row, err := fx.repo.RecordConfidence(ctx, fx.identityA.ID, fx.correctionID, 4)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Confidence == nil || *row.Confidence != 4 {
+		t.Fatalf("Confidence = %v, want pointer to 4", row.Confidence)
+	}
+	if row.Status != "accepted" {
+		t.Fatalf("Status = %q, want unchanged accepted", row.Status)
+	}
+
+	// Re-rating overwrites the previous value.
+	row2, err := fx.repo.RecordConfidence(ctx, fx.identityA.ID, fx.correctionID, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row2.Confidence == nil || *row2.Confidence != 2 {
+		t.Fatalf("Confidence (2nd) = %v, want pointer to 2", row2.Confidence)
+	}
+}
+
+// TestFeedbackRecordConfidenceCrossIdentityReturnsErrNotFound.
+func TestFeedbackRecordConfidenceCrossIdentityReturnsErrNotFound(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	if _, err := fx.repo.RecordConfidence(ctx, fx.identityB.ID, fx.correctionID, 3); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("err = %v, want storage.ErrNotFound", err)
+	}
+}
+
+// TestFeedbackCorrectionsConfidenceCheckConstraint pins migration
+// 00012's CHECK constraint directly against raw SQL, bypassing the
+// repository layer entirely (which never sends an out-of-range value —
+// see application/feedback.Service.RecordConfidence's own 1..5
+// validation): the DB itself must still refuse to store confidence
+// outside 1..5, as defense in depth against any future write path that
+// skips the service layer's guard.
+func TestFeedbackCorrectionsConfidenceCheckConstraint(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	for _, bad := range []int{0, 6, -1} {
+		_, err := pool.Exec(ctx, `UPDATE corrections SET confidence = $2 WHERE id = $1`, fx.correctionID, bad)
+		if err == nil {
+			t.Fatalf("confidence=%d: expected a CHECK constraint violation, got nil", bad)
+		}
+	}
+	// NULL and the boundary values 1/5 remain valid.
+	for _, ok := range []int{1, 5} {
+		if _, err := pool.Exec(ctx, `UPDATE corrections SET confidence = $2 WHERE id = $1`, fx.correctionID, ok); err != nil {
+			t.Fatalf("confidence=%d: unexpected error: %v", ok, err)
+		}
+	}
+	if _, err := pool.Exec(ctx, `UPDATE corrections SET confidence = NULL WHERE id = $1`, fx.correctionID); err != nil {
+		t.Fatalf("confidence=NULL: unexpected error: %v", err)
+	}
+}

@@ -93,6 +93,8 @@ func (r *FeedbackRepository) InsertFeedback(ctx context.Context, rec storage.Fee
 			Severity:          c.Severity,
 			ExplanationJa:     c.ExplanationJA,
 			ExplanationEn:     c.ExplanationEN,
+			HintJa:            c.HintJA,
+			HintEn:            c.HintEN,
 			Status:            c.Status,
 			CreatedAt:         now,
 		}); err != nil {
@@ -138,6 +140,81 @@ func (r *FeedbackRepository) UpdateCorrectionStatus(ctx context.Context, identit
 	return fromUpdateCorrectionStatusRow(row), nil
 }
 
+// RetryCorrection increments correctionID's attempts count and, if (and
+// only if) trimmedAttempt exactly matches the stored Replacement,
+// flips its Status to "accepted" — all in the single UPDATE
+// db/queries/feedback.sql's RetryCorrection issues, so a race between
+// two concurrent retries can't apply the increment twice while only
+// one of them decides correctness. Same identity-scoped, "presented
+// only" miss semantics as UpdateCorrectionStatus — see
+// storage.FeedbackRepository's doc comment.
+func (r *FeedbackRepository) RetryCorrection(ctx context.Context, identity learner.IdentityID, correctionID, trimmedAttempt string) (storage.CorrectionRecord, error) {
+	id, err := parseUUID(correctionID)
+	if err != nil {
+		return storage.CorrectionRecord{}, fmt.Errorf("correction id: %w", err)
+	}
+	row, err := r.q.RetryCorrection(ctx, sqlcgen.RetryCorrectionParams{
+		ID:          id,
+		IdentityID:  string(identity),
+		Replacement: trimmedAttempt,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storage.CorrectionRecord{}, storage.ErrNotFound
+		}
+		return storage.CorrectionRecord{}, err
+	}
+	return buildCorrectionRecord(row.ID, row.FeedbackRequestID, row.SessionID, row.Position,
+		row.Original, row.Replacement, row.Type, row.Severity, row.ExplanationJa, row.ExplanationEn,
+		row.HintJa, row.HintEn, row.Status, row.Attempts, row.Confidence, row.Revealed), nil
+}
+
+// RevealCorrection marks correctionID revealed (idempotent: revealing
+// an already-revealed correction is a harmless no-op change). Same
+// identity-scoped, "presented only" miss semantics as RetryCorrection.
+func (r *FeedbackRepository) RevealCorrection(ctx context.Context, identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, error) {
+	id, err := parseUUID(correctionID)
+	if err != nil {
+		return storage.CorrectionRecord{}, fmt.Errorf("correction id: %w", err)
+	}
+	row, err := r.q.RevealCorrection(ctx, sqlcgen.RevealCorrectionParams{ID: id, IdentityID: string(identity)})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storage.CorrectionRecord{}, storage.ErrNotFound
+		}
+		return storage.CorrectionRecord{}, err
+	}
+	return buildCorrectionRecord(row.ID, row.FeedbackRequestID, row.SessionID, row.Position,
+		row.Original, row.Replacement, row.Type, row.Severity, row.ExplanationJa, row.ExplanationEn,
+		row.HintJa, row.HintEn, row.Status, row.Attempts, row.Confidence, row.Revealed), nil
+}
+
+// RecordConfidence sets correctionID's Confidence (already validated
+// 1..5 by the caller — see storage.FeedbackRepository's doc comment).
+// Unlike RetryCorrection/RevealCorrection this is NOT restricted to
+// Status "presented": a learner may rate their confidence any time
+// after a correction resolves.
+func (r *FeedbackRepository) RecordConfidence(ctx context.Context, identity learner.IdentityID, correctionID string, confidence int) (storage.CorrectionRecord, error) {
+	id, err := parseUUID(correctionID)
+	if err != nil {
+		return storage.CorrectionRecord{}, fmt.Errorf("correction id: %w", err)
+	}
+	row, err := r.q.RecordConfidence(ctx, sqlcgen.RecordConfidenceParams{
+		ID:         id,
+		IdentityID: string(identity),
+		Confidence: pgtype.Int4{Int32: int32(confidence), Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storage.CorrectionRecord{}, storage.ErrNotFound
+		}
+		return storage.CorrectionRecord{}, err
+	}
+	return buildCorrectionRecord(row.ID, row.FeedbackRequestID, row.SessionID, row.Position,
+		row.Original, row.Replacement, row.Type, row.Severity, row.ExplanationJa, row.ExplanationEn,
+		row.HintJa, row.HintEn, row.Status, row.Attempts, row.Confidence, row.Revealed), nil
+}
+
 // GetCorrectionConcepts returns correctionID's RESOLVED concept slugs,
 // slug-ascending (the underlying query's ORDER BY concept_slug — there
 // is no created_at on correction_concepts to order by insertion time
@@ -173,17 +250,49 @@ func toOptionalUUID(s string) (pgtype.UUID, error) {
 }
 
 func fromUpdateCorrectionStatusRow(row sqlcgen.UpdateCorrectionStatusRow) storage.CorrectionRecord {
+	return buildCorrectionRecord(row.ID, row.FeedbackRequestID, row.SessionID, row.Position,
+		row.Original, row.Replacement, row.Type, row.Severity, row.ExplanationJa, row.ExplanationEn,
+		row.HintJa, row.HintEn, row.Status, row.Attempts, row.Confidence, row.Revealed)
+}
+
+// buildCorrectionRecord assembles a storage.CorrectionRecord from the
+// scalar columns every *-RETURNING corrections query in this file
+// selects — UpdateCorrectionStatus, RetryCorrection, RevealCorrection,
+// and RecordConfidence all return their own distinct sqlc row struct
+// (one per query), but with an IDENTICAL column list, so each of their
+// From*Row functions just unpacks its row into this one shared
+// constructor rather than repeating the pgtype-to-domain conversion
+// four times.
+func buildCorrectionRecord(id, feedbackRequestID, sessionID pgtype.UUID, position int32,
+	original, replacement, typ, severity, explanationJA, explanationEN, hintJA, hintEN, status string,
+	attempts int32, confidence pgtype.Int4, revealed bool) storage.CorrectionRecord {
 	return storage.CorrectionRecord{
-		ID:            uuid.UUID(row.ID.Bytes).String(),
-		FeedbackID:    uuid.UUID(row.FeedbackRequestID.Bytes).String(),
-		Position:      int(row.Position),
-		Original:      row.Original,
-		Replacement:   row.Replacement,
-		Type:          row.Type,
-		Severity:      row.Severity,
-		ExplanationJA: row.ExplanationJa,
-		ExplanationEN: row.ExplanationEn,
-		Status:        row.Status,
-		SessionID:     session.ID(uuid.UUID(row.SessionID.Bytes).String()),
+		ID:            uuid.UUID(id.Bytes).String(),
+		FeedbackID:    uuid.UUID(feedbackRequestID.Bytes).String(),
+		Position:      int(position),
+		Original:      original,
+		Replacement:   replacement,
+		Type:          typ,
+		Severity:      severity,
+		ExplanationJA: explanationJA,
+		ExplanationEN: explanationEN,
+		HintJA:        hintJA,
+		HintEN:        hintEN,
+		Status:        status,
+		Attempts:      int(attempts),
+		Confidence:    fromOptionalInt32(confidence),
+		Revealed:      revealed,
+		SessionID:     session.ID(uuid.UUID(sessionID.Bytes).String()),
 	}
+}
+
+// fromOptionalInt32 converts a nullable pgtype.Int4 (corrections.confidence)
+// to *int: nil when the column is SQL NULL (no confidence recorded
+// yet), a pointer to the value otherwise.
+func fromOptionalInt32(v pgtype.Int4) *int {
+	if !v.Valid {
+		return nil
+	}
+	n := int(v.Int32)
+	return &n
 }
