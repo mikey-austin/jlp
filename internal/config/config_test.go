@@ -2,6 +2,7 @@ package config
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -518,13 +519,18 @@ func TestA2AEnabledRequiresPathWithLeadingSlash(t *testing.T) {
 }
 
 // TestA2AEnabledRejectsPathCollidingWithExistingRoute is the Task 3
-// code review's Minor 6 pin: internal/adapters/http/server.go's
-// r.Mount panics at boot if APP_A2A_PATH collides with a route already
-// registered under the same top-level segment (e.g. "/api", which
-// r.Route("/api/v1", ...) already owns) — that must fail here, in
-// config validation, with a clean "config:" error, instead of crashing
-// the process at startup. Only checked once Enabled=true, same as the
-// leading-slash guard above.
+// code review's Minor 6 pin: APP_A2A_PATH must not collide with a
+// route already registered under the same top-level segment (e.g.
+// "/api", which r.Route("/api/v1", ...) already owns) — confirmed
+// empirically (fix round 2, against the pinned chi v5.3.1) that this
+// does NOT panic internal/adapters/http/server.go's r.Mount the way
+// the original finding assumed; a literal route and a Mount can
+// coexist at the same prefix. What it actually does is silently
+// capture every deeper request under that prefix into A2A's own
+// router (e.g. mounting at "/ai" would route GET /ai/tasks into A2A
+// instead of a 404) — a correctness bug just as worth rejecting
+// fail-fast as a panic would be. Only checked once Enabled=true, same
+// as the shape guard below.
 func TestA2AEnabledRejectsPathCollidingWithExistingRoute(t *testing.T) {
 	base := Config{
 		Server:   Server{Port: 8080},
@@ -551,5 +557,62 @@ func TestA2AEnabledRejectsPathCollidingWithExistingRoute(t *testing.T) {
 	noCollision.A2A = A2A{Enabled: true, Path: "/a2a"}
 	if err := noCollision.validate(); err != nil {
 		t.Fatalf("validate() = %v, want nil for the non-colliding default path", err)
+	}
+}
+
+// TestA2AEnabledRejectsMalformedPathShape is the Task 3 code review's
+// fix-round-2 pin (Minor 6, round 2): closes the GENERAL case, not
+// just the three examples the reviewer's own chi repro found. Each of
+// these — confirmed empirically (fix round 2) to genuinely panic
+// chi's r.Mount, not merely look suspicious — must fail config
+// validation instead, with a clear "config:" error naming
+// APP_A2A_PATH, before the process ever reaches r.Mount:
+//   - "/a2a/{unclosed" — unclosed route-param brace
+//   - "/a2a*/foo"       — bare wildcard not at the end
+//   - "/a2a/{id}/{id}"  — duplicate named param
+//
+// Plus the shape rules those three examples are instances of: no
+// leading slash, empty (""), and a trailing slash.
+func TestA2AEnabledRejectsMalformedPathShape(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	malformed := []string{
+		"/a2a/{unclosed",
+		"/a2a*/foo",
+		"/a2a/{id}/{id}",
+		"",
+		"a2a",
+		"/a2a/",
+	}
+	for _, path := range malformed {
+		cfg := base
+		cfg.A2A = A2A{Enabled: true, Path: path}
+		if err := cfg.validate(); err == nil {
+			t.Errorf("validate() = nil for A2A.Path %q, want an error (malformed path shape)", path)
+		}
+	}
+
+	// The root path "/" is a valid SHAPE (no metacharacters, no
+	// trailing-slash violation since it IS just "/") — it's still
+	// rejected, but by the collision check (it's the home page), not
+	// this one. Pinning that here guards against a2aPathShapeError
+	// ever accidentally rejecting "/" on shape grounds alone.
+	rootShapeOK := base
+	rootShapeOK.A2A = A2A{Enabled: true, Path: "/"}
+	if err := rootShapeOK.validate(); err == nil {
+		t.Fatal(`validate() = nil for A2A.Path "/", want an error (still rejected — but by the collision check, not the shape check; see TestA2AEnabledRejectsPathCollidingWithExistingRoute)`)
+	} else if strings.Contains(err.Error(), "is invalid") {
+		t.Fatalf(`validate() = %v, want the COLLISION error for "/", not the shape error`, err)
+	}
+
+	disabled := base
+	disabled.A2A = A2A{Enabled: false, Path: "/a2a/{unclosed"}
+	if err := disabled.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil (the shape check only applies once Enabled=true)", err)
 	}
 }

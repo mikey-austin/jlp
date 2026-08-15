@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
 	"time"
@@ -282,10 +283,33 @@ func (s *Server) routes() http.Handler {
 		// why a2a.Server needs its own bridge rather than importing
 		// IdentityFrom itself.
 		if s.opts.A2A != nil {
-			r.Mount(s.opts.A2APath, withA2AIdentity(s.opts.A2A.Routes()))
+			mountA2A(r, s.opts.A2APath, withA2AIdentity(s.opts.A2A.Routes()))
 		}
 	})
 	return r
+}
+
+// mountA2A mounts h at path on r, recovering any panic r.Mount itself
+// raises and re-panicking with a single, clearly worded message naming
+// APP_A2A_PATH — a last-resort net for a route collision neither
+// config.validate()'s structural check (a2aPathShapeError) nor its
+// hardcoded prefix denylist (a2aReservedPathPrefixes) anticipated
+// (Task 3 code review, Minor 6 follow-up): both live in
+// internal/config and are kept in sync with this package's route
+// table BY HAND, so a future route added here without a matching
+// config-side update would otherwise reach r.Mount and panic with
+// chi's own internal message — one that names neither APP_A2A_PATH
+// nor gives an operator anything actionable to fix. This recover
+// doesn't replace either config-time check (both still run first, at
+// `jlp serve` startup, before the HTTP server is even built) — it's
+// the safety net for whatever they didn't anticipate.
+func mountA2A(r chi.Router, path string, h http.Handler) {
+	defer func() {
+		if p := recover(); p != nil {
+			panic(fmt.Sprintf("config: APP_A2A_PATH %q could not be mounted (%v) — it likely collides with an existing route; choose a different APP_A2A_PATH", path, p))
+		}
+	}()
+	r.Mount(path, h)
 }
 
 // withA2AIdentity wraps next (a2a.Server.Routes()) so every request

@@ -188,11 +188,61 @@ type A2A struct {
 	// authenticated group internal/adapters/http/server.go already
 	// establishes (so Authelia/CSRF posture is unchanged) — see
 	// a2a.Server.Routes' own doc comment for the routes themselves,
-	// relative to this prefix. Defaults to "/a2a". validate() rejects a
-	// Path whose top-level segment collides with one of that package's
-	// own routes (a2aReservedPathPrefixes below) — see validate's own
-	// comment on why that check exists.
+	// relative to this prefix. Defaults to "/a2a".
+	//
+	// validate() rejects two distinct problems with this value, once
+	// Enabled is true (Task 3 code review, Minor 6 — see both helpers'
+	// own doc comments for the full reasoning):
+	//   - a2aPathShapeError: Path isn't a plain literal path at all
+	//     (missing leading slash, a trailing slash, an empty segment,
+	//     or a chi route-pattern metacharacter) — chi's own r.Mount
+	//     panics on this shape of input.
+	//   - a2aReservedPathPrefixes: Path's top-level segment collides
+	//     with a route internal/adapters/http/server.go already owns —
+	//     chi doesn't panic on this (confirmed against the pinned chi
+	//     v5.3.1: a literal route and a Mount can coexist at the same
+	//     prefix), but the mounted A2A router would then silently
+	//     capture every deeper request under that prefix the literal
+	//     route doesn't itself handle — e.g. mounting at "/ai" would
+	//     make GET /ai/tasks resolve to A2A's own router, not a 404,
+	//     without anyone intending that. server.go's own recover around
+	//     its r.Mount call (mountA2A) is the last-resort net for a
+	//     collision NEITHER of these two checks anticipated (e.g. a
+	//     future route this list wasn't updated for) — belt and
+	//     suspenders, not a substitute for either check here.
 	Path string
+}
+
+// a2aPathShapeError reports why p isn't an acceptable APP_A2A_PATH
+// shape, or "" if it is. This is a STRUCTURAL check — it has nothing
+// to do with what routes already exist (see a2aReservedPathPrefixes
+// below for that) — closing the general case the Task 3 code review's
+// Minor 6 follow-up asked for: any chi route-pattern metacharacter
+// ('{', '}', '*', ':') anywhere in Path reliably panics chi's own
+// r.Mount (confirmed empirically against the pinned chi v5.3.1 for
+// an unclosed '{', a non-trailing '*', and a duplicate '{id}' — see
+// the fix-round commit), not just the three specific examples that
+// panic finds; this check rejects the whole character class, not an
+// enumerated list of bad strings.
+func a2aPathShapeError(p string) string {
+	if !strings.HasPrefix(p, "/") {
+		return `must start with "/"`
+	}
+	if strings.ContainsAny(p, "{}*:") {
+		return `must not contain a chi route-pattern character ({, }, *, or :)`
+	}
+	if p == "/" {
+		return ""
+	}
+	if strings.HasSuffix(p, "/") {
+		return `must not end with "/"`
+	}
+	for _, seg := range strings.Split(p[1:], "/") {
+		if seg == "" {
+			return "must not contain an empty path segment"
+		}
+	}
+	return ""
 }
 
 // a2aReservedPathPrefixes is every top-level path segment
@@ -201,10 +251,15 @@ type A2A struct {
 // route's first path segment (e.g. "/ai" covers both "/ai" and
 // "/ai/agents/{id}"; "/api" covers the whole "/api/v1/..." subtree).
 // validate() rejects APP_A2A_PATH when Enabled and its own first
-// segment is in this set — see that call site's doc comment for why
-// (chi's r.Mount panics on the collision instead of failing
-// gracefully). Keep in sync with server.go's routes() if its top-level
-// route list ever changes.
+// segment is in this set — see A2A.Path's own doc comment for exactly
+// what failure mode this prevents (silent route shadowing, not a
+// panic — that distinction is why this check exists ALONGSIDE
+// server.go's mountA2A recover rather than instead of it: a recover
+// can only catch a panic chi actually raises, and a shadowing
+// collision never raises one). Keep in sync with server.go's routes()
+// if its top-level route list ever changes; a route added there
+// without a matching entry here is exactly the gap mountA2A's recover
+// exists to catch instead.
 var a2aReservedPathPrefixes = map[string]bool{
 	"":            true, // "/" itself
 	"healthz":     true,
@@ -227,7 +282,7 @@ var a2aReservedPathPrefixes = map[string]bool{
 // firstPathSegment returns p's first "/"-delimited segment (no leading
 // or trailing slash) — "" for "/" itself, "api" for both "/api" and
 // "/api/v1/words". Assumes p already starts with "/" (validate only
-// calls this after that's confirmed).
+// calls this after a2aPathShapeError has already confirmed that).
 func firstPathSegment(p string) string {
 	seg, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
 	return seg
@@ -354,18 +409,13 @@ func (c Config) validate() error {
 	// feature is live" pattern Summary.Enabled's guard above uses; an
 	// operator who never sets APP_A2A_ENABLED never has this checked
 	// at all, even if APP_A2A_PATH was somehow set to something odd.
+	// See A2A.Path's own doc comment for what each of these two checks
+	// closes and why both are needed alongside server.go's mountA2A
+	// recover, not instead of it.
 	if c.A2A.Enabled {
-		if !strings.HasPrefix(c.A2A.Path, "/") {
-			return fmt.Errorf("config: APP_A2A_PATH must start with \"/\" when APP_A2A_ENABLED=true, got %q", c.A2A.Path)
+		if msg := a2aPathShapeError(c.A2A.Path); msg != "" {
+			return fmt.Errorf("config: APP_A2A_PATH %q is invalid: %s", c.A2A.Path, msg)
 		}
-		// A path whose top-level segment collides with an
-		// already-mounted route makes internal/adapters/http/server.go's
-		// r.Mount PANIC at boot (Task 3 code review, Minor 6) instead of
-		// failing here with a clean error — reject it fail-fast instead,
-		// the same way every other cross-field A2A check in this
-		// function does. a2aReservedPathPrefixes is that package's own
-		// top-level routes; keep the two in sync if server.go's route
-		// list ever changes.
 		if seg := firstPathSegment(c.A2A.Path); a2aReservedPathPrefixes[seg] {
 			return fmt.Errorf("config: APP_A2A_PATH %q collides with an existing route (\"/%s\") — choose a different mount path", c.A2A.Path, seg)
 		}

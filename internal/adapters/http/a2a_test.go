@@ -8,6 +8,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+
 	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai" //nolint:depguard // fakeai is a port-shaped test double (implements ai.ToolCaller), injected the same way internal/application/agentrun's own tests inject it
 	"github.com/mikeyaustin/jlp/internal/application/agentrun"
@@ -111,4 +113,40 @@ func TestA2ATaskRunsAsTheAuthenticatedRequestIdentity(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"completed"`) {
 		t.Fatalf("body = %s, want status completed", rec.Body.String())
 	}
+}
+
+// TestMountA2ARecoversAndReportsClearError is the Task 3 code review's
+// fix-round-2 pin (Minor 6, part 2): config.validate()'s structural +
+// collision checks (internal/config) are a config-time safety net, not
+// a compile-time guarantee — a route added to server.go later without
+// a matching entry in config's a2aReservedPathPrefixes could still
+// make r.Mount panic at boot with chi's own, unhelpful internal
+// message. mountA2A must turn THAT panic into a single, clearly worded
+// one naming APP_A2A_PATH, so an operator sees an actionable message
+// instead of a bare chi stack trace.
+//
+// This drives mountA2A directly against a bespoke chi.Router (not the
+// full production route table config.validate() already guards) so
+// the test is independent of which specific collisions
+// a2aReservedPathPrefixes does or doesn't already know about — see
+// config.A2A.Path's own doc comment on why this recover exists
+// ALONGSIDE that config-time check, not instead of it.
+func TestMountA2ARecoversAndReportsClearError(t *testing.T) {
+	r := chi.NewRouter()
+	r.Mount("/collide", http.NotFoundHandler()) // first mount claims the path
+
+	defer func() {
+		p := recover()
+		if p == nil {
+			t.Fatal("expected mountA2A to panic (recovering chi's own panic into a clearer one), got no panic at all")
+		}
+		msg, ok := p.(string)
+		if !ok {
+			t.Fatalf("panic value = %#v (%T), want a string", p, p)
+		}
+		if !strings.Contains(msg, "APP_A2A_PATH") || !strings.Contains(msg, `"/collide"`) {
+			t.Fatalf("panic message = %q, want it to name APP_A2A_PATH and the offending path", msg)
+		}
+	}()
+	mountA2A(r, "/collide", http.NotFoundHandler()) // second mount at the SAME path: chi panics ("attempting to Mount() a handler on an existing path")
 }
