@@ -44,26 +44,51 @@ var stateChangingMethods = map[string]bool{
 // csrfReject is the whole predicate, factored out of the middleware
 // itself so a table test can drive it directly against plain strings
 // instead of building *http.Request values for every case. It decides
-// once, in order:
+// once, in three explicit, ORDER-SENSITIVE tiers:
 //
-//  1. Non-state-changing method (GET/HEAD/OPTIONS/...) → never reject.
-//  2. Sec-Fetch-Site present → trust it exclusively: reject only when
-//     its value is exactly "cross-site"; any other value (same-origin,
-//     same-site, none) passes, and the Origin header (if any) is not
-//     consulted at all — Sec-Fetch-Site is the more precise, harder-to-
-//     spoof signal (browser-set, never script-settable) when a modern
-//     browser sends it.
-//  3. Sec-Fetch-Site absent, Origin present → fall back to comparing
-//     Origin's host:port against the request's own Host (see
-//     originMatchesHost for the chrome-extension:/moz-extension:/null
-//     carve-outs).
-//  4. Neither header present (curl, and other non-browser HTTP
-//     clients that don't set either) → pass. Browsers reliably send at
-//     least one of the two on every fetch/form-submit; a request with
-//     neither is, by construction, not a browser page making a
-//     cross-site request in the first place.
+//  0. Non-state-changing method (GET/HEAD/OPTIONS/...) → never reject.
+//
+//  1. Extension-scheme Origin (chrome-extension:/moz-extension:) →
+//     PASS, unconditionally, regardless of Sec-Fetch-Site. This MUST
+//     run first, ahead of tier 2: a genuine browser extension's fetch
+//     to this app's http(s) origin is cross-site by the Fetch Metadata
+//     spec's own definition (different scheme/origin than the target),
+//     so it can legitimately arrive with Sec-Fetch-Site: cross-site —
+//     if tier 2 ran first, that header alone would reject Task 2's
+//     extension traffic before this carve-out was ever reached. Safe
+//     to trust unconditionally because Origin is a browser-set
+//     FORBIDDEN header: the Fetch spec forbids a page's own script
+//     from setting or spoofing it, so a request presenting an
+//     extension-scheme Origin can only have come from a genuine
+//     extension (or a non-browser client, which the headerless case
+//     below already permits regardless) — a malicious web page mounting
+//     a CSRF attack cannot forge this value, so this tier cannot be
+//     abused by page-driven CSRF. See isExtensionOrigin.
+//
+//  2. Sec-Fetch-Site present → trust it exclusively for everything
+//     else: reject only when its value is exactly "cross-site"; any
+//     other value (same-origin, same-site, none) passes, and the
+//     Origin header (if any) is not separately consulted — it's also
+//     browser-set/unforgeable, and more precise than Origin when a
+//     modern browser sends it.
+//
+//  3. Sec-Fetch-Site absent → fall back to Origin: present and its
+//     host:port matches (or it's the opaque "null") → pass; present
+//     and mismatched → reject; absent too (curl, and other non-browser
+//     clients that set neither header) → pass. See originMatchesHost
+//     for the "null" carve-out's own tradeoff.
+//
+// Deliberate consequence of this ordering: Origin: null only passes
+// via tier 3, which tier 2 can shadow — a sandboxed iframe's cross-site
+// POST sends BOTH Origin: null AND Sec-Fetch-Site: cross-site, and
+// tier 2 rejects that before tier 3 (or the null carve-out) is ever
+// reached. The null carve-out never overrides a genuine cross-site
+// signal; it only fires when nothing already said "cross-site".
 func csrfReject(method, secFetchSite, origin, host string) bool {
 	if !stateChangingMethods[method] {
+		return false
+	}
+	if isExtensionOrigin(origin) {
 		return false
 	}
 	if secFetchSite != "" {
@@ -75,9 +100,31 @@ func csrfReject(method, secFetchSite, origin, host string) bool {
 	return !originMatchesHost(origin, host)
 }
 
+// isExtensionOrigin reports whether origin's scheme is
+// chrome-extension: or moz-extension: — see csrfReject's tier 1 doc
+// comment for why this is checked first, unconditionally, and why
+// that's safe (Origin is an unforgeable, browser-set header).
+func isExtensionOrigin(origin string) bool {
+	if origin == "" {
+		return false
+	}
+	u, err := url.Parse(origin)
+	if err != nil {
+		return false
+	}
+	switch u.Scheme {
+	case "chrome-extension", "moz-extension":
+		return true
+	}
+	return false
+}
+
 // originMatchesHost reports whether origin (the Origin request
 // header's value) should be treated as same-origin with host (the
-// request's own Host).
+// request's own Host) — csrfReject's tier 3 fallback, reached only
+// when Sec-Fetch-Site was absent. Extension-scheme origins are handled
+// earlier and unconditionally by isExtensionOrigin (tier 1), so this
+// function never sees them.
 //
 //   - "null": an opaque origin — sent by file:// pages and sandboxed
 //     iframes, which have no origin to compare. Accepted here: JLP is
@@ -86,10 +133,9 @@ func csrfReject(method, secFetchSite, origin, host string) bool {
 //     on this passing. The tradeoff: a malicious LOCAL file could also
 //     send Origin: null and reach this app if the LAN itself isn't
 //     trusted — acceptable for this deployment's threat model, not a
-//     general-purpose default.
-//   - chrome-extension:/moz-extension: schemes: browser extensions
-//     send their own extension-ID origin, never the app's — Task 2's
-//     browser extension depends on these passing.
+//     general-purpose default. (A cross-site sandboxed-iframe POST,
+//     which also sends Origin: null, never reaches this carve-out at
+//     all — see csrfReject's "deliberate consequence" note.)
 //   - anything else: parse origin and compare its Host to host
 //     directly (both already in host[:port] form).
 func originMatchesHost(origin, host string) bool {
@@ -99,10 +145,6 @@ func originMatchesHost(origin, host string) bool {
 	u, err := url.Parse(origin)
 	if err != nil {
 		return false
-	}
-	switch u.Scheme {
-	case "chrome-extension", "moz-extension":
-		return true
 	}
 	return u.Host == host
 }

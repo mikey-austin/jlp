@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
@@ -15,6 +17,36 @@ import (
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/domain/correction"
 )
+
+// captureStdout redirects os.Stdout for the duration of fn and returns
+// everything written to it. Used where a test needs to assert
+// printEvalSummary's EXACT wording (see noComparableBaselineLine)
+// rather than only inferring it indirectly from runEvalCommand's
+// return value.
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	original := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("os.Pipe() error = %v", err)
+	}
+	os.Stdout = w
+	defer func() { os.Stdout = original }()
+
+	outCh := make(chan string, 1)
+	go func() {
+		var buf bytes.Buffer
+		_, _ = io.Copy(&buf, r)
+		outCh <- buf.String()
+	}()
+
+	fn()
+
+	if err := w.Close(); err != nil {
+		t.Fatalf("close pipe writer: %v", err)
+	}
+	return <-outCh
+}
 
 // TestScoreCase pins scoreCase's counting rules with hand-built
 // correction.Result values — no AI involved, no file I/O. Each
@@ -378,7 +410,11 @@ func TestLatestReportBeforeFiltersByProviderAndModel(t *testing.T) {
 // better than the fake provider will ever achieve against the real
 // corpus. If the regression check incorrectly compared against it
 // anyway, this run would fail with a false regression; asserting a nil
-// error pins that it doesn't.
+// error pins that it doesn't. It also captures stdout and asserts the
+// EXACT "no comparable baseline" wording (see eval.go's
+// noComparableBaselineLine) is what gets printed — not just that some
+// unspecified message appeared, or that the command happened to
+// return nil for an unrelated reason.
 func TestRunEvalCommandIgnoresMismatchedProviderBaseline(t *testing.T) {
 	t.Chdir(filepath.Join("..", ".."))
 
@@ -392,8 +428,15 @@ func TestRunEvalCommandIgnoresMismatchedProviderBaseline(t *testing.T) {
 	}
 
 	cfg := config.Config{AI: config.AI{Provider: "fake"}}
-	if err := runEvalCommand(context.Background(), cfg); err != nil {
-		t.Fatalf("runEvalCommand() error = %v, want nil (a mismatched-provider baseline must not trigger a false regression)", err)
+	var runErr error
+	stdout := captureStdout(t, func() {
+		runErr = runEvalCommand(context.Background(), cfg)
+	})
+	if runErr != nil {
+		t.Fatalf("runEvalCommand() error = %v, want nil (a mismatched-provider baseline must not trigger a false regression)", runErr)
+	}
+	if !strings.Contains(stdout, noComparableBaselineLine) {
+		t.Errorf("runEvalCommand() stdout = %q, want it to contain %q", stdout, noComparableBaselineLine)
 	}
 }
 

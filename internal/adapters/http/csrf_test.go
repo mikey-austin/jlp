@@ -39,6 +39,36 @@ func TestCSRFRejectTable(t *testing.T) {
 			"sec_fetch_site_present_wins_over_mismatched_origin",
 			http.MethodPost, "same-site", "https://evil.example", false,
 		},
+		// Extension-scheme Origin must win even when Sec-Fetch-Site says
+		// "cross-site" — a genuine extension's fetch to this app is
+		// cross-site by the Fetch Metadata spec's own definition, so it
+		// can legitimately carry that header value. Origin is a
+		// browser-set forbidden header a page's own script cannot forge,
+		// so trusting it ahead of Sec-Fetch-Site here cannot be abused by
+		// page-driven CSRF (see csrfReject's tier 1 doc comment).
+		{
+			"sec_fetch_site_cross_site_with_chrome_extension_origin_passes",
+			http.MethodPost, "cross-site", "chrome-extension://abcdefghijklmnop", false,
+		},
+		{
+			"sec_fetch_site_cross_site_with_moz_extension_origin_passes",
+			http.MethodPost, "cross-site", "moz-extension://12345678-abcd-abcd-abcd-1234567890ab", false,
+		},
+		// The opaque Origin: null carve-out must NOT override a genuine
+		// cross-site signal: a sandboxed iframe's cross-site POST sends
+		// BOTH Origin: null AND Sec-Fetch-Site: cross-site, and must
+		// still be rejected.
+		{
+			"sec_fetch_site_cross_site_with_null_origin_rejected",
+			http.MethodPost, "cross-site", "null", true,
+		},
+		// ...but Origin: null must still pass when Sec-Fetch-Site isn't
+		// signaling cross-site — the ordinary file://-page / Task 2 shim
+		// case.
+		{
+			"sec_fetch_site_none_with_null_origin_passes",
+			http.MethodPost, "none", "null", false,
+		},
 	}
 
 	for _, tt := range tests {

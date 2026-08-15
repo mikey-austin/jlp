@@ -576,6 +576,14 @@ func (noopAIRequestRepo) List(context.Context, learner.IdentityID, int) ([]stora
 	return nil, nil
 }
 
+// noComparableBaselineLine is the exact line printEvalSummary prints
+// when prev is nil — no prior report shares the current run's
+// provider+model (see latestReportBefore) — extracted to a constant so
+// eval_test.go's TestRunEvalCommandIgnoresMismatchedProviderBaseline
+// can assert the EXACT wording is emitted, not just infer it from
+// runEvalCommand returning a nil error.
+const noComparableBaselineLine = "  no comparable baseline"
+
 // printEvalSummary writes report's headline numbers to stdout, plus
 // the delta against prev (nil when there's no earlier report with the
 // SAME provider+model to compare against — see latestReportBefore) —
@@ -586,7 +594,7 @@ func printEvalSummary(report Report, ts string, prev *reportSummary) {
 	fmt.Printf("  provider=%s model=%s prompt_version=%s cases=%d\n", report.Provider, report.Model, report.PromptVersion, len(report.Cases))
 	fmt.Printf("  precision=%.3f recall=%.3f fp_rate=%.3f\n", report.Precision, report.Recall, report.FPRate)
 	if prev == nil {
-		fmt.Println("  no comparable baseline")
+		fmt.Println(noComparableBaselineLine)
 		return
 	}
 	fmt.Printf("  vs %s: precision=%+.3f recall=%+.3f fp_rate=%+.3f\n",
