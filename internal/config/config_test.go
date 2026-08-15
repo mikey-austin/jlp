@@ -431,3 +431,88 @@ func TestParseRoutesTrimsWhitespaceAndSkipsBlankEntries(t *testing.T) {
 		t.Fatalf("ParseRoutes = %+v, want %+v", got, want)
 	}
 }
+
+// TestA2ADefaults pins Phase 4 Task 3's "dormant unless explicitly
+// configured" contract: Enabled false, but Path still defaults to
+// "/a2a" regardless — see A2A's doc comment on why Path always has a
+// usable default even though Enabled doesn't.
+func TestA2ADefaults(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.A2A.Enabled {
+		t.Fatal("A2A.Enabled default = true, want false (dormant by default)")
+	}
+	if cfg.A2A.Path != "/a2a" {
+		t.Fatalf("A2A.Path default = %q, want \"/a2a\"", cfg.A2A.Path)
+	}
+}
+
+// TestA2AEnvOverrides pins the APP_A2A_ENABLED/APP_A2A_PATH env var
+// names exactly as documented (.env.example, README, docker-compose.yml).
+func TestA2AEnvOverrides(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_A2A_ENABLED", "true")
+	t.Setenv("APP_A2A_PATH", "/agents")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.A2A.Enabled {
+		t.Fatal("A2A.Enabled = false, want true")
+	}
+	if cfg.A2A.Path != "/agents" {
+		t.Fatalf("A2A.Path = %q, want \"/agents\"", cfg.A2A.Path)
+	}
+}
+
+// TestA2APathEmptyEnvVarDoesNotClobberDefault mirrors
+// TestEmptyEnvVarDoesNotClobberDefault: docker-compose.yml passes
+// APP_A2A_PATH through as ${APP_A2A_PATH:-}, so an operator who never
+// sets it must still get the "/a2a" default, not an empty string.
+func TestA2APathEmptyEnvVarDoesNotClobberDefault(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_A2A_ENABLED", "true")
+	t.Setenv("APP_A2A_PATH", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.A2A.Path != "/a2a" {
+		t.Fatalf("A2A.Path = %q, want default \"/a2a\" (empty env var should not override)", cfg.A2A.Path)
+	}
+}
+
+// TestA2AEnabledRequiresPathWithLeadingSlash pins validate's guard: a
+// misconfigured Path only matters once the adapter is actually live —
+// the same "a feature's config only needs to make sense once the
+// feature is live" pattern TestSummaryEnabledRequiresRecipientAndValidCron
+// pins for Summary.
+func TestA2AEnabledRequiresPathWithLeadingSlash(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	badPath := base
+	badPath.A2A = A2A{Enabled: true, Path: "a2a"}
+	if err := badPath.validate(); err == nil {
+		t.Fatal("expected validation error for A2A.Enabled with a Path missing its leading slash")
+	}
+
+	disabledBadPath := base
+	disabledBadPath.A2A = A2A{Enabled: false, Path: "not-even-a-path"}
+	if err := disabledBadPath.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil (A2A.Path is only checked once Enabled=true)", err)
+	}
+
+	ok := base
+	ok.A2A = A2A{Enabled: true, Path: "/a2a"}
+	if err := ok.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil for a well-formed enabled A2A", err)
+	}
+}

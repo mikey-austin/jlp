@@ -201,6 +201,23 @@ flag only changes where the surrounding context comes from. Leave it
 unset for Phase 1's original single-shot behaviour and cost,
 unchanged.
 
+### A2A protocol adapter (`APP_A2A_ENABLED`)
+
+`APP_A2A_ENABLED=true` (default `false`) mounts an A2A (agent-to-agent)
+adapter at `APP_A2A_PATH` (default `/a2a`, inside the same
+authenticated route group as every other route — Authelia/CSRF posture
+is unchanged): `GET {path}/.well-known/agent-card.json` and `POST
+{path}/tasks` expose three of JLP's own agents — Writing Reviewer,
+Learner Analyst, Lesson Planner — as A2A "skills" a remote agent can
+discover and invoke (PRD §29/§30). Every task runs through the exact
+same `application/agentrun.Runner` + `internal/tools.Registry`
+permissions the local agentic-teacher path uses — a remote caller gets
+no privilege a local agent lacks (Rule 13) — and shows up at
+`/ai/agents` like any other agent-run. See `docs/api/a2a.md` for the
+full contract, request/response shapes, and a worked example against
+the fake provider. Leave it unset to keep the adapter's routes entirely
+absent (404).
+
 ### Startup pricing warning
 
 `ai_requests.cost_usd` is computed from a fixed rate card in

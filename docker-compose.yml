@@ -53,6 +53,11 @@ services:
       # (the "mqtt" profile) sets this to the in-network mosquitto
       # service's address.
       APP_MQTT_URL: ${APP_MQTT_URL:-}
+      # A2A protocol adapter (Phase 4 Task 3, PRD §29/§30): unset (the
+      # default) keeps its routes entirely absent — see
+      # internal/config.A2A's doc comment.
+      APP_A2A_ENABLED: ${APP_A2A_ENABLED:-false}
+      APP_A2A_PATH: ${APP_A2A_PATH:-}
     depends_on:
       postgres: { condition: service_healthy }
 

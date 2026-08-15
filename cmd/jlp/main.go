@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
 	"github.com/mikeyaustin/jlp/internal/adapters/ankiconnect"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
@@ -211,6 +212,19 @@ func main() {
 		agentRunRepo := postgres.NewAgentRunRepository(pool)
 		runner := agentrun.NewRunner(toolCaller, toolRegistry, agentRunRepo, time.Now)
 
+		// A2A (Phase 4 Task 3, PRD §29/§30, APP_A2A_ENABLED): dormant
+		// unless explicitly enabled — see config.A2A's doc comment.
+		// a2aServer stays nil otherwise, which httpx.Options.A2A's own
+		// doc comment says means the routes it would expose are simply
+		// absent. Built from the SAME runner/toolRegistry every local
+		// agent-run path already uses — no repository, no application
+		// service, nothing else — so a remote A2A caller gets no
+		// privilege a local agent-run lacks (Rule 13).
+		var a2aServer *a2a.Server
+		if cfg.A2A.Enabled {
+			a2aServer = a2a.New(runner, toolRegistry, cfg.A2A)
+		}
+
 		feedbackSvc := feedback.NewService(
 			postgres.NewSessionRepository(pool),
 			postgres.NewDocumentRepository(pool),
@@ -327,6 +341,8 @@ func main() {
 			Lessons:            lessonSvc,
 			LessonsRepo:        lessonRepo,
 			AgentRuns:          agentRunRepo,
+			A2A:                a2aServer,
+			A2APath:            cfg.A2A.Path,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

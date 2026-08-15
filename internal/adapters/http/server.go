@@ -8,6 +8,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
@@ -113,6 +114,19 @@ type Options struct {
 	// read-only listing/detail page" split every other *Repo field in
 	// this struct already uses.
 	AgentRuns storage.AgentRunRepository
+	// A2A mounts Phase 4 Task 3's protocol adapter
+	// (internal/adapters/a2a, PRD §29/§30) at A2APath when non-nil.
+	// nil — the default, when APP_A2A_ENABLED=false — means the routes
+	// it would otherwise expose are entirely absent (404 from chi's
+	// own no-route-matched handling), not merely guarded: see
+	// routes()'s own comment on where this is mounted, and
+	// config.A2A's doc comment for why main.go leaves this nil by
+	// default.
+	A2A *a2a.Server
+	// A2APath is cfg.A2A.Path, passed through so routes() doesn't need
+	// its own copy of config.Config just to read one string; only read
+	// when A2A above is non-nil.
+	A2APath string
 }
 
 type Server struct {
@@ -253,8 +267,44 @@ func (s *Server) routes() http.Handler {
 			// unchanged.
 			r.Post("/words", s.apiWordsIngest)
 		})
+
+		// Phase 4 Task 3: the A2A protocol adapter (PRD §29/§30, Rule
+		// 13), mounted INSIDE this authenticated group deliberately —
+		// same RequireIdentity + CSRFProtect posture as every route
+		// above, not a separate unauthenticated surface. A2A task
+		// creation is a POST from a non-browser client, which sends no
+		// Origin/Sec-Fetch-Site header at all, so CSRFProtect's
+		// same-origin check passes it exactly the same way it already
+		// passes curl/API clients hitting /api/v1 above (see csrf.go's
+		// csrfReject: no Origin ⇒ never rejected). withA2AIdentity below
+		// is what actually hands this request's already-authenticated
+		// identity to the adapter — see that function's doc comment for
+		// why a2a.Server needs its own bridge rather than importing
+		// IdentityFrom itself.
+		if s.opts.A2A != nil {
+			r.Mount(s.opts.A2APath, withA2AIdentity(s.opts.A2A.Routes()))
+		}
 	})
 	return r
+}
+
+// withA2AIdentity wraps next (a2a.Server.Routes()) so every request
+// reaching it carries this request's already-authenticated identity
+// via a2a.WithIdentity — the ONLY way that package's handlers ever see
+// an identity (see internal/adapters/a2a's package doc comment: it
+// never reads one from a task's JSON body). This one-line bridge is
+// what lets internal/adapters/a2a stay entirely ignorant of this
+// package's own identityKey/RequireIdentity machinery (importing
+// httpx from a2a would risk an import cycle back the other way, since
+// this file is what constructs and mounts an a2a.Server in the first
+// place) while still only ever using the SAME identity RequireIdentity
+// already resolved for this request — never a second, independent
+// notion of who's asking.
+func withA2AIdentity(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ident, _ := IdentityFrom(r.Context())
+		next.ServeHTTP(w, r.WithContext(a2a.WithIdentity(r.Context(), ident.ID)))
+	})
 }
 
 func (s *Server) HandlerForTest() http.Handler { return s.Handler }

@@ -18,6 +18,7 @@ type Config struct {
 	Summary  Summary
 	SMTP     SMTP
 	MQTT     MQTT
+	A2A      A2A
 }
 
 type Server struct {
@@ -170,6 +171,27 @@ type MQTT struct {
 	URL string
 }
 
+// A2A configures Phase 4 Task 3's protocol adapter
+// (internal/adapters/a2a, PRD §29/§30, Rule 13): exposes selected
+// agents as A2A "skills" over HTTP+JSON, each running through the
+// exact same application/agentrun.Runner + internal/tools.Registry
+// permissions every local agent-run already goes through — a remote
+// caller gets no privilege a local agent lacks. Enabled false (the
+// default) keeps the feature entirely dormant: main.go never
+// constructs an a2a.Server and the routes it would otherwise expose
+// are absent (404), not merely guarded — the same "dormant unless
+// explicitly configured" contract Anki.ConnectURL/Summary.Enabled/
+// MQTT.URL above already establish.
+type A2A struct {
+	Enabled bool
+	// Path is where the adapter's routes are mounted, inside the
+	// authenticated group internal/adapters/http/server.go already
+	// establishes (so Authelia/CSRF posture is unchanged) — see
+	// a2a.Server.Routes' own doc comment for the routes themselves,
+	// relative to this prefix. Defaults to "/a2a".
+	Path string
+}
+
 func Load() (Config, error) {
 	v := viper.New()
 	v.SetDefault("server.port", 8080)
@@ -202,6 +224,12 @@ func Load() (Config, error) {
 	// cadence.
 	v.SetDefault("summary.cron", "0 18 * * 0")
 	v.SetDefault("smtp.addr", "mailpit:1025")
+	// a2a.enabled has no explicit default (Go's bool zero value, false,
+	// IS the "dormant by default" contract — see A2A's doc comment);
+	// a2a.path defaults to "/a2a" regardless of Enabled, so an operator
+	// who only sets APP_A2A_ENABLED=true doesn't also have to pick a
+	// mount path.
+	v.SetDefault("a2a.path", "/a2a")
 
 	v.SetEnvPrefix("APP")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -211,7 +239,8 @@ func Load() (Config, error) {
 		"auth.mode", "auth.static.id", "auth.static.displayname",
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
 		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes", "ai.agenticteacher",
-		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url"} {
+		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url",
+		"a2a.enabled", "a2a.path"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}
@@ -278,6 +307,14 @@ func (c Config) validate() error {
 		if _, err := cron.ParseStandard(c.Summary.Cron); err != nil {
 			return fmt.Errorf("config: invalid APP_SUMMARY_CRON %q: %w", c.Summary.Cron, err)
 		}
+	}
+	// A2A.Path is only validated once the adapter is actually live —
+	// same "a feature's config only needs to make sense once the
+	// feature is live" pattern Summary.Enabled's guard above uses; an
+	// operator who never sets APP_A2A_ENABLED never has this checked
+	// at all, even if APP_A2A_PATH was somehow set to something odd.
+	if c.A2A.Enabled && !strings.HasPrefix(c.A2A.Path, "/") {
+		return fmt.Errorf("config: APP_A2A_PATH must start with \"/\" when APP_A2A_ENABLED=true, got %q", c.A2A.Path)
 	}
 	return nil
 }
