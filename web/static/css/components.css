@@ -367,6 +367,11 @@ textarea:focus-visible,
   text-align: left;
   padding: var(--space-3) var(--space-5);
   font-size: var(--text-xs);
+  /* Header labels are short and already letter-spaced; letting them wrap
+   * turned 「スコア」 into two lines at 820px and dragged every header row
+   * out of alignment with its data. The card scrolls horizontally, so a
+   * header that needs another few pixels costs a swipe, not a reflow. */
+  white-space: nowrap;
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--fg-muted);
@@ -696,8 +701,14 @@ textarea:focus-visible,
     overflow-x: auto;
     overscroll-behavior-x: contain;
     -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
-    padding-bottom: 2px;
+    /* The nav row is a single line of eight short links that almost fits;
+     * a permanent scrollbar track under it read as a stray rule across
+     * the header. The row stays swipeable/wheel-scrollable — only the
+     * chrome is suppressed. */
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar {
+    display: none;
   }
   .nav a {
     white-space: nowrap;
