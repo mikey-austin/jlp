@@ -1,0 +1,186 @@
+# Eval corpus — grammar basics (PRD §48/§49): conjugation, particle,
+# and tense errors a beginner-to-intermediate learner commonly makes.
+# Loaded by `jlp eval` (cmd/jlp/eval.go, loadCorpus) alongside
+# naturalness.yaml and false-positive-traps.yaml — this file's case ids
+# share one namespace with the other two, so ids here must stay unique
+# across all three files, not just this one.
+#
+# must_correct / must_not_correct are matched against a
+# correction.Correction.Original by substring (see scoreCase in
+# cmd/jlp/eval.go) — pick the minimal wrong fragment a reasonable
+# corrector, whichever provider produces it, should flag; not
+# necessarily the AI's exact span.
+#
+# iadj-past-omoshiroi / iadj-past-tanoshii / particle-wo-ikimasu are the
+# three patterns internal/adapters/fakeai.go recognizes verbatim — kept
+# here (not moved to naturalness.yaml) because they're squarely
+# conjugation/particle grammar points, and their presence is what lets
+# `make eval` score nonzero recall against the fake provider offline.
+
+- id: iadj-past-omoshiroi
+  selection: "昨日友達と映画を見に行って、とても面白いでした。"
+  context: ""
+  must_correct: ["面白いでした"]
+  must_not_correct: []
+  notes: >
+    い-adjectives conjugate their own past tense internally
+    (面白い → 面白かった); でした never attaches directly after the
+    dictionary form. fakeai-known pattern (internal/adapters/fakeai.go's
+    iAdjectivePastRules) — one of the three cases required to be
+    present so `make eval` scores nonzero recall offline.
+
+- id: iadj-past-tanoshii
+  selection: "京都旅行はとても楽しいでした。また行きたいです。"
+  context: ""
+  must_correct: ["楽しいでした"]
+  must_not_correct: []
+  notes: >
+    Same い-adjective-past family as iadj-past-omoshiroi, a different
+    adjective (楽しい). fakeai-known pattern — required for offline
+    recall.
+
+- id: particle-wo-ikimasu
+  selection: "毎日学校を行きます。"
+  context: ""
+  must_correct: ["を"]
+  must_not_correct: []
+  notes: >
+    行く marks its destination with に (or へ), never を. The must_correct
+    substring is deliberately the bare を (not を行きます): fakeai-known
+    pattern — internal/adapters/fakeai.go's particle correction sets
+    Original to the single character を, so this must stay a substring
+    of that to register as a true positive against the fake provider;
+    it still matches a real provider's larger span (e.g. を行きます) the
+    same way, since を is a substring of either.
+
+- id: naadj-past-double
+  selection: "先週のテストは全然簡単じゃなかったでした。とても難しかったです。"
+  context: ""
+  must_correct: ["じゃなかったでした"]
+  must_not_correct: ["難しかったです"]
+  notes: >
+    じゃなかった already carries past tense (na-adjective negative
+    past); stacking でした on top double-marks it. Correct: 簡単じゃな
+    かったです or 簡単ではありませんでした. The already-correct
+    難しかったです must not be re-flagged.
+
+- id: particle-ni-au
+  selection: "駅前で友達を会いました。それから一緒に晩ご飯を食べました。"
+  context: ""
+  must_correct: ["友達を会いました"]
+  must_not_correct: ["晩ご飯を食べました"]
+  notes: >
+    会う takes に for the person met (友達に会う), not を — a very common
+    L1-English-interference particle error since "meet" is transitive in
+    English. The correctly を-marked 晩ご飯を食べました must not be
+    re-flagged.
+
+- id: transitivity-owaru-oeru
+  selection: "宿題を終わってから、テレビを見ました。"
+  context: ""
+  must_correct: ["宿題を終わって"]
+  must_not_correct: []
+  notes: >
+    終わる is the intransitive half of the 終わる/終える pair — it
+    doesn't take a direct-object を. Correct: either keep it intransitive
+    with が (宿題が終わってから) or switch to the transitive 終える
+    (宿題を終えてから).
+
+- id: potential-double
+  selection: "漢字がたくさん覚えられることができます。"
+  context: ""
+  must_correct: ["覚えられることができます"]
+  must_not_correct: []
+  notes: >
+    覚えられる is already the potential form of 覚える; stacking
+    ことができます on top mixes two separate potential constructions.
+    Correct: 覚えられます or 覚えることができます, not both at once.
+
+- id: negative-form-error
+  selection: "今日は忙しいから、パーティーに行けないだ。"
+  context: ""
+  must_correct: ["行けないだ"]
+  must_not_correct: []
+  notes: >
+    Plain-form verb/i-adjective-like negatives ending in い (行けない)
+    never take だ directly — だ attaches to nouns/na-adjectives, not to
+    an already-conjugated い-ending predicate. Correct: plain 行けない,
+    or the explanatory 行けないんだ/行けないのだ.
+
+- id: taiform-past-error
+  selection: "小さい頃、宇宙飛行士になりたいでした。"
+  context: ""
+  must_correct: ["なりたいでした"]
+  must_not_correct: []
+  notes: >
+    〜たい (desiderative) conjugates exactly like an い-adjective, so its
+    past is 〜たかった, not 〜たいでした — the same error family as
+    iadj-past-omoshiroi, applied to "want to."
+
+- id: verbgroup-confusion-ichidan
+  selection: "毎朝七時に起きらないので、遅刻してしまいます。"
+  context: ""
+  must_correct: ["起きらない"]
+  must_not_correct: []
+  notes: >
+    起きる is ichidan (negative: 起きない); 起きらない wrongly
+    over-generalizes the godan negative pattern (as in 分かる→分から
+    ない) onto an ichidan verb.
+
+- id: adjcopula-kirei
+  selection: "京都はきれいい町だと思います。"
+  context: ""
+  must_correct: ["きれいい"]
+  must_not_correct: []
+  notes: >
+    きれい is a な-adjective despite looking like it ends in い; it never
+    takes an extra い before です/だ/な. Correct: きれいな町.
+
+- id: tense-agreement
+  selection: "昨日、友達と映画を見ます。とても楽しかったです。"
+  context: ""
+  must_correct: ["昨日、友達と映画を見ます"]
+  must_not_correct: ["楽しかったです"]
+  notes: >
+    昨日 (yesterday) requires past tense; 見ます (non-past) doesn't agree
+    with it. Correct: 見ました. The already-correctly-past 楽しかった
+    です must not be re-flagged.
+
+- id: counter-error-people
+  selection: "私の家には猫が三人います。"
+  context: ""
+  must_correct: ["三人"]
+  must_not_correct: []
+  notes: >
+    三人 is the counter for people; small animals like 猫 take 匹
+    (三匹). Wrong counter category for the noun being counted.
+
+- id: particle-ga-wo-suki
+  selection: "私は日本語の勉強を好きです。"
+  context: ""
+  must_correct: ["勉強を好きです"]
+  must_not_correct: []
+  notes: >
+    好き (a な-adjective) takes が for the thing liked, not を — 好き
+    isn't a verb despite translating as "like." Correct: 勉強が好きです.
+
+- id: causative-error
+  selection: "先生は学生に本を読みさせました。"
+  context: ""
+  must_correct: ["読みさせました"]
+  must_not_correct: []
+  notes: >
+    The causative of the godan verb 読む is 読ませる (未然形+せる);
+    読みさせる wrongly applies the ichidan/する causative pattern
+    (stem+させる) onto a godan verb. Correct: 読ませました.
+
+- id: relative-clause-de
+  selection: "きのう昼ご飯を食べたレストランがとても美味しかったです。友達と話したカフェを、駅の前にあります。"
+  context: ""
+  must_correct: ["話したカフェを"]
+  must_not_correct: ["食べたレストランが"]
+  notes: >
+    ある is intransitive (existence); its subject/topic needs が or は,
+    not を — even with a long relative clause (友達と話した) modifying
+    the noun first. Correct: 話したカフェは. The earlier, correctly
+    が-marked 食べたレストランが must not be re-flagged.

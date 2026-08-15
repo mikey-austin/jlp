@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -66,6 +66,9 @@ seed: ## Populate a dev-friendly identity, session, and document (idempotent)
 
 rebuild-model: ## Recompute every identity's learner_observations from learning_events (safe to rerun)
 	$(TOOLS) go run ./cmd/jlp rebuild-model
+
+eval: ## Run the Japanese-correction eval corpus against the configured AI provider; regression-flags vs the previous report (PRD §48/§49)
+	$(TOOLS) go run ./cmd/jlp eval
 
 demo-ingest: ## POST 3 sample vocabulary lookups (PRD §12) against the running dev app; safe to rerun (client_event_id makes it idempotent)
 	@set -a; [ -f .env ] && . ./.env; set +a; \

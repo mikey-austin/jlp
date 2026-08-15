@@ -213,6 +213,17 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("rebuild-model complete")
+	case "eval":
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		if err := runEvalCommand(context.Background(), cfg); err != nil {
+			slog.Error("eval", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("eval complete")
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)

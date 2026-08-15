@@ -1,0 +1,171 @@
+# Eval corpus — naturalness (PRD §48/§49): sentences that are fully
+# grammatical but read as unnatural — register/formality mismatches,
+# redundancy, translation-ese, and awkward-but-parseable structure.
+# See grammar-basics.yaml's header comment for the shared file format
+# and the cross-file case-id namespace.
+
+- id: formality-email-casual-to-boss
+  selection: "部長、明日休むね。よろしく。"
+  context: "An email from a company employee to their department manager (部長) requesting a day off tomorrow."
+  must_correct: ["休むね"]
+  must_not_correct: []
+  notes: >
+    Casual plain-form + sentence-final ね addressed to a superior is a
+    register mismatch; a request like this needs polite/humble
+    phrasing, e.g. 明日、休ませていただきたいのですが。
+
+- id: formality-line-to-friend-too-stiff
+  selection: "田中さん、明日の予定について、ご連絡申し上げます。"
+  context: "A casual LINE message to a close friend named 田中 about tomorrow's plans."
+  must_correct: ["ご連絡申し上げます"]
+  must_not_correct: []
+  notes: >
+    ご〜申し上げる humble keigo is jarringly over-formal for a casual
+    chat message to a friend; natural phrasing would drop the
+    honorifics entirely (e.g. 明日の予定なんだけど、...).
+
+- id: literal-translation-omou-overuse
+  selection: "私は明日雨が降ると思います。そして、傘を持っていくと思います。"
+  context: ""
+  must_correct: ["傘を持っていくと思います"]
+  must_not_correct: []
+  notes: >
+    と思います used for a stated decision/plan (not an uncertain
+    opinion) reads as an over-hedged, translation-of-English-"I think"
+    construction; a plan like bringing an umbrella is more naturally
+    stated plainly: 傘を持っていきます。
+
+- id: redundant-totemo-stacking
+  selection: "この映画はとてもとても面白かったです。"
+  context: ""
+  must_correct: ["とてもとても"]
+  must_not_correct: []
+  notes: >
+    Doubling とても for emphasis isn't idiomatic (unlike English "very
+    very"); natural intensification uses すごく/本当に or a single
+    とても.
+
+- id: unnatural-repeated-watashi-wa
+  selection: "私は毎朝コーヒーを飲みます。それから、私はニュースを読みます。"
+  context: ""
+  must_correct: ["それから、私はニュースを読みます"]
+  must_not_correct: []
+  notes: >
+    Once 私は establishes the topic, restating it every sentence is
+    unnecessary — Japanese drops an already-known topic. Natural:
+    それからニュースを読みます。
+
+- id: double-subject-marking-wa-ga-collision
+  selection: "私は目が大きいは好きです。"
+  context: ""
+  must_correct: ["大きいは好きです"]
+  must_not_correct: []
+  notes: >
+    は directly after the plain-form adjective 大きい (with no
+    nominalizer) collides with 好き's own が-marked object slot. Natural:
+    私は目が大きいのが好きです, with の nominalizing the embedded
+    clause.
+
+- id: overliteral-because-node-toolheavy
+  selection: "疲れましたので、それで、今日は早く寝ます。"
+  context: ""
+  must_correct: ["疲れましたので、それで"]
+  must_not_correct: []
+  notes: >
+    ので already supplies the causal link; stacking それで on top
+    double-marks the same reason/result relationship. Natural Japanese
+    uses one connector, not both: 疲れたので、今日は早く寝ます。
+
+- id: kudasai-imperative-too-blunt
+  selection: "先生、この漢字の意味を教えてください。すぐに答えを教えろ。"
+  context: ""
+  must_correct: ["教えろ"]
+  must_not_correct: ["教えてください"]
+  notes: >
+    Bare imperative 教えろ is a blunt command register, wildly
+    inconsistent with the polite 教えてください addressed to 先生 one
+    sentence earlier. The already-polite request must not be re-flagged.
+
+- id: business-email-informal-verb-ending
+  selection: "お世話になっております。会議の資料を送るね。よろしくお願いいたします。"
+  context: "A formal business email to a client."
+  must_correct: ["送るね"]
+  must_not_correct: ["お世話になっております", "よろしくお願いいたします"]
+  notes: >
+    ね + plain form breaks register in an otherwise polite business
+    email bookended by correct set phrases; should be 送ります or
+    お送りいたします. The correct opening/closing set phrases must not
+    be re-flagged.
+
+- id: redundant-jibun-no-possessive
+  selection: "私は自分の自分のかばんを忘れました。"
+  context: ""
+  must_correct: ["自分の自分の"]
+  must_not_correct: []
+  notes: >
+    自分の repeated back-to-back is a plain duplication error, not
+    idiomatic doubling; it should appear once (or be dropped entirely,
+    since 私は already establishes the possessor).
+
+- id: unnatural-word-order-adverb-placement
+  selection: "私はいつも朝ご飯を食べません、時間がないから。"
+  context: ""
+  must_correct: ["食べません、時間がないから"]
+  must_not_correct: []
+  notes: >
+    Trailing the reason clause after a comma mirrors English
+    "..., because ..." syntax; natural Japanese fronts the reason:
+    時間がないから、いつも朝ご飯を食べません。
+
+- id: overpolite-sou-desu-ne-stacking
+  selection: "そうですね、そうですね、本当にそうですね。"
+  context: ""
+  must_correct: ["そうですね、そうですね"]
+  must_not_correct: []
+  notes: >
+    Repeating そうですね three times in a row is unnatural filler
+    stacking, not sincere agreement; a single そうですね (optionally +
+    本当に) reads as genuine.
+
+- id: casual-yo-in-formal-report
+  selection: "調査の結果、売り上げが20％増加したよ。"
+  context: "The concluding sentence of a written business report."
+  must_correct: ["増加したよ"]
+  must_not_correct: []
+  notes: >
+    Sentence-final よ is a spoken, casual marker; a written report
+    states findings plainly: 増加した (である体) or 増加しました
+    (です・ます体), never with よ attached.
+
+- id: unnatural-double-negation-emphasis
+  selection: "食べられないことはないことはないです。"
+  context: ""
+  must_correct: ["ことはないことはない"]
+  must_not_correct: []
+  notes: >
+    Doubling the ことはない emphatic double-negative construction stacks
+    the same pattern twice, canceling clarity rather than adding
+    emphasis. A single 食べられないことはないです already conveys
+    "it's not that I can't eat it."
+
+- id: mixed-register-desu-masu-plain
+  selection: "今日は忙しいです。でも、明日は暇だ。"
+  context: ""
+  must_correct: ["暇だ"]
+  must_not_correct: ["忙しいです"]
+  notes: >
+    Switching from です・ます体 to plain だ mid-paragraph with no
+    stylistic reason (e.g. quoted speech, internal monologue) reads as
+    inconsistent register. Correct: 暇です. The already-polite 忙しい
+    です must not be re-flagged.
+
+- id: unnatural-heavy-nominalization
+  selection: "彼が来ることの可能性の低さについての心配をしています。"
+  context: ""
+  must_correct: ["来ることの可能性の低さについての心配"]
+  must_not_correct: []
+  notes: >
+    Stacking three nominalizations (こと/可能性/低さ) into one noun
+    phrase is grammatical but reads as stiff, translation-ese
+    bureaucratese; natural style verbs it instead: 彼が来る可能性は
+    低いと思って心配しています。

@@ -45,6 +45,7 @@ clean              Stop stack and remove volumes + build artifacts
 migrate            Apply database migrations
 seed               Populate a dev-friendly identity, session, and document (idempotent)
 rebuild-model      Recompute every identity's learner_observations from learning_events (safe to rerun)
+eval               Run the Japanese-correction eval corpus against the configured AI provider; regression-flags vs the previous report (PRD §48/§49)
 migrate-new        Create a migration (n=short_name)
 sqlc               Regenerate sqlc query code
 db-shell           psql into the dev database
@@ -189,6 +190,37 @@ the provider and model, so an operator who typo'd
 name `aiPricing()` doesn't know) finds out immediately rather than
 noticing months of untracked spend later.
 
+## Evaluation corpus (`make eval`)
+
+`make eval` runs `eval/corpus/*.yaml` — a hand-authored set of Japanese
+sentences with expected corrections (grammar/particle/tense errors,
+unnatural-but-grammatical phrasing, casual/formal mismatches) plus
+false-positive traps (fully natural sentences that should draw zero
+corrections) — through the Teacher agent using the CONFIGURED provider
+chain (`APP_AI_PROVIDER`/`APP_AI_ROUTES`, same as `jlp serve`). It's the
+corpus-level regression baseline for comparing providers/prompt
+versions (PRD §48/§49), separate from the live, per-response `/ai`
+quality dashboard.
+
+Each run writes a per-case Markdown report to `eval/reports/<RFC3339
+timestamp>.md` (gitignored) and prints a precision/recall/false-positive-rate
+summary. If a previous report exists, it also prints the score deltas
+and **exits 1** if precision or recall dropped by more than 0.05 versus
+that previous run — the same gate a CI regression check would apply.
+
+```sh
+make eval   # $(TOOLS) go run ./cmd/jlp eval
+```
+
+Runs fully offline against the default `fake` provider (no API key, no
+running services needed beyond the tools container) — the fake
+provider only recognizes 3 of the corpus's patterns by design, so a
+fake-provider run's recall is intentionally low; it's there to prove
+the scoring/report/regression mechanics work, not to grade the fake
+provider's Japanese. Point `APP_AI_PROVIDER` (or `APP_AI_ROUTES` for
+`teacher.feedback`) at `anthropic`/`ollama` to get a real quality
+signal. `jlp eval` is a batch CLI command with no browser step.
+
 ## Deploying
 
 The production stack (`deploy/compose.prod.yml`) is a separate compose
@@ -289,4 +321,6 @@ web/static/                   CSS, vendored htmx/alpine, PWA assets
 db/queries/                   sqlc query files
 internal/adapters/postgres/migrationsfs/  goose SQL migrations (embedded)
 deploy/                        production compose, Caddyfile, Authelia config
+eval/corpus/                  eval corpus (grammar-basics, naturalness, false-positive-traps)
+eval/reports/                 `make eval` output, gitignored
 ```

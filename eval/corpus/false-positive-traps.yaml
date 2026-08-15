@@ -1,0 +1,124 @@
+# Eval corpus — false-positive traps (PRD §48/§49): fully natural
+# Japanese sentences, including native-like unconventional phrasing,
+# that a correction agent must leave alone. Every case here has an
+# empty must_correct — scoreCase treats that as "expect zero
+# corrections" (see cmd/jlp/eval.go's scoreCase doc comment), so ANY
+# correction on one of these sentences counts as a false positive.
+# These traps are deliberately dense with things an overzealous or
+# undertrained corrector might mistake for errors: contractions,
+# heavy keigo, dialect, ellipsis, idiom, onomatopoeia. See
+# grammar-basics.yaml's header comment for the shared file format and
+# the cross-file case-id namespace.
+
+- id: trap-natural-contraction-teru
+  selection: "今、公園で友達と遊んでる。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    遊んでる is the standard casual contraction of 遊んでいる (い-drop);
+    fully natural spoken/text register, not a dropped-character error.
+
+- id: trap-keigo-correct
+  selection: "こちらの資料をご確認いただけますでしょうか。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    Standard, fully correct business keigo request — a natural lure
+    for a corrector that treats honorific density itself as suspicious.
+
+- id: trap-sentence-final-particles
+  selection: "今日のご飯、本当に美味しかったね。また作ってよ。"
+  context: "Casual conversation between close friends."
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    ね/よ sentence-final particles between friends are entirely natural
+    conversational Japanese, not extraneous or misused particles.
+
+- id: trap-ellipsis-natural
+  selection: "A：明日行く？　B：うん、行く。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    Natural elliptical dialogue — subject/object are dropped throughout,
+    as is standard in spoken Japanese, not an incomplete sentence.
+
+- id: trap-idiom-natural
+  selection: "彼はいつも猫の手も借りたいくらい忙しい。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    猫の手も借りたい ("even a cat's paws would help" = extremely busy) is
+    a standard idiom used correctly; its unusual literal image is not a
+    sign of a mistranslated or garbled phrase.
+
+- id: trap-double-particle-natural-nimo
+  selection: "彼にも困ったものだ。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    にも (に + も stacked) is a completely standard particle combination,
+    not a duplicated or misused particle.
+
+- id: trap-native-inverted-order
+  selection: "本当に美味しかった、あの店のラーメン。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    Native speakers commonly front the comment and trail the topic for
+    emphasis (倒置法); natural stylistic word order, not a scrambled or
+    backwards sentence.
+
+- id: trap-formal-written-style
+  selection: "本研究では、従来の手法と比較して精度が向上したことを示す。"
+  context: "The abstract of an academic paper."
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    Correct formal academic である体 register (論文体) — natural for a
+    research paper; "correcting" it toward です・ます体 would itself be
+    wrong.
+
+- id: trap-kansai-dialect-natural
+  selection: "そんなん知らんわ。"
+  context: "Casual Kansai-dialect speech between close friends."
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    そんなん (そんなの) and 知らん (知らない) are natural Kansai-dialect
+    forms, not standard-Japanese conjugation errors.
+
+- id: trap-onomatopoeia-natural
+  selection: "雨がざあざあ降っていて、道がぐちゃぐちゃだった。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    ざあざあ (heavy rain) and ぐちゃぐちゃ (muddy/messy) are onomatopoeia
+    used correctly and idiomatically — natural descriptive Japanese, not
+    nonsense repetition.
+
+- id: trap-nominalizer-no-natural
+  selection: "彼が来るのを見た。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    の nominalizing 彼が来る before を見た is standard and correct, not a
+    stray or misplaced particle.
+
+- id: trap-humble-teineigo-mix-natural
+  selection: "先日はお忙しい中お時間をいただき、誠にありがとうございました。"
+  context: ""
+  must_correct: []
+  must_not_correct: []
+  notes: >
+    Fully correct, natural formal thank-you phrasing — dense honorific
+    register that could tempt an overzealous corrector into flagging
+    something that is, in fact, exactly right.
