@@ -70,6 +70,17 @@ var knownPromptNames = []string{
 	"drill.generate",
 	"drill.evaluate",
 	"summary.generate",
+	// teacher.agentic is never sent to GenerateStructured (it's the
+	// ONLY entry in knownToolPromptNames below, sent to CallWithTools
+	// instead) — listed here too purely so warnForUnknownPromptNames
+	// doesn't fire a spurious "unknown prompt name" warning for the
+	// one legitimate tool-calling route
+	// (APP_AI_ROUTES=teacher.agentic=...): that function scans every
+	// route regardless of which capability it's actually for (see its
+	// own doc comment on "an operator's typo"), and it has no way to
+	// know this route is buildToolCaller's business, not
+	// buildAIGenerator's.
+	"teacher.agentic",
 }
 
 // knownToolPromptNames is every prompt name a route can name for TOOL

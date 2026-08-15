@@ -185,6 +185,22 @@ route naming a provider with missing configuration (e.g. `ollama`
 without `APP_AI_OLLAMA_MODEL` set) fails the app at startup, not on the
 first request that needs it.
 
+### Agentic teacher (`APP_AI_AGENTICTEACHER`)
+
+`APP_AI_AGENTICTEACHER=true` (default `false`) opts every feedback
+request into an agentic path (PRD §27/§50): before producing
+corrections, the teacher drives a tool-calling investigation over a
+read-only subset of `internal/tools` (the learner's recent priorities,
+correction history, grammar progress, vocabulary, recent writing —
+never a mutating tool) instead of the single-shot path's precomputed
+context. The investigation's own conversation — every model turn and
+tool call — is recorded and viewable at `/ai/agents`, linked from the
+`/ai` dashboard. The corrections themselves always come from the same
+schema-validated structured-generation call either way (Rule 4); the
+flag only changes where the surrounding context comes from. Leave it
+unset for Phase 1's original single-shot behaviour and cost,
+unchanged.
+
 ### Startup pricing warning
 
 `ai_requests.cost_usd` is computed from a fixed rate card in

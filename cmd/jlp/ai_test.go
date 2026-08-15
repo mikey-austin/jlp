@@ -243,6 +243,20 @@ func TestUnknownPromptNamesFlagsNamesOutsideTheKnownList(t *testing.T) {
 	}
 }
 
+// TestUnknownPromptNamesDoesNotFlagTeacherAgentic pins a minor found in
+// review: "teacher.agentic" — the one legitimate tool-calling route
+// name (buildToolCaller's knownToolPromptNames) — must not trigger a
+// spurious "unknown prompt name" boot warning just because it's not a
+// GenerateStructured prompt. It's listed in knownPromptNames purely to
+// suppress that false positive (see that slice's own doc comment) —
+// it's never actually sent to GenerateStructured.
+func TestUnknownPromptNamesDoesNotFlagTeacherAgentic(t *testing.T) {
+	routed := map[string][]string{"teacher.agentic": {"anthropic"}}
+	if got := unknownPromptNames(routed); len(got) != 0 {
+		t.Errorf("unknownPromptNames(teacher.agentic routed) = %v, want empty — this is a real tool-calling route, not a typo", got)
+	}
+}
+
 // TestBuildAIGeneratorSucceedsDespiteUnknownRoutedPromptName confirms
 // the boot-time guard is warning-only, symmetric with warnIfUnpriced
 // above: an APP_AI_ROUTES entry naming a prompt outside
