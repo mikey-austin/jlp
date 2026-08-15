@@ -19,7 +19,7 @@ import (
 func CSRFProtect() func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if csrfReject(r.Method, r.Header.Get("Sec-Fetch-Site"), r.Header.Get("Origin"), r.Host) {
+			if csrfReject(r.Method, r.URL.Path, r.Header.Get("Sec-Fetch-Site"), r.Header.Get("Origin"), r.Host) {
 				csrfRejectError(w, r)
 				return
 			}
@@ -28,12 +28,14 @@ func CSRFProtect() func(http.Handler) http.Handler {
 	}
 }
 
-// stateChangingMethods are the HTTP methods CSRF protection applies
-// to — GET (and HEAD/OPTIONS) requests are never blocked, per the
-// brief: a same-origin policy only needs to stop a cross-site page
-// from making the SERVER perform a write on the victim's behalf; a
-// cross-site GET can't do that (and blocking it would break normal
-// cross-site navigation/linking).
+// stateChangingMethods are the HTTP methods CSRF protection applies to
+// unconditionally — GET (and HEAD/OPTIONS) requests are ordinarily
+// never blocked, per the brief: a same-origin policy only needs to stop
+// a cross-site page from making the SERVER perform a write on the
+// victim's behalf, and an ordinary READ-ONLY GET can't do that (and
+// blocking every GET would break normal cross-site navigation/linking).
+// See mutatingGetPaths below for the narrow, explicit exception this
+// blanket rule needs.
 var stateChangingMethods = map[string]bool{
 	http.MethodPost:   true,
 	http.MethodPut:    true,
@@ -41,12 +43,47 @@ var stateChangingMethods = map[string]bool{
 	http.MethodDelete: true,
 }
 
+// mutatingGetPaths is the opt-in, explicit list of GET routes that
+// DO perform a state change server-side and therefore need the exact
+// same cross-site rejection stateChangingMethods gets — everything
+// else about GET stays exactly as before (never checked, so ordinary
+// navigation/linking is unaffected). Today this is exactly one route:
+// /anki/export.tsv (Phase 3 Task 3, PRD §19) — see
+// httpx.ankiExportTSV's doc comment for why it's a GET at all (browser
+// "Save As" download ergonomics — only a GET a bare `<a href>` can
+// drive gets that) despite marking every approved card exported as a
+// side effect. Without this entry, a cross-site page could trigger
+// that mutation invisibly (Content-Disposition: attachment means the
+// victim's tab never visibly navigates) via something as simple as
+// `window.open('https://victim-host/anki/export.tsv')` — ordinary
+// read-only GETs have no such consequence, which is exactly why GET is
+// otherwise exempt; this route is the one place that assumption
+// doesn't hold, so it alone opts back in.
+//
+// Adding a future mutating GET (there should be very few — POST is
+// still the right default for anything that changes state) means
+// adding its path here, not changing csrfReject's general GET
+// tolerance.
+var mutatingGetPaths = map[string]bool{
+	"/anki/export.tsv": true,
+}
+
+// isProtectedRequest reports whether method+path together need CSRF
+// checking at all — every state-changing method, unconditionally, plus
+// the narrow mutatingGetPaths exception for an otherwise-exempt GET.
+func isProtectedRequest(method, path string) bool {
+	return stateChangingMethods[method] || (method == http.MethodGet && mutatingGetPaths[path])
+}
+
 // csrfReject is the whole predicate, factored out of the middleware
 // itself so a table test can drive it directly against plain strings
 // instead of building *http.Request values for every case. It decides
-// once, in three explicit, ORDER-SENSITIVE tiers:
+// once, in four explicit, ORDER-SENSITIVE tiers:
 //
-//  0. Non-state-changing method (GET/HEAD/OPTIONS/...) → never reject.
+//  0. !isProtectedRequest(method, path) → never reject. This is GET/
+//     HEAD/OPTIONS/... EXCEPT the narrow mutatingGetPaths allowlist —
+//     see that var's doc comment for why a handful of GET routes need
+//     to opt back into the checks below despite GET's usual exemption.
 //
 //  1. Extension-scheme Origin (chrome-extension:/moz-extension:) →
 //     PASS, unconditionally, regardless of Sec-Fetch-Site. This MUST
@@ -84,8 +121,8 @@ var stateChangingMethods = map[string]bool{
 // tier 2 rejects that before tier 3 (or the null carve-out) is ever
 // reached. The null carve-out never overrides a genuine cross-site
 // signal; it only fires when nothing already said "cross-site".
-func csrfReject(method, secFetchSite, origin, host string) bool {
-	if !stateChangingMethods[method] {
+func csrfReject(method, path, secFetchSite, origin, host string) bool {
+	if !isProtectedRequest(method, path) {
 		return false
 	}
 	if isExtensionOrigin(origin) {

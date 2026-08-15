@@ -86,21 +86,29 @@ func (s *Server) ankiStatus(w http.ResponseWriter, r *http.Request) {
 // approved card exported as part of building the download (see
 // application/anki.Service.ExportTSV's doc comment for the atomicity/
 // no-double-export contract this relies on). It's kept a GET — not a
-// POST behind CSRF, which every other state-changing route in this
-// group is — deliberately: a file download triggered by a plain link
-// click (rather than an XHR2/htmx form submit) is the ergonomic way to
-// get a browser's native "Save As" flow, and GET is the only method a
-// bare <a href> can drive. That ergonomic choice is safe here
-// specifically because the mutation this GET performs is idempotent
-// per learner (a second immediate GET is a no-op — see the Service
-// doc comment, and the second-GET assertion inside
+// POST behind ordinary CSRF, which every other state-changing route in
+// this group is — deliberately: a file download triggered by a plain
+// link click (rather than an XHR/htmx form submit) is the ergonomic
+// way to get a browser's native "Save As" flow, and GET is the only
+// method a bare <a href> can drive.
+//
+// That ergonomic choice does NOT mean this route is CSRF-exempt,
+// though: a cross-site page CAN make a victim's browser issue this GET
+// carrying the victim's own session cookie (e.g.
+// `window.open('https://host/anki/export.tsv')`), and because the
+// response is Content-Disposition: attachment the victim's tab never
+// visibly navigates — the unwanted "mark everything exported" mutation
+// would be silent. csrf.go's mutatingGetPaths therefore opts this exact
+// path back into the SAME Sec-Fetch-Site/Origin cross-site rejection
+// every POST/PUT/PATCH/DELETE route already gets — see that var's doc
+// comment. What remains true independent of that check: the mutation
+// is idempotent per learner (a second immediate GET is a no-op — see
+// the Service doc comment, and the second-GET assertion inside
 // TestAnkiStatusApproveThenExportTSV in this package's tests) and
-// identity-scoped (RequireIdentity gates
-// this whole route group, so a cross-site GET would need the victim's
-// own session cookie to do anything at all, and even then it would
-// only export the victim's OWN already-approved cards to the
-// victim's OWN browser — never write, delete, or leak anything to the
-// attacker).
+// identity-scoped (RequireIdentity gates this whole route group), so a
+// same-site request — the only kind that reaches this handler at all
+// now — can only ever affect its own caller's own already-approved
+// cards.
 func (s *Server) ankiExportTSV(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
@@ -119,13 +127,19 @@ func (s *Server) ankiExportTSV(w http.ResponseWriter, r *http.Request) {
 // the button then — see anki.html.tmpl), though the service itself
 // still enforces the same gate independently (ErrAnkiConnectNotConfigured)
 // so this handler is safe even if reached some other way. Renders the
-// "anki_push_result" partial with a count or an error message.
+// "anki_push_result" partial with a count or an error message. Added is
+// included alongside Error too (not just on the success path):
+// PushToAnkiConnect can fail AFTER AddNotes already succeeded (e.g. the
+// follow-up MarkExported write errors — see that method's own doc
+// comment) and still returns however many cards were actually pushed,
+// so the learner sees that count rather than a bare, uninformative
+// failure message.
 func (s *Server) ankiPush(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
 	added, err := s.opts.Anki.PushToAnkiConnect(r.Context(), ident.ID)
 	if err != nil {
-		RenderPartial(w, r, "anki_push_result", map[string]any{"Error": err.Error()})
+		RenderPartial(w, r, "anki_push_result", map[string]any{"Error": err.Error(), "Added": added})
 		return
 	}
 	RenderPartial(w, r, "anki_push_result", map[string]any{"Added": added})

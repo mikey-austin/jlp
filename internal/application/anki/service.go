@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -126,9 +127,17 @@ func (s *Service) GenerateFromCorrection(ctx context.Context, identity learner.I
 	// triggered from within that session's workspace (the
 	// 「Ankiカード作成」 button lives on a correction card there), so it
 	// belongs in that session's activity feed exactly like
-	// correction.accepted/rejected do — unlike anki.card.exported below,
-	// which fires from the session-less /anki review queue page and so
-	// has no session to scope to.
+	// correction.accepted/rejected do — unlike anki.card.exported, which
+	// fires from the session-less /anki review queue page and so has no
+	// session to scope to.
+	//
+	// Log-and-continue on a Record failure, not hard-fail: card is
+	// already durably persisted above (repo.Insert), and nothing
+	// downstream subscribes to anki.card.created (see recordExported's
+	// doc comment for the same reasoning) — hard-failing here would
+	// return a 500 to the caller for a card that a subsequent /anki page
+	// load would show as already created, an inconsistency strictly
+	// worse than a missing activity-feed row.
 	sessionID := rec.SessionID
 	if err := s.rec.Record(ctx, event.LearningEvent{
 		IdentityID: identity,
@@ -140,7 +149,7 @@ func (s *Service) GenerateFromCorrection(ctx context.Context, identity learner.I
 			"source_id":   card.SourceID,
 		},
 	}); err != nil {
-		return storage.AnkiCard{}, fmt.Errorf("anki: record %s: %w", event.TypeAnkiCardCreated, err)
+		slog.Error("record anki.card.created", "identity", identity, "card", card.ID, "err", err)
 	}
 
 	return card, nil
@@ -204,9 +213,10 @@ func (s *Service) ExportTSV(ctx context.Context, identity learner.IdentityID) ([
 		return nil, nil, fmt.Errorf("anki: mark exported: %w", err)
 	}
 
-	if err := s.recordExported(ctx, identity, cards); err != nil {
-		return nil, nil, err
-	}
+	// recordExported logs-and-continues on its own failures (see its doc
+	// comment) — by this point the cards are already durably marked
+	// exported, so the learner must still get their file.
+	s.recordExported(ctx, identity, cards)
 
 	return buf.Bytes(), ids, nil
 }
@@ -254,13 +264,32 @@ func (s *Service) PushToAnkiConnect(ctx context.Context, identity learner.Identi
 	for _, c := range cards {
 		ids = append(ids, c.ID)
 	}
+	// Known limitation: if MarkExported itself fails here (a transient DB
+	// error), AddNotes has ALREADY durably succeeded against the real
+	// Anki instance, but these cards stay "approved" in our own storage
+	// — the two systems are now out of sync. A learner who retries sees
+	// their own already-pushed cards re-submitted; AnkiConnect typically
+	// rejects exact duplicates (a null entry in its response, the same
+	// shape as any other rejection this adapter can't distinguish — see
+	// adapters/ankiconnect's doc comment), so the retry's `added` comes
+	// back 0 and trips the "accepted 0 of N" branch above with a
+	// confusing message for cards that are, in fact, already in Anki.
+	// added is still returned (not discarded) below and in ankiPush's
+	// error-path rendering, so the learner at least sees a nonzero count
+	// alongside the failure rather than a bare error. A full fix (making
+	// this genuinely idempotent against AnkiConnect's own duplicate
+	// semantics) is out of scope here — AnkiConnect push is dormant by
+	// default and unit-tested only in this task (no live Anki instance).
 	if err := s.repo.MarkExported(ctx, identity, ids); err != nil {
 		return added, fmt.Errorf("anki: mark exported: %w", err)
 	}
 
-	if err := s.recordExported(ctx, identity, cards); err != nil {
-		return added, err
-	}
+	// recordExported logs-and-continues on its own failures (see its doc
+	// comment) — AnkiConnect has already accepted every card and
+	// MarkExported has already committed, so the push genuinely
+	// succeeded; a recording hiccup must not turn that into a reported
+	// failure.
+	s.recordExported(ctx, identity, cards)
 
 	return added, nil
 }
@@ -268,7 +297,24 @@ func (s *Service) PushToAnkiConnect(ctx context.Context, identity learner.Identi
 // recordExported records one anki.card.exported event per card in
 // cards — the shared tail ExportTSV and PushToAnkiConnect both run once
 // their respective export has actually happened.
-func (s *Service) recordExported(ctx context.Context, identity learner.IdentityID, cards []storage.AnkiCard) error {
+//
+// Deliberately log-and-continue, not hard-fail (unlike
+// application/feedback.Service's own event-recording, which DOES
+// hard-fail — see that package's RequestFeedback doc comment): by the
+// time this runs, repo.MarkExported has ALREADY durably committed
+// (ExportTSV) or AnkiConnect has already accepted every card AND
+// MarkExported has committed (PushToAnkiConnect) — the real, valuable
+// work is done. Nothing downstream subscribes to anki.card.exported the
+// way learnermodel.Updater subscribes to correction.presented/
+// grammar.concept.encountered (see cmd/jlp/main.go's bus.Subscribe
+// calls), so a missing event here is an activity-feed/audit gap, not a
+// correctness gap — the same distinction application/writing.Service.
+// Autosave's own doc comment draws for writing.updated. Discarding the
+// caller's already-built TSV bytes (ExportTSV) or reporting a
+// successful AnkiConnect push as a failure (PushToAnkiConnect) over a
+// recording hiccup would be strictly worse than an occasionally-missing
+// audit-trail row.
+func (s *Service) recordExported(ctx context.Context, identity learner.IdentityID, cards []storage.AnkiCard) {
 	for _, c := range cards {
 		if err := s.rec.Record(ctx, event.LearningEvent{
 			IdentityID: identity,
@@ -279,8 +325,7 @@ func (s *Service) recordExported(ctx context.Context, identity learner.IdentityI
 				"source_id":   c.SourceID,
 			},
 		}); err != nil {
-			return fmt.Errorf("anki: record %s: %w", event.TypeAnkiCardExported, err)
+			slog.Error("record anki.card.exported", "identity", identity, "card", c.ID, "err", err)
 		}
 	}
-	return nil
 }

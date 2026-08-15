@@ -139,11 +139,18 @@ func (f *fakeFeedbackRepo) RecordConfidence(context.Context, learner.IdentityID,
 
 // fakeCapturingEventStore actually records every Append call — mirrors
 // application/practice/service_test.go's double of the same name.
+// appendErr, when set, fails every Append (without recording it) —
+// used to pin the log-and-continue contract on anki.card.created/
+// anki.card.exported (see service.go's recordExported doc comment).
 type fakeCapturingEventStore struct {
-	appended []event.LearningEvent
+	appended  []event.LearningEvent
+	appendErr error
 }
 
 func (f *fakeCapturingEventStore) Append(_ context.Context, ev event.LearningEvent) error {
+	if f.appendErr != nil {
+		return f.appendErr
+	}
 	f.appended = append(f.appended, ev)
 	return nil
 }
@@ -277,6 +284,29 @@ func TestGenerateFromCorrectionUnknownIDMisses(t *testing.T) {
 	_, err := h.svc.GenerateFromCorrection(context.Background(), testIdentity, "does-not-exist")
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("err = %v, want storage.ErrNotFound", err)
+	}
+}
+
+// TestGenerateFromCorrectionSurvivesEventRecordFailure pins the
+// code-review fix: repo.Insert has already committed the draft card by
+// the time the anki.card.created Record call runs, so a Recorder
+// failure there must not turn a successfully created draft into a
+// reported 500 — the card would otherwise exist in storage while the
+// caller was told generation failed.
+func TestGenerateFromCorrectionSurvivesEventRecordFailure(t *testing.T) {
+	h := newTestHarness()
+	h.feedback.seed(testIdentity, testCorrection("corr-1"))
+	h.events.appendErr = errors.New("event store unavailable")
+
+	card, err := h.svc.GenerateFromCorrection(context.Background(), testIdentity, "corr-1")
+	if err != nil {
+		t.Fatalf("GenerateFromCorrection returned error: %v, want nil (event-record failures must be logged, not surfaced)", err)
+	}
+	if card.Status != "draft" {
+		t.Fatalf("Status = %q, want draft", card.Status)
+	}
+	if _, ok := h.cards.byID[card.ID]; !ok {
+		t.Fatal("GenerateFromCorrection did not persist the card despite the event-record failure")
 	}
 }
 
@@ -479,6 +509,31 @@ func TestExportTSVRecordsExportedEvent(t *testing.T) {
 	}
 }
 
+// TestExportTSVSurvivesEventRecordFailure pins the code-review fix:
+// MarkExported has already committed by the time recordExported runs,
+// so a Recorder failure there must NOT discard the already-built TSV
+// bytes/ids or fail the call — the learner still needs their file, and
+// the card is already durably exported either way.
+func TestExportTSVSurvivesEventRecordFailure(t *testing.T) {
+	h := newTestHarness()
+	card := approvedCard(t, h, "corr-1")
+	h.events.appendErr = errors.New("event store unavailable")
+
+	tsv, ids, err := h.svc.ExportTSV(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("ExportTSV returned error: %v, want nil (event-record failures must be logged, not surfaced)", err)
+	}
+	if len(tsv) == 0 {
+		t.Fatal("ExportTSV discarded its TSV bytes on an event-record failure")
+	}
+	if len(ids) != 1 || ids[0] != card.ID {
+		t.Fatalf("ids = %v, want [%s]", ids, card.ID)
+	}
+	if h.cards.byID[card.ID].Status != "exported" {
+		t.Fatalf("Status = %q, want exported (MarkExported already committed before the failed Record call)", h.cards.byID[card.ID].Status)
+	}
+}
+
 // --- PushToAnkiConnect ---
 
 // TestPushToAnkiConnectNotConfiguredErrors pins the config-gated
@@ -563,5 +618,29 @@ func TestPushToAnkiConnectConnectorErrorPropagates(t *testing.T) {
 
 	if _, err := h.svc.PushToAnkiConnect(context.Background(), testIdentity); err == nil {
 		t.Fatal("expected an error when AddNotes fails, got nil")
+	}
+}
+
+// TestPushToAnkiConnectSurvivesEventRecordFailure mirrors
+// TestExportTSVSurvivesEventRecordFailure for the AnkiConnect path:
+// AddNotes already succeeded and MarkExported already committed by the
+// time recordExported runs, so a Recorder failure there must not turn a
+// genuinely successful push into a reported failure.
+func TestPushToAnkiConnectSurvivesEventRecordFailure(t *testing.T) {
+	h := newTestHarness()
+	card := approvedCard(t, h, "corr-1")
+	conn := &fakeConnector{added: 1}
+	h.svc.SetConnector(conn)
+	h.events.appendErr = errors.New("event store unavailable")
+
+	added, err := h.svc.PushToAnkiConnect(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("PushToAnkiConnect returned error: %v, want nil (event-record failures must be logged, not surfaced)", err)
+	}
+	if added != 1 {
+		t.Fatalf("added = %d, want 1", added)
+	}
+	if h.cards.byID[card.ID].Status != "exported" {
+		t.Fatalf("Status = %q, want exported", h.cards.byID[card.ID].Status)
 	}
 }
