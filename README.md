@@ -162,7 +162,7 @@ routed to a different provider — or an ordered fallback chain of
 several — via `APP_AI_ROUTES`:
 
 ```
-APP_AI_ROUTES=teacher.feedback=ollama,anthropic;drill.exercise=ollama
+APP_AI_ROUTES=teacher.feedback=ollama,anthropic;drill.generate=ollama
 ```
 
 Format: semicolon-separated `prompt.name=prov1,prov2` entries. A

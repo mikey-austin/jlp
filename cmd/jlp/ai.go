@@ -54,6 +54,60 @@ func aiPricing() map[string]observability.ModelPricing {
 	}
 }
 
+// knownPromptNames is every prompt name a route (APP_AI_ROUTES) or the
+// app itself can actually send to GenerateStructured — kept here as a
+// small, manually maintained slice because nothing in the codebase
+// enumerates prompt names centrally (each agent package defines its
+// own promptName consts privately: see
+// internal/agent/teacher/teacher.go's promptName and
+// internal/agent/drill/drill.go's generatePromptName/
+// evaluatePromptName). Add a new entry here whenever an agent gains a
+// new prompt name; forgetting to is harmless on its own (see
+// warnForUnknownPromptNames below — it only warns, never errors) but
+// leaves a future operator's typo undetected.
+var knownPromptNames = []string{
+	"teacher.feedback",
+	"drill.generate",
+	"drill.evaluate",
+}
+
+// unknownPromptNames returns every key of routes absent from
+// knownPromptNames. Split out from warnForUnknownPromptNames so a test
+// can assert on exactly what would be warned about without swapping
+// slog's default handler — see cmd/jlp/ai_test.go's
+// TestUnknownPromptNamesFlagsNamesOutsideTheKnownList.
+func unknownPromptNames(routes map[string][]string) []string {
+	known := make(map[string]bool, len(knownPromptNames))
+	for _, n := range knownPromptNames {
+		known[n] = true
+	}
+	var unknown []string
+	for promptName := range routes {
+		if !known[promptName] {
+			unknown = append(unknown, promptName)
+		}
+	}
+	return unknown
+}
+
+// warnForUnknownPromptNames logs a boot-time slog.Warn for every
+// APP_AI_ROUTES entry naming a prompt outside knownPromptNames — most
+// likely an operator's typo (e.g. the README once documented
+// "drill.exercise", which was never a real prompt name — see
+// internal/agent/drill/drill.go), or knownPromptNames itself having
+// gone stale after a new prompt was added elsewhere. This is a
+// warning, not a boot error, symmetric with warnIfUnpriced above: an
+// unmatched route promptName isn't a routing failure by itself — that
+// PromptName simply never arrives via GenerateStructured, so the route
+// silently never fires and every real call falls through to
+// APP_AI_PROVIDER's default. The operator deserves to know at boot
+// rather than discover a route quietly doing nothing.
+func warnForUnknownPromptNames(routes map[string][]string) {
+	for _, promptName := range unknownPromptNames(routes) {
+		slog.Warn("ai: route names a prompt not in the known prompt list, this route will never match a real request", "prompt_name", promptName, "known_prompt_names", knownPromptNames)
+	}
+}
+
 // buildAIGenerator turns cfg.AI (Provider, Anthropic, Ollama, ClaudeCLI,
 // CodexCLI, Routes) into the single ai.StructuredGenerator the rest of
 // main wires everywhere an AI call is made (teacher, drill): an
@@ -87,6 +141,7 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 	if err != nil {
 		return nil, err
 	}
+	warnForUnknownPromptNames(routes)
 
 	needed := map[string]bool{cfg.AI.Provider: true}
 	for _, chain := range routes {

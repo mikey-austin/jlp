@@ -104,7 +104,13 @@ func TestBuildAIGeneratorRoutesNamedPromptToOllamaFallsThroughOthers(t *testing.
 		t.Errorf("routed Provider = %q, want ollama (APP_AI_ROUTES=teacher.feedback=ollama)", routed.Provider)
 	}
 
-	unrouted, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "drill.exercise"})
+	// "nonexistent.prompt" deliberately isn't a real prompt name (see
+	// knownPromptNames in ai.go) — this only needs to be a PromptName
+	// with no matching APP_AI_ROUTES entry, and using an actual prompt
+	// name here (drill.exercise was tried previously, but that was
+	// never a real prompt name either — see the boot-time warning this
+	// finding adds) would risk being mistaken for one.
+	unrouted, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "nonexistent.prompt"})
 	if err != nil {
 		t.Fatalf("GenerateStructured(unrouted): %v", err)
 	}
@@ -204,4 +210,51 @@ func TestWarnIfUnpricedSkipsKnownAndEmptyModels(t *testing.T) {
 	warnIfUnpriced(pricing, "anthropic", "")
 	warnIfUnpriced(pricing, "anthropic", "claude-sonnet-5")
 	warnIfUnpriced(pricing, "ollama", "some-model-nobody-priced")
+}
+
+// TestUnknownPromptNamesFlagsNamesOutsideTheKnownList pins Finding 2's
+// boot-time guard: a route naming a prompt not in knownPromptNames
+// (teacher.feedback/drill.generate/drill.evaluate) must be flagged so
+// a typo — like the README's now-fixed "drill.exercise", which was
+// never a real prompt name (see internal/agent/drill/drill.go's
+// generatePromptName/evaluatePromptName) — doesn't silently route
+// nowhere. unknownPromptNames is asserted directly (rather than
+// swapping slog's handler to capture warnForUnknownPromptNames'
+// output) precisely so this test doesn't need to know anything about
+// log formatting — see that function's doc comment for why the check
+// is split out.
+func TestUnknownPromptNamesFlagsNamesOutsideTheKnownList(t *testing.T) {
+	allKnown := map[string][]string{
+		"teacher.feedback": {"fake"},
+		"drill.generate":   {"fake"},
+		"drill.evaluate":   {"fake"},
+	}
+	if got := unknownPromptNames(allKnown); len(got) != 0 {
+		t.Errorf("unknownPromptNames(all known) = %v, want empty", got)
+	}
+
+	withTypo := map[string][]string{
+		"teacher.feedback": {"fake"},
+		"drill.exercise":   {"fake"}, // the wrong name Finding 2 is about
+	}
+	got := unknownPromptNames(withTypo)
+	if len(got) != 1 || got[0] != "drill.exercise" {
+		t.Errorf("unknownPromptNames(with typo) = %v, want exactly [drill.exercise]", got)
+	}
+}
+
+// TestBuildAIGeneratorSucceedsDespiteUnknownRoutedPromptName confirms
+// the boot-time guard is warning-only, symmetric with warnIfUnpriced
+// above: an APP_AI_ROUTES entry naming a prompt outside
+// knownPromptNames must NOT fail buildAIGenerator — the provider it
+// names (fake, here) is still perfectly constructible, so the route is
+// wired exactly as configured; the operator just never gets a request
+// for it since nothing in the app sends that PromptName.
+func TestBuildAIGeneratorSucceedsDespiteUnknownRoutedPromptName(t *testing.T) {
+	cfg := baseCfg()
+	cfg.AI.Routes = "nonexistent.prompt=fake"
+
+	if _, err := buildAIGenerator(cfg, &memRepo{}); err != nil {
+		t.Fatalf("buildAIGenerator: %v, want success (unknown prompt name is a warning, not a boot error)", err)
+	}
 }
