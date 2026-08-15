@@ -327,6 +327,85 @@ func TestAIRequestsPageRendersZeroStateForEmptyQualityStats(t *testing.T) {
 	}
 }
 
+// TestAIRequestsPageSummaryStatGridIsRequestWeighted covers the fix for
+// the Task 10 review finding: the /ai page's top-level stat-grid
+// (総リクエスト/成功率/平均評価/総コスト) must be a real request-weighted
+// aggregate over ProviderStats, not a naive per-provider mean. The
+// fixture is deliberately lopsided (80 requests at 100%/rated 5.0, 20
+// requests at 0%/unrated) so a naive unweighted average would produce
+// visibly wrong numbers (50% success, 2.5 rating if the unrated
+// provider were wrongly counted as a 0) that this test would catch —
+// the weighted math must land on 80% and 5.0 instead.
+func TestAIRequestsPageSummaryStatGridIsRequestWeighted(t *testing.T) {
+	opts := aiTestOptions()
+	opts.AIRequests = fakeAIRequestRepo{}
+	quality := opts.AIQuality.(*fakeAIQualityRepo)
+	quality.byProvider = []storage.ProviderStats{
+		{Provider: "anthropic", Model: "claude", Requests: 80, SuccessRate: 1.0, AvgRating: 5.0, TotalCostUSD: 0.01},
+		// AvgRating: 0 is this codebase's "unrated" sentinel (see
+		// aiRequestView.Rating) — this provider must be skipped
+		// entirely from the rating average, not counted as a 0.
+		{Provider: "ollama", Model: "qwen", Requests: 20, SuccessRate: 0.0, AvgRating: 0, TotalCostUSD: 0.02},
+	}
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ai", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /ai status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"100",      // 総リクエスト: 80+20
+		"80%",      // 成功率: (80*1.0 + 20*0.0)/100 = 80%, NOT the naive (100%+0%)/2=50%
+		"5.0",      // 平均評価: 80's 5.0 only (20 is unrated and skipped), NOT naive (5.0+0)/2=2.5
+		"0.030000", // 総コスト: 0.01+0.02
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /ai body missing weighted stat-grid value %q: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "50%") {
+		t.Errorf("GET /ai body contains the naive (unweighted) 50%% success rate instead of the request-weighted 80%%: %s", body)
+	}
+	if strings.Contains(body, "2.5") {
+		t.Errorf("GET /ai body contains the naive average rating 2.5 (wrongly counting the unrated provider as 0) instead of the weighted 5.0: %s", body)
+	}
+}
+
+// TestAIRequestsPageSummaryStatGridZeroStateShowsDashes: with no
+// provider stats at all, 成功率/平均評価 have no defined
+// value (a 0/0 division) and must render as an em dash, matching the
+// convention already used for an unrated AvgRating elsewhere on this
+// page — never a bare "NaN"/"Inf"/0%-that-looks-like-a-real-zero. The
+// stat-grid itself must still render (総リクエスト/総コスト are
+// well-defined zeros), keeping the page's shape rather than omitting
+// the section.
+func TestAIRequestsPageSummaryStatGridZeroStateShowsDashes(t *testing.T) {
+	opts := aiTestOptions()
+	opts.AIRequests = fakeAIRequestRepo{}
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ai", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /ai status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `class="stat-grid"`) {
+		t.Fatalf("GET /ai body missing the stat-grid section in the zero-request state: %s", body)
+	}
+	if !strings.Contains(body, "0.000000") {
+		t.Errorf("GET /ai body missing 総コスト as a well-defined zero: %s", body)
+	}
+	for _, bad := range []string{"NaN", "Inf", "%!"} {
+		if strings.Contains(body, bad) {
+			t.Fatalf("GET /ai body contains %q — a divide-by-zero leaked into the rendered page: %s", bad, body)
+		}
+	}
+}
+
 // TestAIRequestsPageReturns500WhenQualityStatsFail: an AIQuality error
 // must surface as a 500, same as every other failed load this handler
 // makes (AIRequests.List, AIRatings.ForRequests) — never a page that

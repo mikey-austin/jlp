@@ -27,6 +27,58 @@ type aiRequestView struct {
 	Rating                                         int
 }
 
+// aiSummaryView is the /ai page's top-level stat-grid — the design's AI
+// dashboard screen composition (jlp-design-system.html:595-599) shows
+// four request-weighted aggregates above the tables. All four are real
+// aggregates over ProviderStats (already fetched for プロバイダー比較
+// below), not invented numbers: TotalRequests/TotalCostUSD are plain
+// sums; SuccessRate is request-weighted
+// (sum(Requests*SuccessRate)/sum(Requests)); AvgRating is
+// request-weighted too, but only over providers that HAVE a rating
+// (AvgRating==0 is this codebase's existing "unrated" sentinel — see
+// aiRequestView.Rating/toAIRequestView — so an unrated provider is
+// skipped in both the numerator and denominator rather than dragging
+// the average toward 0).
+//
+// SuccessRate/AvgRating are meaningless divide-by-zero candidates when
+// their denominator is empty, so the template gates on TotalRequests
+// (for SuccessRate) and a nonzero AvgRating (for AvgRating, same
+// sentinel convention already used elsewhere) rather than this struct
+// pre-formatting a dash — that keeps display formatting in the
+// template via the existing percent/printf helpers, consistent with
+// every other numeric field on this page. TotalCostUSD has no
+// zero-state: summing zero rows is a well-defined 0.0, rendered the
+// same way the existing cost column always does.
+type aiSummaryView struct {
+	TotalRequests int
+	SuccessRate   float64 // 0..1, weighted by Requests; meaningless when TotalRequests==0
+	AvgRating     float64 // weighted avg over rated providers only; 0 when none rated
+	TotalCostUSD  float64
+}
+
+func toAISummaryView(stats []storage.ProviderStats) aiSummaryView {
+	var totalRequests, ratedRequests int
+	var successWeighted, ratingWeighted, totalCost float64
+	for _, s := range stats {
+		totalRequests += s.Requests
+		successWeighted += s.SuccessRate * float64(s.Requests)
+		if s.AvgRating > 0 {
+			ratingWeighted += s.AvgRating * float64(s.Requests)
+			ratedRequests += s.Requests
+		}
+		totalCost += s.TotalCostUSD
+	}
+
+	view := aiSummaryView{TotalRequests: totalRequests, TotalCostUSD: totalCost}
+	if totalRequests > 0 {
+		view.SuccessRate = successWeighted / float64(totalRequests)
+	}
+	if ratedRequests > 0 {
+		view.AvgRating = ratingWeighted / float64(ratedRequests)
+	}
+	return view
+}
+
 func toAIRequestView(rec storage.AIRequestRecord, rating int) aiRequestView {
 	return aiRequestView{
 		ID:            rec.ID,
@@ -89,6 +141,7 @@ func (s *Server) aiRequests(w http.ResponseWriter, r *http.Request) {
 		"Requests":      views,
 		"ProviderStats": byProvider,
 		"PromptStats":   byPrompt,
+		"Summary":       toAISummaryView(byProvider),
 	})
 }
 
