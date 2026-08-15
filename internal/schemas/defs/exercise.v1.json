@@ -1,0 +1,37 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExerciseV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["type", "instructions", "prompt", "concept"],
+  "properties": {
+    "type": { "enum": ["fill-in-blank", "multiple-choice", "transformation", "free-production"] },
+    "instructions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ja", "en"],
+      "properties": { "ja": { "type": "string" }, "en": { "type": "string" } }
+    },
+    "prompt": { "type": "string", "minLength": 1 },
+    "choices": { "type": "array", "items": { "type": "string" }, "minItems": 2 },
+    "answer": { "type": "string" },
+    "acceptable": { "type": "array", "items": { "type": "string" } },
+    "concept": { "type": "string", "minLength": 1 }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "type": { "const": "multiple-choice" } },
+        "required": ["type"]
+      },
+      "then": { "required": ["choices", "answer"] }
+    },
+    {
+      "if": {
+        "properties": { "type": { "enum": ["fill-in-blank", "transformation"] } },
+        "required": ["type"]
+      },
+      "then": { "required": ["answer"] }
+    }
+  ]
+}

@@ -1,0 +1,291 @@
+package httpx
+
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"    //nolint:depguard // fakeai/inprocbus are port-shaped test doubles; PRD §75 forbids agents/application importing real adapters, not fakes
+	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus" //nolint:depguard // see fakeai above
+	"github.com/mikeyaustin/jlp/internal/agent/drill"
+	"github.com/mikeyaustin/jlp/internal/application/learning"
+	"github.com/mikeyaustin/jlp/internal/application/planner"
+	apppractice "github.com/mikeyaustin/jlp/internal/application/practice"
+	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/domain/exercise"
+	"github.com/mikeyaustin/jlp/internal/domain/grammar"
+	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/ports/storage"
+)
+
+// practiceTestConcept is the single catalog entry practiceTestServer's
+// grammar double offers — TopConcept always answers ok=false (no
+// priorities seeded, see practicePriorityRepo below), so Start's
+// random-catalog fallback always lands on this one concept,
+// deterministically, without needing to inject a rand source.
+var practiceTestConcept = grammar.Concept{Slug: "i-adjective-past", Name: "い-adjective past tense", JLPTLevel: 5}
+
+// practiceGrammarRepo is an in-memory storage.GrammarRepository double
+// distinct from feedback_test.go's fakeGrammarRepo (that one's
+// GetConcept panics unconditionally — unusable for practice.Service.
+// Start, which needs both ListConcepts and GetConcept to work).
+type practiceGrammarRepo struct {
+	concepts []grammar.Concept
+	bySlug   map[string]grammar.Concept
+}
+
+func (r *practiceGrammarRepo) UpsertConcepts(context.Context, []grammar.Concept) error {
+	panic("not used by practice http tests")
+}
+
+func (r *practiceGrammarRepo) ListConcepts(context.Context) ([]grammar.Concept, error) {
+	return r.concepts, nil
+}
+
+func (r *practiceGrammarRepo) GetConcept(_ context.Context, slug string) (grammar.Concept, error) {
+	c, ok := r.bySlug[slug]
+	if !ok {
+		return grammar.Concept{}, storage.ErrNotFound
+	}
+	return c, nil
+}
+
+func (r *practiceGrammarRepo) ConceptStats(context.Context, learner.IdentityID) ([]storage.ConceptStat, error) {
+	panic("not used by practice http tests")
+}
+
+func (r *practiceGrammarRepo) CorrectionsForConcept(context.Context, learner.IdentityID, string, int) ([]storage.CorrectionRecord, error) {
+	panic("not used by practice http tests")
+}
+
+// practicePriorityRepo is an in-memory storage.PriorityRepository
+// double, distinct from feedback_test.go's fakePriorityRepo: Top always
+// answers empty, so practice.Service.Start's TopConcept call always
+// reports ok=false and falls through to the random-catalog fallback.
+type practicePriorityRepo struct{}
+
+func (practicePriorityRepo) ReplaceAll(context.Context, learner.IdentityID, []storage.Priority) error {
+	panic("not used by practice http tests")
+}
+
+func (practicePriorityRepo) Top(context.Context, learner.IdentityID, int) ([]storage.Priority, error) {
+	return nil, nil
+}
+
+// practiceExerciseRepo is an in-memory storage.ExerciseRepository,
+// identity-scoped like the real postgres adapter.
+type practiceExerciseRepo struct {
+	byID     map[string]exercise.Exercise
+	attempts []storage.ExerciseAttempt
+}
+
+func newPracticeExerciseRepo() *practiceExerciseRepo {
+	return &practiceExerciseRepo{byID: map[string]exercise.Exercise{}}
+}
+
+func (r *practiceExerciseRepo) Create(_ context.Context, ex exercise.Exercise) error {
+	r.byID[ex.ID] = ex
+	return nil
+}
+
+func (r *practiceExerciseRepo) Get(_ context.Context, identity learner.IdentityID, id string) (exercise.Exercise, error) {
+	ex, ok := r.byID[id]
+	if !ok || ex.IdentityID != identity {
+		return exercise.Exercise{}, storage.ErrNotFound
+	}
+	return ex, nil
+}
+
+func (r *practiceExerciseRepo) RecordAttempt(_ context.Context, at storage.ExerciseAttempt) error {
+	r.attempts = append(r.attempts, at)
+	return nil
+}
+
+// practiceTestServer wires a real chi router with a real
+// practice.Service (a real drill.Agent over fakeai — deterministic, no
+// network) over in-memory repos, mirroring feedback_test.go's
+// feedbackTestServer. It returns the handler plus the exercise repo and
+// event repo so tests can inspect persisted state directly.
+func practiceTestServer(t *testing.T) (http.Handler, *practiceExerciseRepo, *fakeEventRepo) {
+	t.Helper()
+	opts := testOptions()
+	exerciseRepo := newPracticeExerciseRepo()
+	events := newFakeEventRepo()
+	rec := learning.NewRecorder(events, inprocbus.New())
+	grammarRepo := &practiceGrammarRepo{
+		concepts: []grammar.Concept{practiceTestConcept},
+		bySlug:   map[string]grammar.Concept{practiceTestConcept.Slug: practiceTestConcept},
+	}
+	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, grammarRepo, practicePriorityRepo{}, &fakeVocabRepo{}, time.Now)
+	opts.Practice = apppractice.NewService(exerciseRepo, drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec)
+
+	srv := NewServer(opts)
+	return srv.HandlerForTest(), exerciseRepo, events
+}
+
+// extractExerciseID pulls the id out of the first
+// `data-exercise-id="XXXX"` attribute in body, the way a browser's own
+// form submit (targeting /practice/{id}/answer) would rely on it.
+func extractExerciseID(t *testing.T, body string) string {
+	t.Helper()
+	const marker = `data-exercise-id="`
+	idx := strings.Index(body, marker)
+	if idx == -1 {
+		t.Fatalf("body missing exercise id marker %q: %s", marker, body)
+	}
+	rest := body[idx+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end == -1 {
+		t.Fatalf("malformed exercise id attribute: %s", body)
+	}
+	return rest[:end]
+}
+
+// TestPracticeStartRendersMultipleChoiceExercise pins the brief's Step 4
+// browser scenario: POST /practice/start renders the canned MCQ with its
+// 3 choices.
+func TestPracticeStartRendersMultipleChoiceExercise(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/practice/start", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "昨日の映画はとても＿＿＿。") {
+		t.Fatalf("body missing the canned prompt: %s", body)
+	}
+	for _, choice := range []string{"面白いでした", "面白かったです", "面白いだった"} {
+		if !strings.Contains(body, choice) {
+			t.Fatalf("body missing choice %q: %s", choice, body)
+		}
+	}
+	if !strings.Contains(body, `data-exercise-id="`) {
+		t.Fatalf("body missing the exercise id marker: %s", body)
+	}
+}
+
+// TestPracticeAnswerCorrectChoiceRendersResult pins the brief's happy
+// path: the correct choice, with confidence, renders 正解 and feedback.
+func TestPracticeAnswerCorrectChoiceRendersResult(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	start := httptest.NewRecorder()
+	h.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/practice/start", nil))
+	id := extractExerciseID(t, start.Body.String())
+
+	rec := postForm(t, h, "/practice/"+id+"/answer", url.Values{
+		"response":   {"面白かったです"},
+		"confidence": {"4"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "正解") {
+		t.Fatalf("body missing 正解: %s", body)
+	}
+	if !strings.Contains(body, `data-correct="true"`) {
+		t.Fatalf("body missing data-correct=true: %s", body)
+	}
+}
+
+// TestPracticeAnswerWrongChoiceIsEncouraging pins PRD §56: a wrong
+// choice still renders 200 with encouraging retry copy, never
+// scolding/penalty/streak language.
+func TestPracticeAnswerWrongChoiceIsEncouraging(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	start := httptest.NewRecorder()
+	h.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/practice/start", nil))
+	id := extractExerciseID(t, start.Body.String())
+
+	rec := postForm(t, h, "/practice/"+id+"/answer", url.Values{"response": {"面白いでした"}})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, "もう一度挑戦しましょう") {
+		t.Fatalf("body missing the encouraging retry copy: %s", body)
+	}
+	if !strings.Contains(body, `data-correct="false"`) {
+		t.Fatalf("body missing data-correct=false: %s", body)
+	}
+	for _, bad := range []string{"失敗", "ペナルティ", "penalty", "streak"} {
+		if strings.Contains(body, bad) {
+			t.Fatalf("body contains scolding/penalty language %q: %s", bad, body)
+		}
+	}
+}
+
+// TestPracticeAnswerRecordsQuizEvents pins the events contract: Start
+// records quiz.started, Answer records quiz.answered + quiz.completed,
+// each carrying concept Evidence.
+func TestPracticeAnswerRecordsQuizEvents(t *testing.T) {
+	h, _, events := practiceTestServer(t)
+
+	start := httptest.NewRecorder()
+	h.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/practice/start", nil))
+	id := extractExerciseID(t, start.Body.String())
+
+	postForm(t, h, "/practice/"+id+"/answer", url.Values{"response": {"面白かったです"}, "confidence": {"3"}})
+
+	got := events.byIdentity["dev"]
+	if len(got) != 3 {
+		t.Fatalf("recorded events = %d, want 3 (started, answered, completed): %+v", len(got), got)
+	}
+	wantTypes := []event.Type{event.TypeQuizStarted, event.TypeQuizAnswered, event.TypeQuizCompleted}
+	for i, want := range wantTypes {
+		if got[i].Type != want {
+			t.Fatalf("events[%d].Type = %q, want %q", i, got[i].Type, want)
+		}
+		if got[i].Evidence["concept"] != "i-adjective-past" {
+			t.Fatalf("events[%d].Evidence[concept] = %v, want i-adjective-past", i, got[i].Evidence["concept"])
+		}
+	}
+}
+
+// TestPracticeAnswerInvalidConfidenceReturnsBadRequest pins the
+// confidence validation contract at the HTTP layer.
+func TestPracticeAnswerInvalidConfidenceReturnsBadRequest(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	start := httptest.NewRecorder()
+	h.ServeHTTP(start, httptest.NewRequest(http.MethodPost, "/practice/start", nil))
+	id := extractExerciseID(t, start.Body.String())
+
+	rec := postForm(t, h, "/practice/"+id+"/answer", url.Values{"response": {"x"}, "confidence": {"6"}})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPracticeAnswerUnknownExerciseReturns404 pins the not-found
+// contract at the HTTP layer.
+func TestPracticeAnswerUnknownExerciseReturns404(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	rec := postForm(t, h, "/practice/does-not-exist/answer", url.Values{"response": {"x"}})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestPracticePageRenders pins the plain page render.
+func TestPracticePageRenders(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/practice", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "練習する") {
+		t.Fatalf("body missing the 練習する button: %s", rec.Body.String())
+	}
+}

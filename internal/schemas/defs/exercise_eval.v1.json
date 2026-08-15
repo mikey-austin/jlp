@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExerciseEvalV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["correct", "score", "feedback"],
+  "properties": {
+    "correct": { "type": "boolean" },
+    "score": { "type": "integer", "minimum": 0, "maximum": 100 },
+    "feedback": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ja", "en"],
+      "properties": { "ja": { "type": "string" }, "en": { "type": "string" } }
+    }
+  }
+}

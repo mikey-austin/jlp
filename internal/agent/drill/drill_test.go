@@ -1,0 +1,254 @@
+package drill_test
+
+import (
+	"context"
+	"strings"
+	"testing"
+
+	"github.com/mikeyaustin/jlp/internal/adapters/fakeai" //nolint:depguard // fakeai is a port-shaped test double injected via drill.New(ai.StructuredGenerator); PRD §75 Rule 3 forbids agents reaching real adapters, not fakes constructed in tests
+	"github.com/mikeyaustin/jlp/internal/agent/drill"
+	"github.com/mikeyaustin/jlp/internal/domain/exercise"
+	"github.com/mikeyaustin/jlp/internal/domain/grammar"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
+)
+
+func testConcept() grammar.Concept {
+	return grammar.Concept{
+		Slug:        "i-adjective-past",
+		Name:        "い-adjective past tense",
+		JLPTLevel:   5,
+		Description: "The past tense of い-adjectives is formed by dropping い and adding かった.",
+		Examples:    []string{"面白かったです。"},
+	}
+}
+
+// TestGenerateFakeAIHappyPath pins the Step 1 scenario from the task
+// brief: Generate returns the canned MCQ, schema-valid, mapped onto an
+// exercise.Exercise.
+func TestGenerateFakeAIHappyPath(t *testing.T) {
+	agent := drill.New(fakeai.New())
+
+	ex, resp, err := agent.Generate(context.Background(), drill.GenerateInput{
+		Identity: "learner-a",
+		Concept:  testConcept(),
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if ex.Type != exercise.TypeMultipleChoice {
+		t.Fatalf("Type = %q, want %q", ex.Type, exercise.TypeMultipleChoice)
+	}
+	if ex.ConceptSlug != "i-adjective-past" {
+		t.Fatalf("ConceptSlug = %q, want i-adjective-past", ex.ConceptSlug)
+	}
+	if ex.Prompt != "昨日の映画はとても＿＿＿。" {
+		t.Fatalf("Prompt = %q, want the canned prompt", ex.Prompt)
+	}
+	if len(ex.Choices) != 3 {
+		t.Fatalf("len(Choices) = %d, want 3: %+v", len(ex.Choices), ex.Choices)
+	}
+	if ex.Answer != "面白かったです" {
+		t.Fatalf("Answer = %q, want 面白かったです", ex.Answer)
+	}
+	if ex.IdentityID != "learner-a" {
+		t.Fatalf("IdentityID = %q, want learner-a", ex.IdentityID)
+	}
+	if ex.ID != "" {
+		t.Fatalf("ID = %q, want empty (persistence assigns it, not the agent)", ex.ID)
+	}
+	if !ex.CreatedAt.IsZero() {
+		t.Fatalf("CreatedAt = %v, want zero (persistence assigns it, not the agent)", ex.CreatedAt)
+	}
+	if resp.Provider != "fake" {
+		t.Fatalf("resp.Provider = %q, want fake", resp.Provider)
+	}
+}
+
+// TestEvaluateFakeAIHappyPath pins Evaluate returning the canned eval.
+func TestEvaluateFakeAIHappyPath(t *testing.T) {
+	agent := drill.New(fakeai.New())
+
+	ex := exercise.Exercise{
+		Type:        exercise.TypeFreeProduction,
+		ConceptSlug: "i-adjective-past",
+		Prompt:      "昨日見た映画について書いてください。",
+	}
+	eval, resp, err := agent.Evaluate(context.Background(), "learner-a", ex, "映画はとても面白かったです。")
+	if err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+	if !eval.Correct {
+		t.Fatalf("Correct = false, want true")
+	}
+	if eval.Score != 85 {
+		t.Fatalf("Score = %d, want 85", eval.Score)
+	}
+	if eval.FeedbackJA == "" || eval.FeedbackEN == "" {
+		t.Fatalf("Feedback = %+v, want both JA and EN populated", eval)
+	}
+	if resp.Provider != "fake" {
+		t.Fatalf("resp.Provider = %q, want fake", resp.Provider)
+	}
+}
+
+// spyGen is a local ai.StructuredGenerator test double that records the
+// last ai.StructuredRequest it was called with (so a test can inspect
+// the fully-rendered System/User prompt text) and always returns a
+// fixed, schema-valid response for whichever SchemaName it's asked for —
+// mirroring internal/agent/teacher/teacher_test.go's own spyGen.
+type spyGen struct {
+	req ai.StructuredRequest
+}
+
+func (s *spyGen) GenerateStructured(_ context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
+	s.req = req
+	switch req.SchemaName {
+	case "exercise_eval.v1":
+		return ai.StructuredResponse{
+			JSON:     []byte(`{"correct":true,"score":90,"feedback":{"ja":"よくできました。","en":"Well done."}}`),
+			Provider: "spy",
+			Model:    "spy-1",
+		}, nil
+	default:
+		return ai.StructuredResponse{
+			JSON:     []byte(`{"type":"free-production","instructions":{"ja":"a","en":"b"},"prompt":"p","concept":"i-adjective-past"}`),
+			Provider: "spy",
+			Model:    "spy-1",
+		}, nil
+	}
+}
+
+// TestGenerateRendersConceptAndRecentErrors pins the prompt-rendering
+// contract: Generate's GenerateInput.Concept and RecentErrors both flow
+// through to the rendered drill.generate.v1 user prompt, and the request
+// carries the exercise.v1 schema/prompt name/version.
+func TestGenerateRendersConceptAndRecentErrors(t *testing.T) {
+	gen := &spyGen{}
+	agent := drill.New(gen)
+
+	_, _, err := agent.Generate(context.Background(), drill.GenerateInput{
+		Identity:     "learner-a",
+		Concept:      testConcept(),
+		RecentErrors: []string{"i-adjective-past (concept weakness, score 7.5): recurring weakness"},
+	})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	if gen.req.PromptName != "drill.generate" {
+		t.Fatalf("PromptName = %q, want drill.generate", gen.req.PromptName)
+	}
+	if gen.req.PromptVersion != "v1" {
+		t.Fatalf("PromptVersion = %q, want v1", gen.req.PromptVersion)
+	}
+	if gen.req.SchemaName != "exercise.v1" {
+		t.Fatalf("SchemaName = %q, want exercise.v1", gen.req.SchemaName)
+	}
+	if !strings.Contains(gen.req.User, "i-adjective-past") {
+		t.Fatalf("User prompt missing the concept slug: %s", gen.req.User)
+	}
+	if !strings.Contains(gen.req.User, "い-adjective past tense") {
+		t.Fatalf("User prompt missing the concept name: %s", gen.req.User)
+	}
+	if !strings.Contains(gen.req.User, "recurring weakness") {
+		t.Fatalf("User prompt missing the recent-errors line: %s", gen.req.User)
+	}
+}
+
+// TestEvaluateRendersPromptAndResponse pins Evaluate's own prompt
+// rendering: the exercise's Prompt and the learner's response both flow
+// through, and the request carries the exercise_eval.v1 schema.
+func TestEvaluateRendersPromptAndResponse(t *testing.T) {
+	gen := &spyGen{}
+	agent := drill.New(gen)
+
+	ex := exercise.Exercise{
+		Type:        exercise.TypeFreeProduction,
+		ConceptSlug: "i-adjective-past",
+		Prompt:      "昨日見た映画について書いてください。",
+	}
+	_, _, err := agent.Evaluate(context.Background(), "learner-a", ex, "とても面白かったです。")
+	if err != nil {
+		t.Fatalf("Evaluate returned error: %v", err)
+	}
+
+	if gen.req.PromptName != "drill.evaluate" {
+		t.Fatalf("PromptName = %q, want drill.evaluate", gen.req.PromptName)
+	}
+	if gen.req.SchemaName != "exercise_eval.v1" {
+		t.Fatalf("SchemaName = %q, want exercise_eval.v1", gen.req.SchemaName)
+	}
+	if !strings.Contains(gen.req.User, "昨日見た映画について書いてください。") {
+		t.Fatalf("User prompt missing the exercise prompt: %s", gen.req.User)
+	}
+	if !strings.Contains(gen.req.User, "とても面白かったです。") {
+		t.Fatalf("User prompt missing the learner's response: %s", gen.req.User)
+	}
+}
+
+// flakyGen is a local ai.StructuredGenerator test double whose
+// GenerateStructured returns a fixed sequence of raw payloads: the Nth
+// call returns payloads[N] (clamped to the last entry once exhausted) —
+// mirroring internal/agent/teacher/teacher_test.go's own flakyGen, now
+// exercising the SAME aiutil.ValidateWithRepairAndRetry path through the
+// drill agent instead.
+type flakyGen struct {
+	calls    int
+	payloads [][]byte
+}
+
+func (f *flakyGen) GenerateStructured(_ context.Context, _ ai.StructuredRequest) (ai.StructuredResponse, error) {
+	i := f.calls
+	if i >= len(f.payloads) {
+		i = len(f.payloads) - 1
+	}
+	f.calls++
+	return ai.StructuredResponse{JSON: f.payloads[i], Provider: "flaky", Model: "flaky-1"}, nil
+}
+
+// TestGenerateRepairsFencedJSON pins the Step 1 scenario from the task
+// brief: a malformed-then-valid stub exercises the repair path reused
+// from the teacher agent (now internal/agent/aiutil).
+func TestGenerateRepairsFencedJSON(t *testing.T) {
+	valid := `{"type":"multiple-choice","instructions":{"ja":"a","en":"b"},"prompt":"p","choices":["x","y"],"answer":"x","concept":"i-adjective-past"}`
+	gen := &flakyGen{
+		payloads: [][]byte{
+			[]byte("```json\n" + valid + "\n```"),
+			[]byte(valid),
+		},
+	}
+	agent := drill.New(gen)
+
+	ex, _, err := agent.Generate(context.Background(), drill.GenerateInput{Identity: "learner-a", Concept: testConcept()})
+	if err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+	if ex.ConceptSlug != "i-adjective-past" {
+		t.Fatalf("ConceptSlug = %q, want i-adjective-past", ex.ConceptSlug)
+	}
+	if gen.calls != 1 {
+		t.Fatalf("gen.calls = %d, want 1 (constrained repair should resolve fenced JSON without a retry call)", gen.calls)
+	}
+}
+
+// TestGenerateFailsAfterRepairAndRetryExhausted: an always-invalid
+// double exhausts both the repair attempt and the one retry call, and
+// Generate must fail rather than loop or silently return a zero-value
+// exercise.
+func TestGenerateFailsAfterRepairAndRetryExhausted(t *testing.T) {
+	gen := &flakyGen{
+		payloads: [][]byte{
+			[]byte("nonsense, no braces here"),
+			[]byte("still nonsense"),
+		},
+	}
+	agent := drill.New(gen)
+
+	_, _, err := agent.Generate(context.Background(), drill.GenerateInput{Identity: "learner-a", Concept: testConcept()})
+	if err == nil {
+		t.Fatal("expected an error after repair and retry are exhausted, got nil")
+	}
+	if gen.calls != 2 {
+		t.Fatalf("gen.calls = %d, want 2 (initial call + one retry, then fail)", gen.calls)
+	}
+}

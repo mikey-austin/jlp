@@ -9,11 +9,11 @@
 package teacher
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 
+	"github.com/mikeyaustin/jlp/internal/agent/aiutil"
 	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
@@ -168,7 +168,7 @@ func (a *Agent) ReviewWriting(ctx context.Context, in ReviewInput) (correction.R
 		return correction.Result{}, resp, fmt.Errorf("teacher: generate: %w", err)
 	}
 
-	resp, err = a.validateWithRepairAndRetry(ctx, req, resp)
+	resp, err = aiutil.ValidateWithRepairAndRetry(ctx, a.gen, schemaName, req, resp)
 	if err != nil {
 		return correction.Result{}, resp, err
 	}
@@ -199,76 +199,4 @@ func (a *Agent) ReviewWriting(ctx context.Context, in ReviewInput) (correction.R
 		return correction.Result{}, resp, fmt.Errorf("teacher: apply corrections: %w", err)
 	}
 	return result, resp, nil
-}
-
-// validateWithRepairAndRetry implements Rule 4: schema validation with
-// bounded self-healing. It tries, in order: the response as given; one
-// constrained repair (extract the first balanced {...} block from the
-// raw text, e.g. to strip a markdown code fence, and re-validate that);
-// one full retry call to gen. If none validates, it returns a wrapped
-// error rather than looping further — an AI response that still won't
-// validate after both is a hard failure.
-func (a *Agent) validateWithRepairAndRetry(ctx context.Context, req ai.StructuredRequest, resp ai.StructuredResponse) (ai.StructuredResponse, error) {
-	if err := schemas.Validate(schemaName, resp.JSON); err == nil {
-		return resp, nil
-	}
-
-	if repaired, ok := extractBalancedObject(resp.JSON); ok {
-		if err := schemas.Validate(schemaName, repaired); err == nil {
-			resp.JSON = repaired
-			return resp, nil
-		}
-	}
-
-	retried, err := a.gen.GenerateStructured(ctx, req)
-	if err != nil {
-		return resp, fmt.Errorf("teacher: retry after invalid response: %w", err)
-	}
-	if err := schemas.Validate(schemaName, retried.JSON); err != nil {
-		return retried, fmt.Errorf("teacher: response failed schema validation after repair and retry: %w", err)
-	}
-	return retried, nil
-}
-
-// extractBalancedObject finds the first '{' in raw and returns the
-// substring through its matching '}', tracking brace depth and JSON
-// string literals (so braces inside quoted strings don't throw off the
-// count). It reports ok=false if raw contains no balanced {...} block —
-// e.g. a refusal message with no JSON in it at all, which repair can't
-// fix and the caller must fall back to a retry for.
-func extractBalancedObject(raw []byte) (json.RawMessage, bool) {
-	start := bytes.IndexByte(raw, '{')
-	if start == -1 {
-		return nil, false
-	}
-
-	depth := 0
-	inString := false
-	escaped := false
-	for i := start; i < len(raw); i++ {
-		c := raw[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inString = true
-		case '{':
-			depth++
-		case '}':
-			depth--
-			if depth == 0 {
-				return json.RawMessage(raw[start : i+1]), true
-			}
-		}
-	}
-	return nil, false
 }

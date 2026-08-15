@@ -10,6 +10,7 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
+	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -69,6 +70,11 @@ type Options struct {
 	// also wired into Feedback (see main.go), so a lookup made here and
 	// a production detected there share one vocabulary catalog.
 	Vocabulary *appvocabulary.Service
+	// Practice drives the /practice page's 練習する button and answer
+	// forms (Task 9, PRD §17.2/§58): the drill engine's application-layer
+	// pipeline (planner-driven concept selection, exercise generation,
+	// deterministic-plus-AI evaluation, events).
+	Practice *practice.Service
 }
 
 type Server struct {
@@ -142,6 +148,9 @@ func (s *Server) routes() http.Handler {
 		r.Get("/grammar/{slug}", s.grammarDetail)
 		r.Get("/learner", s.learnerPage)
 		r.Get("/vocabulary", s.vocabularyPage)
+		r.Get("/practice", s.practicePage)
+		r.Post("/practice/start", s.practiceStart)
+		r.Post("/practice/{id}/answer", s.practiceAnswer)
 
 		// /api/v1: the versioned JSON API (Task 16). It shares the exact
 		// same application services as the HTML routes above — no new

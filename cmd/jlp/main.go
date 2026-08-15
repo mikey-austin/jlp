@@ -14,12 +14,14 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
+	"github.com/mikeyaustin/jlp/internal/agent/drill"
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
+	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	"github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -146,6 +148,15 @@ func main() {
 		analyticsSvc := analytics.NewService(postgres.NewAnalyticsRepository(pool))
 		aiRatingRepo := postgres.NewAIRatingRepository(pool)
 
+		// The drill engine (Task 9, PRD §17.2/§58): drillAgent generates
+		// and evaluates exercises through the same always-observed aiGen
+		// every other agent uses; practiceSvc reuses teachingPlanner (for
+		// TopConcept) and grammarRepo (for the random-catalog fallback and
+		// TopConcept's own concept resolution) — the same shared
+		// instances feedbackSvc's construction above already established.
+		drillAgent := drill.New(aiGen)
+		practiceSvc := practice.NewService(postgres.NewExerciseRepository(pool), drillAgent, teachingPlanner, grammarRepo, recorder)
+
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
 		case "static":
@@ -176,6 +187,7 @@ func main() {
 			Priorities:   prioRepo,
 			Observations: obsRepo,
 			Vocabulary:   vocabSvc,
+			Practice:     practiceSvc,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

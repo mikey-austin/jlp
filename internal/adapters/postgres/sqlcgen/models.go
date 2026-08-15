@@ -76,6 +76,27 @@ type DocumentVersion struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type Exercise struct {
+	ID          pgtype.UUID
+	IdentityID  string
+	SessionID   pgtype.UUID
+	ConceptSlug string
+	Type        string
+	Payload     []byte
+	CreatedAt   pgtype.Timestamptz
+}
+
+type ExerciseAttempt struct {
+	ID         pgtype.UUID
+	ExerciseID pgtype.UUID
+	Response   string
+	Correct    pgtype.Bool
+	Score      pgtype.Int4
+	Feedback   []byte
+	Confidence pgtype.Int4
+	CreatedAt  pgtype.Timestamptz
+}
+
 type FeedbackRequest struct {
 	ID             pgtype.UUID
 	IdentityID     string

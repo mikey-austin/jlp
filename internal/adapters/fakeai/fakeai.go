@@ -23,14 +23,25 @@ const (
 	provider = "fake"
 	model    = "fake-1"
 
-	// schemaV1/schemaV2 are the only schemas the fake provider knows how
-	// to produce (see supportedSchemas below). A request for anything
-	// else is a caller bug (a new capability wired up without teaching
-	// the fake provider its shape) and must fail loudly rather than
-	// silently return correction-result JSON that doesn't match what was
-	// asked for.
+	// schemaV1/schemaV2/schemaExerciseV1/schemaExerciseEvalV1 are the
+	// only schemas the fake provider knows how to produce (see
+	// supportedSchemas below). A request for anything else is a caller
+	// bug (a new capability wired up without teaching the fake provider
+	// its shape) and must fail loudly rather than silently return JSON
+	// that doesn't match what was asked for.
 	schemaV1 = "correction_result.v1"
 	schemaV2 = "correction_result.v2"
+	// schemaExerciseV1/schemaExerciseEvalV1 back internal/agent/drill
+	// (Phase 2 Task 9, PRD §17.2/§58): unlike schemaV1/schemaV2, which
+	// are pattern-matched against the rendered prompt (a small set of
+	// known learner mistakes), these two always return the SAME canned
+	// response regardless of prompt content — the fake provider has
+	// exactly one drill exercise and one evaluation in its repertoire.
+	// That's enough for tests/offline dev exercising the drill pipeline
+	// shape (schema-valid generate/evaluate round trips), not a
+	// simulation of varied exercise content.
+	schemaExerciseV1     = "exercise.v1"
+	schemaExerciseEvalV1 = "exercise_eval.v1"
 
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
@@ -52,10 +63,16 @@ const (
 	socraticMarker = "Teacher mode: socratic"
 )
 
-// supportedSchemas is the set schemaV1/schemaV2 above name; presented as
-// a set so GenerateStructured's guard reads as one membership test
-// rather than an OR chain that grows every time a schema is added.
-var supportedSchemas = map[string]bool{schemaV1: true, schemaV2: true}
+// supportedSchemas is the set schemaV1/schemaV2/schemaExerciseV1/
+// schemaExerciseEvalV1 above name; presented as a set so
+// GenerateStructured's guard reads as one membership test rather than
+// an OR chain that grows every time a schema is added.
+var supportedSchemas = map[string]bool{
+	schemaV1:             true,
+	schemaV2:             true,
+	schemaExerciseV1:     true,
+	schemaExerciseEvalV1: true,
+}
 
 type explanation struct {
 	JA string `json:"ja"`
@@ -79,6 +96,59 @@ type correction struct {
 
 type correctionResult struct {
 	Corrections []correction `json:"corrections"`
+}
+
+// exerciseInstructions mirrors both schemas/defs/exercise.v1.json's
+// "instructions" object and exercise_eval.v1.json's "feedback" object —
+// the same {ja, en} shape both schemas use.
+type exerciseInstructions struct {
+	JA string `json:"ja"`
+	EN string `json:"en"`
+}
+
+// cannedExercise mirrors schemas/defs/exercise.v1.json field-for-field.
+type cannedExercise struct {
+	Type         string               `json:"type"`
+	Instructions exerciseInstructions `json:"instructions"`
+	Prompt       string               `json:"prompt"`
+	Choices      []string             `json:"choices,omitempty"`
+	Answer       string               `json:"answer,omitempty"`
+	Concept      string               `json:"concept"`
+}
+
+// cannedExerciseEval mirrors schemas/defs/exercise_eval.v1.json
+// field-for-field.
+type cannedExerciseEval struct {
+	Correct  bool                 `json:"correct"`
+	Score    int                  `json:"score"`
+	Feedback exerciseInstructions `json:"feedback"`
+}
+
+// iAdjectivePastExercise is the fake provider's one canned drill
+// exercise (Phase 2 Task 9's Step 1 pin): a multiple-choice question on
+// the i-adjective-past concept, matching TestReviewWritingFakeAIHappyPath's
+// 面白い/面白かったです rule above so the same concept shows up
+// consistently across the teacher and drill fakes.
+var iAdjectivePastExercise = cannedExercise{
+	Type: "multiple-choice",
+	Instructions: exerciseInstructions{
+		JA: "正しい過去形を選んでください。",
+		EN: "Choose the correct past tense.",
+	},
+	Prompt:  "昨日の映画はとても＿＿＿。",
+	Choices: []string{"面白いでした", "面白かったです", "面白いだった"},
+	Answer:  "面白かったです",
+	Concept: "i-adjective-past",
+}
+
+// freeProductionEval is the fake provider's one canned drill evaluation.
+var freeProductionEval = cannedExerciseEval{
+	Correct: true,
+	Score:   85,
+	Feedback: exerciseInstructions{
+		JA: "よく書けています！",
+		EN: "Well written!",
+	},
 }
 
 // iAdjectivePastRules: each entry is a dictionary-form い-adjective the
@@ -124,7 +194,18 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 
 	if req.SchemaName != "" && !supportedSchemas[req.SchemaName] {
 		return ai.StructuredResponse{Provider: provider, Model: model},
-			fmt.Errorf("fakeai: schema %q not supported (only %q, %q)", req.SchemaName, schemaV1, schemaV2)
+			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1)
+	}
+
+	// exercise.v1/exercise_eval.v1 (internal/agent/drill) are unrelated
+	// to the correction-result shape below: always the same canned
+	// response, keyed purely on SchemaName — see schemaExerciseV1's doc
+	// comment for why there's no prompt pattern-matching here.
+	switch req.SchemaName {
+	case schemaExerciseV1:
+		return g.respond(start, req, iAdjectivePastExercise)
+	case schemaExerciseEvalV1:
+		return g.respond(start, req, freeProductionEval)
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own
@@ -171,6 +252,27 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 		Model:        model,
 		InputTokens:  runeCount(req.System) + runeCount(req.User),
 		OutputTokens: runeCount(string(payload)),
+		Latency:      time.Since(start),
+	}, nil
+}
+
+// respond marshals payload (a cannedExercise or cannedExerciseEval) into
+// an ai.StructuredResponse with the same Provider/Model/token-count/
+// latency bookkeeping the correction-result path below builds by hand —
+// factored out here since the exercise schemas have exactly one canned
+// shape each, with no per-request branching to interleave it with.
+func (g *generator) respond(start time.Time, req ai.StructuredRequest, payload any) (ai.StructuredResponse, error) {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return ai.StructuredResponse{Provider: provider, Model: model},
+			fmt.Errorf("fakeai: marshal response: %w", err)
+	}
+	return ai.StructuredResponse{
+		JSON:         raw,
+		Provider:     provider,
+		Model:        model,
+		InputTokens:  runeCount(req.System) + runeCount(req.User),
+		OutputTokens: runeCount(string(raw)),
 		Latency:      time.Since(start),
 	}, nil
 }

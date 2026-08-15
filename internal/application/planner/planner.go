@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
@@ -88,6 +89,40 @@ func (p *Planner) ActivationCandidates(ctx context.Context, identity learner.Ide
 		return nil, fmt.Errorf("planner: list activation candidates: %w", err)
 	}
 	return items, nil
+}
+
+// TopConcept returns identity's single highest-scoring priority when —
+// and only when — it's a concept-type priority: reads
+// PriorityRepository.Top(identity, 1) and, if that lone highest-scoring
+// row exists AND its SubjectType is "concept", resolves it to a
+// grammar.Concept via GrammarRepository. application/practice.Service.
+// Start uses this to decide what to drill: a learner whose top priority
+// is a live grammar weakness gets drilled on exactly that concept.
+//
+// ok is false — with no error — in every case Start should fall back to
+// a random catalog concept instead: no priorities at all, a top
+// priority that's correction-type rather than concept, or a concept
+// slug the catalog no longer resolves (storage.ErrNotFound from
+// GetConcept — the same stale/hallucinated-slug possibility
+// scoreObservation's value() already tolerates elsewhere in this file).
+// Any other GetConcept or Top failure propagates as an error.
+func (p *Planner) TopConcept(ctx context.Context, identity learner.IdentityID) (grammar.Concept, bool, error) {
+	top, err := p.prios.Top(ctx, identity, 1)
+	if err != nil {
+		return grammar.Concept{}, false, fmt.Errorf("planner: top priority: %w", err)
+	}
+	if len(top) == 0 || top[0].SubjectType != string(learnermodel.SubjectConcept) {
+		return grammar.Concept{}, false, nil
+	}
+
+	concept, err := p.grammar.GetConcept(ctx, top[0].Subject)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return grammar.Concept{}, false, nil
+		}
+		return grammar.Concept{}, false, fmt.Errorf("planner: get concept %q: %w", top[0].Subject, err)
+	}
+	return concept, true, nil
 }
 
 // Recompute rebuilds identity's whole priority list from its current

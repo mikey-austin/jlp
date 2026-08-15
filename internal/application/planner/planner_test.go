@@ -86,6 +86,13 @@ func (f *fakeGrammarRepo) CorrectionsForConcept(context.Context, learner.Identit
 type fakePriorityRepo struct {
 	replaced   []storage.Priority
 	replaceErr error
+	// topResult/topErr back TopConcept's tests below; topCalls records
+	// every limit Top was called with, so those tests can pin
+	// TopConcept's own "Top(identity, 1)" contract, not just its return
+	// value.
+	topResult []storage.Priority
+	topErr    error
+	topCalls  []int
 }
 
 func (f *fakePriorityRepo) ReplaceAll(_ context.Context, _ learner.IdentityID, ps []storage.Priority) error {
@@ -96,8 +103,12 @@ func (f *fakePriorityRepo) ReplaceAll(_ context.Context, _ learner.IdentityID, p
 	return nil
 }
 
-func (f *fakePriorityRepo) Top(context.Context, learner.IdentityID, int) ([]storage.Priority, error) {
-	panic("not used by planner tests")
+func (f *fakePriorityRepo) Top(_ context.Context, _ learner.IdentityID, limit int) ([]storage.Priority, error) {
+	f.topCalls = append(f.topCalls, limit)
+	if f.topErr != nil {
+		return nil, f.topErr
+	}
+	return f.topResult, nil
 }
 
 // fakeVocabRepo is an in-memory storage.VocabularyRepository double
@@ -481,5 +492,99 @@ func TestActivationCandidatesPropagatesListError(t *testing.T) {
 
 	if _, err := p.ActivationCandidates(context.Background(), testIdentity, 5); err == nil {
 		t.Fatal("expected an error when List fails, got nil")
+	}
+}
+
+// --- TopConcept (Task 9, PRD §17.2/§58) ---
+
+// TestTopConceptResolvesHighestConceptPriority pins the brief's core
+// scenario: application/practice.Service.Start's "fake planner returns
+// i-adjective-past" — a top-1 concept-type priority resolves via
+// GrammarRepository, and Top itself is called with limit=1 (not some
+// larger scan-then-filter window).
+func TestTopConceptResolvesHighestConceptPriority(t *testing.T) {
+	prios := &fakePriorityRepo{topResult: []storage.Priority{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "i-adjective-past", Score: 7.5},
+	}}
+	grammarRepo := &fakeGrammarRepo{concepts: map[string]grammar.Concept{
+		"i-adjective-past": {Slug: "i-adjective-past", Name: "い-adjective past tense", JLPTLevel: 5},
+	}}
+	p := newPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, time.Now())
+
+	concept, ok, err := p.TopConcept(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("TopConcept: %v", err)
+	}
+	if !ok {
+		t.Fatal("ok = false, want true")
+	}
+	if concept.Slug != "i-adjective-past" || concept.Name != "い-adjective past tense" {
+		t.Fatalf("concept = %+v, want the resolved i-adjective-past concept", concept)
+	}
+	if len(prios.topCalls) != 1 || prios.topCalls[0] != 1 {
+		t.Fatalf("Top called with limits %v, want [1]", prios.topCalls)
+	}
+}
+
+// TestTopConceptFalseWhenTopPriorityIsCorrectionType: when identity's
+// single highest-scoring priority is correction-type (not concept), ok
+// is false — application/practice.Service.Start falls back to a random
+// catalog concept rather than drilling something unrelated.
+func TestTopConceptFalseWhenTopPriorityIsCorrectionType(t *testing.T) {
+	prios := &fakePriorityRepo{topResult: []storage.Priority{
+		{IdentityID: testIdentity, SubjectType: "correction-type", Subject: "conjugation", Score: 9.0},
+	}}
+	p := newPlanner(&fakeObsRepo{}, &fakeEventStore{}, &fakeGrammarRepo{}, prios, time.Now())
+
+	_, ok, err := p.TopConcept(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("TopConcept: %v", err)
+	}
+	if ok {
+		t.Fatal("ok = true, want false (top priority is correction-type)")
+	}
+}
+
+// TestTopConceptFalseWhenNoPriorities: a learner with no priorities yet
+// gets ok=false, no error.
+func TestTopConceptFalseWhenNoPriorities(t *testing.T) {
+	prios := &fakePriorityRepo{}
+	p := newPlanner(&fakeObsRepo{}, &fakeEventStore{}, &fakeGrammarRepo{}, prios, time.Now())
+
+	_, ok, err := p.TopConcept(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("TopConcept: %v", err)
+	}
+	if ok {
+		t.Fatal("ok = true, want false (no priorities)")
+	}
+}
+
+// TestTopConceptFalseWhenConceptSlugNotInCatalog mirrors scoreObservation's
+// value() tolerance for a stale/hallucinated concept slug the catalog no
+// longer resolves: TopConcept reports ok=false rather than erroring.
+func TestTopConceptFalseWhenConceptSlugNotInCatalog(t *testing.T) {
+	prios := &fakePriorityRepo{topResult: []storage.Priority{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "stale-slug", Score: 5.0},
+	}}
+	p := newPlanner(&fakeObsRepo{}, &fakeEventStore{}, &fakeGrammarRepo{concepts: map[string]grammar.Concept{}}, prios, time.Now())
+
+	_, ok, err := p.TopConcept(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("TopConcept: %v", err)
+	}
+	if ok {
+		t.Fatal("ok = true, want false (stale concept slug not in catalog)")
+	}
+}
+
+// TestTopConceptPropagatesTopError: a PriorityRepository.Top failure
+// must surface to the caller, not be swallowed.
+func TestTopConceptPropagatesTopError(t *testing.T) {
+	prios := &fakePriorityRepo{topErr: context.DeadlineExceeded}
+	p := newPlanner(&fakeObsRepo{}, &fakeEventStore{}, &fakeGrammarRepo{}, prios, time.Now())
+
+	if _, _, err := p.TopConcept(context.Background(), testIdentity); err == nil {
+		t.Fatal("expected an error when Top fails, got nil")
 	}
 }

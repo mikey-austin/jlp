@@ -45,6 +45,23 @@ const (
 	TypeCorrectionRetried  Type = "correction.retried"
 	TypeAnswerRevealed     Type = "answer.revealed"
 	TypeConfidenceRecorded Type = "confidence.recorded"
+
+	// The three Phase 2 Task 9 drill-engine events (PRD §17.2/§58):
+	// TypeQuizStarted fires once per generated exercise
+	// (application/practice.Service.Start), Evidence carrying the
+	// exercise's concept/type. TypeQuizAnswered and TypeQuizCompleted
+	// both fire together from application/practice.Service.Answer — one
+	// practice round has no separate "answered vs completed" phases the
+	// way a multi-step correction retry does, so both carry the same
+	// Evidence {"concept":…, "type":…, "correct":…, "confidence":…}; they
+	// exist as two event types (not one) so a future consumer can react
+	// to "an answer happened" independently of "a round finished"
+	// without the two meanings being conflated under one type the way
+	// TypeCorrectionRetried's own Evidence.correct already conflates
+	// attempt-vs-outcome for corrections.
+	TypeQuizStarted   Type = "quiz.started"
+	TypeQuizAnswered  Type = "quiz.answered"
+	TypeQuizCompleted Type = "quiz.completed"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner
