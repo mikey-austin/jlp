@@ -87,10 +87,25 @@
  * paper page, not carry whatever dark/light theme happened to be active
  * on screen. Defined once on a bare :root (not duplicated under
  * [data-theme="dark"]) since these two tokens deliberately never vary
- * by theme — see app.css's @media print block, the only consumer. */
+ * by theme — see app.css's @media print block, the only consumer.
+ *
+ * --on-solid/--on-solid-mix (final-review fix, Finding 3) are the
+ * same kind of theme-independent token, for a different reason: every
+ * solid-fill badge/button surface in components.css (severity badges,
+ * JLPT badges, .btn--danger's hover state) is already saturated enough
+ * in both themes that its foreground stays a fixed white rather than
+ * flipping with --fg — solid-fill foregrounds stay white in both
+ * themes by design. --on-solid-mix is the pure-black mix-in
+ * .badge--jlpt-n1 uses to darken --danger one step further in oklab
+ * space, extending the JLPT ramp past N2 (the design source stops
+ * there) without inventing a new hue; it's theme-independent for the
+ * same reason — the resulting fill is solid in both themes, so the
+ * mix-in itself never needs to vary. */
 :root {
   --print-bg: #fff;
   --print-fg: #000;
+  --on-solid: #fff;
+  --on-solid-mix: black;
 }
 
 @keyframes jlpPulse {

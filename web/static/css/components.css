@@ -83,7 +83,7 @@ textarea:focus-visible,
 }
 .btn--danger:hover {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-solid);
 }
 
 .btn[disabled] {
@@ -201,7 +201,7 @@ textarea:focus-visible,
 .badge--severity-incorrect,
 .badge.sev-incorrect {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-solid);
   border: none;
   font-weight: 600;
 }
@@ -235,11 +235,11 @@ textarea:focus-visible,
 }
 .badge--jlpt-n5 {
   background: var(--success);
-  color: #fff;
+  color: var(--on-solid);
 }
 .badge--jlpt-n4 {
   background: var(--accent);
-  color: #fff;
+  color: var(--on-solid);
 }
 .badge--jlpt-n3 {
   background: var(--warning);
@@ -247,14 +247,14 @@ textarea:focus-visible,
 }
 .badge--jlpt-n2 {
   background: var(--danger);
-  color: #fff;
+  color: var(--on-solid);
 }
 /* N1 isn't shown in the design source (it stops at N2) — extrapolated
  * as a darker step past --danger to keep the ramp monotonic without
  * inventing a new hue; see task-9-report.md. */
 .badge--jlpt-n1 {
-  background: color-mix(in oklab, var(--danger) 78%, black 22%);
-  color: #fff;
+  background: color-mix(in oklab, var(--danger) 78%, var(--on-solid-mix) 22%);
+  color: var(--on-solid);
 }
 
 /* ============================== Chips ================================== */
