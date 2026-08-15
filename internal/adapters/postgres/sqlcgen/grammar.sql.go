@@ -74,6 +74,7 @@ SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
 FROM corrections c
 JOIN correction_concepts cc ON cc.correction_id = c.id AND cc.concept_slug = $2 AND cc.resolved
 JOIN feedback_requests f ON f.id = c.feedback_request_id AND f.identity_id = $1
+WHERE NOT (c.status = 'presented' AND c.revealed = false AND (c.hint_ja <> '' OR c.hint_en <> ''))
 ORDER BY c.created_at DESC
 LIMIT $3
 `
@@ -98,6 +99,15 @@ type CorrectionsForConceptRow struct {
 	SessionID         pgtype.UUID
 }
 
+// Excludes gated socratic corrections outright (WHERE NOT, not a
+// caller-side blank-the-field patch): a correction that's still
+// "presented", unrevealed, and carrying a hint is a still-gated
+// socratic round (see internal/adapters/http/api.go's
+// isGatedCorrection, the same predicate). Its Replacement is the
+// answer the learner hasn't earned yet, so the row is dropped
+// entirely — a gated correction must not even advertise its
+// existence on the /grammar/{slug} concept detail page, let alone
+// leak its Replacement there.
 func (q *Queries) CorrectionsForConcept(ctx context.Context, arg CorrectionsForConceptParams) ([]CorrectionsForConceptRow, error) {
 	rows, err := q.db.Query(ctx, correctionsForConcept, arg.IdentityID, arg.ConceptSlug, arg.Limit)
 	if err != nil {

@@ -239,6 +239,117 @@ func TestGrammarConceptStatsCrossIdentityIsolation(t *testing.T) {
 	}
 }
 
+// TestGrammarCorrectionsForConceptExcludesGatedSocratic pins a
+// code-review finding: a still-gated socratic correction (Status
+// "presented", not yet Revealed, carrying a hint) must be EXCLUDED
+// entirely from CorrectionsForConcept, not merely have its Replacement
+// blanked by the caller — a gated correction shouldn't advertise its
+// existence on the /grammar/{slug} concept detail page either. See
+// db/queries/grammar.sql's CorrectionsForConcept WHERE NOT (...)
+// clause, which mirrors the exact isGatedCorrection predicate
+// internal/adapters/http/api.go already uses for the JSON API
+// (HasHint() && Status=="presented" && !Revealed). Once
+// RevealCorrection flips Revealed to true, the correction must appear
+// like any other.
+func TestGrammarCorrectionsForConceptExcludesGatedSocratic(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	identities := NewIdentityRepository(pool)
+	identity := learner.Identity{ID: learner.IdentityID("test-grammar-gate-" + uuid.NewString()), DisplayName: "Gate"}
+	if err := identities.Upsert(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+
+	grammarRepo := NewGrammarRepository(pool)
+	slug := "test-concept-gate-" + uuid.NewString()
+	if err := grammarRepo.UpsertConcepts(ctx, []grammar.Concept{{
+		Slug: slug, Name: "gate test concept", JLPTLevel: 4, Description: "d",
+		Examples: []string{"a", "b"},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := NewSessionRepository(pool)
+	docs := NewDocumentRepository(pool)
+	feedbackRepo := NewFeedbackRepository(pool)
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sess := session.Session{ID: session.ID(uuid.New().String()), IdentityID: identity.ID, Title: "Gate", Purpose: "Diary", CreatedAt: now, UpdatedAt: now}
+	if err := sessions.Create(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+	doc, _, err := docs.GetOrCreateForSession(ctx, identity.ID, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	feedbackID := uuid.New().String()
+	gatedID := uuid.New().String()
+	resolvedID := uuid.New().String()
+	rec := storage.FeedbackRecord{
+		ID: feedbackID, IdentityID: identity.ID, SessionID: sess.ID, DocumentID: doc.ID,
+		SelectionStart: 0, SelectionEnd: 1, SelectionText: "a", CorrectedText: "b",
+	}
+	// gatedID: Status "presented" + a hint + (default) Revealed=false —
+	// the exact socratic pre-reveal shape. resolvedID: Status "accepted",
+	// no hint — an ordinary already-resolved correction, tagged to the
+	// same concept, that must always be visible.
+	corrs := []storage.CorrectionRecord{
+		{ID: gatedID, FeedbackID: feedbackID, Position: 0, Original: "面白いでした", Replacement: "面白かったです", Type: "conjugation", Severity: "incorrect", Status: "presented", HintJA: "ヒント"},
+		{ID: resolvedID, FeedbackID: feedbackID, Position: 1, Original: "c", Replacement: "d", Type: "conjugation", Severity: "incorrect", Status: "accepted"},
+	}
+	if err := feedbackRepo.InsertFeedback(ctx, rec, corrs, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{gatedID, resolvedID} {
+		if _, err := pool.Exec(ctx, `INSERT INTO correction_concepts (correction_id, concept_slug, resolved) VALUES ($1, $2, true)`, id, slug); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := grammarRepo.CorrectionsForConcept(ctx, identity.ID, slug, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].ID != resolvedID {
+		t.Fatalf("CorrectionsForConcept before reveal = %+v, want exactly one row (the resolved correction %q) — the gated correction must not appear", got, resolvedID)
+	}
+
+	if _, err := feedbackRepo.RevealCorrection(ctx, identity.ID, gatedID); err != nil {
+		t.Fatal(err)
+	}
+
+	gotAfter, err := grammarRepo.CorrectionsForConcept(ctx, identity.ID, slug, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(gotAfter) != 2 {
+		t.Fatalf("CorrectionsForConcept after RevealCorrection = %d rows, want 2 (the formerly-gated correction must now appear)", len(gotAfter))
+	}
+	foundGated := false
+	for _, c := range gotAfter {
+		if c.ID == gatedID {
+			foundGated = true
+			if c.Replacement != "面白かったです" {
+				t.Fatalf("revealed correction Replacement = %q, want 面白かったです", c.Replacement)
+			}
+		}
+	}
+	if !foundGated {
+		t.Fatalf("CorrectionsForConcept after reveal = %+v, missing gated correction %q", gotAfter, gatedID)
+	}
+}
+
 func findStat(stats []storage.ConceptStat, slug string) *storage.ConceptStat {
 	for i := range stats {
 		if stats[i].Slug == slug {
