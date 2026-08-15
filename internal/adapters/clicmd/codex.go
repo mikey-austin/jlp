@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/mikeyaustin/jlp/internal/agent/aiutil"
 	"github.com/mikeyaustin/jlp/internal/config"
@@ -28,17 +29,36 @@ const codexProvider = "codexcli"
 // against — event field names vary across Codex CLI versions, and the
 // host-mode-only design (PRD §23, see the package doc comment) means
 // this path is never exercised against the real binary in
-// CI/containers. Rather than hardcode a guessed field name (wrong for
-// a different CLI version = silently broken), findNestedJSONObject
-// searches the decoded line's string-typed fields, at any depth,
-// schema-agnostically, for the first one that itself contains a
-// balanced {...} block — correct whether that field is called `text`,
-// `message`, `content`, or anything else.
+// CI/containers.
+//
+// The discriminator: findNestedJSONObject only attempts extraction on
+// a string value when its OWN map key is one of a fixed set of
+// conventional message-carrying names (codexMessageFields, below) —
+// it does NOT search every string field indiscriminately. An earlier
+// version of this function did exactly that, and a code reviewer
+// found a real corruption case for it: a LEGITIMATE top-level answer
+// can itself contain a prose field (e.g. "explanation", or an
+// exercise's own "instructions") that happens to quote a
+// JSON-shaped example as part of its text — very plausible for an
+// LLM's own output — and searching indiscriminately returns that
+// quoted example instead of the real, complete answer. Restricting
+// descent to conventional message-carrying names means a field
+// like "explanation" is walked PAST (if it's a container, traversal
+// still continues into it — see searchJSONValue) but its OWN string
+// value is never handed to aiutil.ExtractJSONObject.
+//
+// This also means a schema whose answer happens to have its own
+// top-level "type" field (e.g. exercise.v1's "multiple-choice" et al.)
+// is NOT mistaken for a codex envelope: "type" isn't itself a
+// message-carrying field, so its presence doesn't trigger descent —
+// only an actual message-carrying field's string VALUE containing a
+// balanced object does.
 //
 // Falls back to the line's own raw bytes — the brief's literal "last
-// line JSON" case, and what a bare (non-enveloped) answer, or a
-// JSON-decode failure, both still exercise — when no such nested field
-// is found.
+// line JSON" case, and what a bare (non-enveloped) answer, a
+// JSON-decode failure, or an object with no message-carrying field
+// all still exercise — when no such nested field yields a balanced
+// object.
 func extractCodexTrailingLine(stdout []byte) ([]byte, error) {
 	lines := bytes.Split(bytes.TrimRight(stdout, "\n"), []byte("\n"))
 	for i := len(lines) - 1; i >= 0; i-- {
@@ -54,13 +74,27 @@ func extractCodexTrailingLine(stdout []byte) ([]byte, error) {
 	return nil, fmt.Errorf("codex exec --json: empty output")
 }
 
+// codexMessageFields is the set of JSON object key names
+// findNestedJSONObject treats as plausibly carrying the model's answer
+// text, checked case-insensitively. None of these is confirmed against
+// a real Codex CLI transcript (see extractCodexTrailingLine's doc
+// comment on why not — this dev host's `codex` is authenticated, and a
+// live call would incur real API cost with no clear authorization to
+// spend it just to inspect output shape). They're deliberately generic
+// names conventional across LLM-tool JSONL/event formats, not specific
+// to one exact protocol version.
+var codexMessageFields = map[string]bool{
+	"msg": true, "message": true, "content": true, "text": true,
+	"output": true, "last_agent_message": true, "result": true,
+}
+
 // findNestedJSONObject decodes line as a generic JSON value and
-// searches its string-typed fields — objects and arrays, any depth —
-// for one containing a balanced {...} block per
+// searches it for a message-carrying field (codexMessageFields) whose
+// string value itself contains a balanced {...} block per
 // aiutil.ExtractJSONObject. Map key order is sorted before iterating
 // so the result is deterministic even though Go's own map iteration
 // order isn't. Returns ok=false if line isn't JSON at all, or no
-// string field inside it contains a balanced object.
+// message-carrying field inside it yields a balanced object.
 func findNestedJSONObject(line []byte) ([]byte, bool) {
 	var v any
 	if err := json.Unmarshal(line, &v); err != nil {
@@ -69,10 +103,17 @@ func findNestedJSONObject(line []byte) ([]byte, bool) {
 	return searchJSONValue(v)
 }
 
+// searchJSONValue recursively walks v. Containers (objects and arrays)
+// are always traversed — a message-carrying field can be nested inside
+// an intermediate object (e.g. "item") whose own key isn't itself
+// message-carrying, so traversal can't stop at the first
+// non-matching key. But a STRING value is only ever handed to
+// aiutil.ExtractJSONObject when it's the direct value of a map key in
+// codexMessageFields; every other string (an explanation, instructions,
+// or any other prose field) is left alone entirely, never probed for
+// embedded JSON, however brace-shaped its content might be.
 func searchJSONValue(v any) ([]byte, bool) {
 	switch val := v.(type) {
-	case string:
-		return aiutil.ExtractJSONObject(val)
 	case map[string]any:
 		keys := make([]string, 0, len(val))
 		for k := range val {
@@ -80,7 +121,16 @@ func searchJSONValue(v any) ([]byte, bool) {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			if found, ok := searchJSONValue(val[k]); ok {
+			child := val[k]
+			if s, isString := child.(string); isString {
+				if codexMessageFields[strings.ToLower(k)] {
+					if found, ok := aiutil.ExtractJSONObject(s); ok {
+						return found, true
+					}
+				}
+				continue
+			}
+			if found, ok := searchJSONValue(child); ok {
 				return found, true
 			}
 		}

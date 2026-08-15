@@ -126,6 +126,80 @@ printf '{"type":"turn.started"}\n{"type":"item.completed","item":{"type":"agent_
 	}
 }
 
+// TestNewCodexDoesNotDescendIntoAnswerProseContainingBraces is the
+// regression test for a second code-review finding: the FIRST version
+// of the event-envelope fix (TestNewCodexUnwrapsAnswerFromEventEnvelope,
+// above) searched every string field indiscriminately, which meant a
+// LEGITIMATE top-level answer containing a string field that happens
+// to quote a JSON-shaped example as prose — very plausible for an
+// "explanation" field — would have the quoted example returned
+// instead of the real, complete answer. This is the reviewer's exact
+// repro fixture: a corrections object whose explanation text quotes
+// `{"key":"val"}` as an example. The fix restricts descent to a fixed
+// set of conventional message-carrying field names (msg/message/
+// content/text/output/last_agent_message/result) — "explanation" is
+// not among them, so this line must never be descended into at all;
+// the whole top-level object comes back verbatim.
+func TestNewCodexDoesNotDescendIntoAnswerProseContainingBraces(t *testing.T) {
+	answer := `{"corrections":[{"original":"foo","corrected":"bar","explanation":"Use the JSON shape {\"key\":\"val\"}"}]}`
+	script := "#!/bin/sh\ncat >/dev/null\necho '" + answer + "'\n"
+	bin := writeStub(t, "codex", script)
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+
+	resp, err := gen.GenerateStructured(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("GenerateStructured: %v", err)
+	}
+	if string(resp.JSON) != answer {
+		t.Errorf("JSON = %s, want the FULL answer object %s (must not descend into the explanation field's quoted JSON example)", resp.JSON, answer)
+	}
+}
+
+// TestNewCodexDoesNotDescendIntoExerciseAnswerWithTopLevelTypeField
+// pins the same fix against a realistic exercise.v1-shaped answer:
+// drill exercises legitimately have their OWN top-level "type" field
+// (e.g. "multiple-choice") — unrelated to codex's protocol event
+// "type" field — plus prose fields (like "instructions" here) that
+// can innocently contain a brace substring. None of this object's
+// field names are in the message-carrying allow-list, so it must come
+// back whole, the same as the corrections fixture above.
+func TestNewCodexDoesNotDescendIntoExerciseAnswerWithTopLevelTypeField(t *testing.T) {
+	answer := `{"type":"multiple-choice","instructions":"Fill in the blank, e.g. {\"answer\":\"x\"}","choices":["a","b"]}`
+	script := "#!/bin/sh\ncat >/dev/null\necho '" + answer + "'\n"
+	bin := writeStub(t, "codex", script)
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+
+	resp, err := gen.GenerateStructured(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("GenerateStructured: %v", err)
+	}
+	if string(resp.JSON) != answer {
+		t.Errorf("JSON = %s, want the FULL answer object %s (top-level \"type\" is the exercise's own enum, not a codex envelope discriminator)", resp.JSON, answer)
+	}
+}
+
+// TestNewCodexUnwrapsAnswerFromMsgField is
+// TestNewCodexUnwrapsAnswerFromEventEnvelope's twin for a different
+// message-carrying field name ("msg" instead of "text"), pinning that
+// the allow-list isn't hardcoded to just one name.
+func TestNewCodexUnwrapsAnswerFromMsgField(t *testing.T) {
+	script := `#!/bin/sh
+cat >/dev/null
+printf '{"type":"agent_message","msg":"{\"exercises\":[]}"}\n'
+`
+	bin := writeStub(t, "codex", script)
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+
+	resp, err := gen.GenerateStructured(context.Background(), testRequest())
+	if err != nil {
+		t.Fatalf("GenerateStructured: %v", err)
+	}
+	want := `{"exercises":[]}`
+	if string(resp.JSON) != want {
+		t.Errorf("JSON = %s, want %s (unwrapped from the msg envelope field)", resp.JSON, want)
+	}
+}
+
 // TestPromptOnStdinIsSystemUserAndSchema pins the exact prompt-assembly
 // contract from the task brief: System + "\n\n" + User + "\n\nRespond
 // with ONLY a JSON object matching this schema:\n" + Schema, written
