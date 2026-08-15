@@ -318,6 +318,9 @@ func TestRunCallWithToolsErrorFailsRun(t *testing.T) {
 	if len(repo.finished) != 1 || repo.finished[0].Status != "failed" {
 		t.Fatalf("finished = %+v, want a failed row", repo.finished)
 	}
+	if repo.finished[0].Turns != 0 {
+		t.Errorf("finished Turns = %d, want 0 — the first attempt never got a model response, so it isn't a completed turn", repo.finished[0].Turns)
+	}
 }
 
 // TestRunDefaultsMaxTurnsToEight pins the brief's documented default:

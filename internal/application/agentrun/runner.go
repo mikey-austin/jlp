@@ -130,7 +130,11 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		})
 		if err != nil {
 			callErr := fmt.Errorf("agentrun: call with tools: %w", err)
-			r.finish(ctx, in.Identity, runID, "failed", callErr.Error(), "", turn)
+			// turn-1: this attempt never produced a model response, so it
+			// doesn't count as a completed turn — Turns should reflect how
+			// many full request/response cycles actually happened before
+			// the failure, not how many were attempted.
+			r.finish(ctx, in.Identity, runID, "failed", callErr.Error(), "", turn-1)
 			return RunOutput{RunID: runID}, callErr
 		}
 
