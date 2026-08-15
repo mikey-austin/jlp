@@ -290,6 +290,83 @@ main p.description {
   text-decoration: underline;
 }
 
+/* ============================== Vocab funnel (Task 7) ==================== */
+
+.funnel {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin: 1rem 0 1.5rem;
+  flex-wrap: wrap;
+}
+.funnel__stage {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  min-width: 96px;
+  padding: 14px 20px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.funnel__value {
+  font-family: "JetBrains Mono", monospace;
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--primary);
+}
+.funnel__label {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--fg-muted);
+}
+.funnel__arrow {
+  font-size: 20px;
+  color: var(--fg-subtle);
+}
+
+/* ============================== Weakness trends (Task 7) ================= */
+
+.weakness-trends {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 1rem 0 1.5rem;
+  padding: 0;
+  list-style: none;
+}
+.weakness-trends li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 16px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+.weakness-trends li.empty {
+  justify-content: flex-start;
+  color: var(--fg-muted);
+  border-style: dashed;
+}
+.weakness-trends__subject {
+  font-weight: 500;
+}
+.sparkline {
+  flex-shrink: 0;
+  width: 120px;
+  height: 24px;
+}
+.sparkline polyline {
+  fill: none;
+  stroke: var(--fg-muted);
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
 /* ============================== Ratings / confidence stars ============== */
 
 .rating,

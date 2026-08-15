@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
@@ -68,6 +69,10 @@ func learnerTestOptions() Options {
 	opts := testOptions()
 	opts.Priorities = &fakeLearnerPriorityRepo{}
 	opts.Observations = &fakeObservationRepo{}
+	// Zero-value AgentUsage/SystemStats by default; tests exercising
+	// those sections override this with their own fakeAnalyticsRepo (see
+	// TestLearnerPageRendersAgentUsageAndSystemSections).
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{})
 	return opts
 }
 
@@ -120,6 +125,70 @@ func TestLearnerPagePrioritiesRepositoryErrorReturns500(t *testing.T) {
 func TestLearnerPageObservationsRepositoryErrorReturns500(t *testing.T) {
 	opts := learnerTestOptions()
 	opts.Observations.(*fakeObservationRepo).listErr = context.DeadlineExceeded
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// TestLearnerPageRendersAgentUsageAndSystemSections covers the Task 7
+// additions: エージェント利用 rows (including the blank-agent 未分類
+// fallback for pre-migration ai_requests rows) and システム totals.
+func TestLearnerPageRendersAgentUsageAndSystemSections(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{
+		agentUsage: []storage.AgentUsage{
+			{Agent: "teacher", Requests: 5, SuccessRate: 0.8, AvgLatencyMS: 420},
+			{Agent: "", Requests: 1, SuccessRate: 1.0, AvgLatencyMS: 100},
+		},
+		system: storage.SystemStats{
+			LearningEvents: 12,
+			EventsByType:   map[string]int{"correction.presented": 9, "grammar.concept.encountered": 3},
+			AIRequests:     6,
+		},
+	})
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /learner status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"エージェント利用",
+		"teacher",
+		"420",
+		"未分類", // the blank-agent row's display label.
+		"システム",
+		"12",
+		"correction.presented",
+		"6",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /learner body missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestLearnerPageAgentUsageRepositoryErrorReturns500(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{agentUsageErr: context.DeadlineExceeded})
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestLearnerPageSystemStatsRepositoryErrorReturns500(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{systemErr: context.DeadlineExceeded})
 
 	srv := NewServer(opts)
 	rec := httptest.NewRecorder()

@@ -6,7 +6,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -202,5 +206,189 @@ func TestBridgeInboundDropsUnknownIdentity(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 	if got := repo.upsertCount(); got != 0 {
 		t.Fatalf("UpsertOnLookup called %d times for an unknown identity over real MQTT, want 0", got)
+	}
+}
+
+// --- broker-outage regression (self-review CRITICAL fix) ---
+//
+// This test environment has no docker socket available to actually
+// stop the mosquitto container from inside a test, so a real broker
+// outage is reproduced instead with a severable TCP proxy sitting in
+// front of the real broker: the bridge connects through the proxy,
+// the proxy is then severed (stops accepting new connections AND
+// kills every connection already piped), and paho's AutoReconnect is
+// left retrying against a now-refusing address — the exact
+// "reconnecting, and staying that way" state
+// pahoClient.Publish/Subscribe's ioTimeout bound exists to survive
+// (see that constant's doc comment in mqtt.go). This is the stronger
+// of the two proof levels the brief allowed for; see this file's
+// TestPahoClientPublishReturnsErrorRatherThanHangingOnANeverCompletingToken
+// sibling in bridge_test.go for the unit-level fallback proof against
+// a literal never-completing token.
+
+// severableProxy relays TCP connections to target until sever is
+// called, at which point it stops accepting new connections and
+// forcibly closes every connection already piped — simulating a
+// broker that has gone completely unreachable (not just one dropped
+// session): any in-flight session dies, and every reconnect attempt
+// after that gets connection-refused.
+type severableProxy struct {
+	ln     net.Listener
+	target string
+
+	mu    sync.Mutex
+	conns []net.Conn
+}
+
+func startSeverableProxy(t *testing.T, target string) *severableProxy {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("severableProxy: listen: %v", err)
+	}
+	p := &severableProxy{ln: ln, target: target}
+	go p.acceptLoop()
+	t.Cleanup(p.sever)
+	return p
+}
+
+func (p *severableProxy) addr() string { return "tcp://" + p.ln.Addr().String() }
+
+func (p *severableProxy) acceptLoop() {
+	for {
+		client, err := p.ln.Accept()
+		if err != nil {
+			return // listener closed by sever()
+		}
+		broker, err := net.Dial("tcp", p.target)
+		if err != nil {
+			_ = client.Close()
+			continue
+		}
+		p.mu.Lock()
+		p.conns = append(p.conns, client, broker)
+		p.mu.Unlock()
+		go func() { _, _ = io.Copy(broker, client) }()
+		go func() { _, _ = io.Copy(client, broker) }()
+	}
+}
+
+// sever is the point of no return: stop accepting new connections and
+// close every connection piped so far. Safe to call more than once
+// (t.Cleanup also calls it) — closing an already-closed net.Conn or
+// net.Listener just returns an error this test doesn't care about.
+func (p *severableProxy) sever() {
+	_ = p.ln.Close()
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, c := range p.conns {
+		_ = c.Close()
+	}
+}
+
+// severTestBound is how long TestPahoClientPublishDoesNotHangWhenBroker
+// ConnectionIsSevered/TestBridgeRecordDoesNotHangWhenBrokerConnection
+// IsSevered wait for their respective calls to return before failing —
+// generous slack over ioTimeout, same reasoning as bridge_test.go's
+// testTimeout.
+const severTestBound = ioTimeout + 3*time.Second
+
+// TestPahoClientPublishDoesNotHangWhenBrokerConnectionIsSevered proves
+// the CRITICAL fix end to end against a real (proxied) broker
+// connection, not just a synthetic never-completing token: connect
+// through the severable proxy, sever it mid-session, and assert
+// pahoClient.Publish still returns — with an error — within
+// ioTimeout+slack rather than blocking forever in paho's
+// "reconnecting" state.
+func TestPahoClientPublishDoesNotHangWhenBrokerConnectionIsSevered(t *testing.T) {
+	brokerURL := testBrokerURL(t)
+	target := strings.TrimPrefix(brokerURL, "tcp://")
+	proxy := startSeverableProxy(t, target)
+
+	client, err := newPahoClient(proxy.addr())
+	if err != nil {
+		t.Fatalf("newPahoClient: %v", err)
+	}
+	if err := client.Connect(); err != nil {
+		t.Fatalf("Connect through proxy: %v", err)
+	}
+	t.Cleanup(client.Disconnect)
+
+	// Baseline: publishing through the healthy proxy works, so a
+	// subsequent failure is provably caused by severing it, not by a
+	// broken proxy/connect path.
+	baselineTopic := fmt.Sprintf("learner/mqtt-it-sever-baseline-%d/vocabulary/looked-up", time.Now().UnixNano())
+	if err := client.Publish(baselineTopic, []byte("{}")); err != nil {
+		t.Fatalf("baseline publish through the healthy proxy failed: %v", err)
+	}
+
+	proxy.sever()
+	// Give paho's connection-loss detection and first failed reconnect
+	// attempt a moment to actually land in the "reconnecting" state
+	// this test targets — the assertion below doesn't depend on exact
+	// timing, only on Publish returning within severTestBound.
+	time.Sleep(300 * time.Millisecond)
+
+	severTopic := fmt.Sprintf("learner/mqtt-it-sever-%d/vocabulary/looked-up", time.Now().UnixNano())
+	done := make(chan error, 1)
+	go func() { done <- client.Publish(severTopic, []byte("{}")) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Publish returned nil after the broker connection was severed, want a timeout/publish error")
+		}
+	case <-time.After(severTestBound):
+		t.Fatal("Publish did not return within ioTimeout+slack after the broker connection was severed — it hung, reproducing the reported production bug live")
+	}
+}
+
+// TestBridgeRecordDoesNotHangWhenBrokerConnectionIsSevered reproduces
+// the exact reported chain end to end: application/learning.Recorder.
+// Record (called synchronously from the HTTP request path in
+// production) -> ports/events.EventBus.Publish (inprocbus dispatches
+// on the calling goroutine) -> Bridge.publishOutbound ->
+// pahoClient.Publish, with the broker connection severed mid-session.
+// Record must still return promptly and with a NIL error — a lost
+// MQTT publish must never fail, let alone hang, the durable event
+// write that already succeeded before Publish was even attempted (see
+// learning.Recorder.Record's own doc comment on that ordering).
+func TestBridgeRecordDoesNotHangWhenBrokerConnectionIsSevered(t *testing.T) {
+	brokerURL := testBrokerURL(t)
+	ctx := context.Background()
+	target := strings.TrimPrefix(brokerURL, "tcp://")
+	proxy := startSeverableProxy(t, target)
+
+	bus := inprocbus.New()
+	bridge, err := NewBridge(proxy.addr(), bus, newTestVocabService(&fakeVocabRepo{}), newFakeIdentityRepo())
+	if err != nil {
+		t.Fatalf("NewBridge: %v", err)
+	}
+	if err := bridge.Start(ctx); err != nil {
+		t.Fatalf("Start through proxy: %v", err)
+	}
+	t.Cleanup(bridge.client.Disconnect)
+
+	proxy.sever()
+	time.Sleep(300 * time.Millisecond)
+
+	recorder := learning.NewRecorder(&fakeEventStore{}, bus)
+	identity := learner.IdentityID(fmt.Sprintf("mqtt-it-sever-record-%d", time.Now().UnixNano()))
+	done := make(chan error, 1)
+	go func() {
+		done <- recorder.Record(ctx, event.LearningEvent{
+			IdentityID: identity,
+			Type:       event.TypeCorrectionPresented,
+			Subject:    "doc-sever",
+		})
+	}()
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Recorder.Record returned %v, want nil — the durable append must succeed regardless of MQTT's health", err)
+		}
+	case <-time.After(severTestBound):
+		t.Fatal("Recorder.Record hung after the broker connection was severed — this is exactly the reported 'every learning-event write in the app hangs' bug")
 	}
 }

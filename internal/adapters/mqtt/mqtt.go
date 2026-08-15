@@ -95,6 +95,29 @@ const (
 	// all, this initial-connect retry deliberately does.
 	initialConnectRetries = 5
 	initialConnectBackoff = time.Second
+	// ioTimeout bounds pahoClient.Publish's and pahoClient.Subscribe's
+	// wait for the broker's ack. This exists because of a specific
+	// paho v1.5.1 trap: after a connection loss, with AutoReconnect
+	// enabled, the client sits in a "reconnecting" state where
+	// IsConnected() still reports true, but paho's own QoS1 Publish
+	// path returns a token WITHOUT ever calling setError/flowComplete
+	// on it while reconnecting — so an unbounded token.Wait() blocks
+	// forever (or until the next successful reconnect), never surfacing
+	// an error. ClientOptions.WriteTimeout does NOT help here — it only
+	// applies once already connected, not in the reconnecting state.
+	//
+	// This matters well beyond this package: publishOutbound runs
+	// synchronously on whatever goroutine called bus.Publish, and
+	// application/learning.Recorder.Record calls bus.Publish straight
+	// from the HTTP request path — so an unbounded wait here would hang
+	// EVERY learning-event write in the app (every feedback round,
+	// correction accept/reject, vocabulary lookup, quiz answer) the
+	// moment the broker becomes unreachable, not just this bridge.
+	// A timeout is treated exactly like any other publish/subscribe
+	// failure: logged, dropped, never propagated. 2s is comfortably
+	// generous for QoS1 acks on a LAN broker while still being far
+	// short of "hangs the app".
+	ioTimeout = 2 * time.Second
 )
 
 // mqttClient abstracts the paho.mqtt.golang client down to exactly
@@ -163,7 +186,17 @@ func (b *Bridge) Start(ctx context.Context) error {
 		return fmt.Errorf("mqtt: connect: %w", err)
 	}
 	if err := b.client.Subscribe(ingestTopicFilter, func(topic string, payload []byte) {
-		b.handleIngest(ctx, topic, payload)
+		// Off paho's own message-dispatch goroutine, deliberately:
+		// handleIngest can call back into Publish (vocab.Ingest ->
+		// application/learning.Recorder -> bus.Publish -> publishOutbound
+		// -> client.Publish), and paho's docs warn against calling
+		// Publish from inside a subscribe callback when OrderMatters is
+		// true (the client's default) — doing so serializes against,
+		// and risks deadlocking, paho's own internal dispatch loop. A
+		// bare `go` is enough: handleIngest already has full
+		// log-and-drop failure semantics, so there is nothing here to
+		// wait on or join.
+		go b.handleIngest(ctx, topic, payload)
 	}); err != nil {
 		return fmt.Errorf("mqtt: subscribe %s: %w", ingestTopicFilter, err)
 	}
@@ -347,17 +380,30 @@ func (c *pahoClient) Connect() error {
 	return lastErr
 }
 
+// Publish waits at most ioTimeout for the broker's ack — see that
+// constant's doc comment for exactly why an unbounded token.Wait()
+// here is not safe. A timeout is surfaced as an ordinary error, same
+// as any other publish failure; the caller (publishOutbound) already
+// logs and drops it rather than propagating it.
 func (c *pahoClient) Publish(topic string, payload []byte) error {
 	token := c.client.Publish(topic, qos, false, payload)
-	token.Wait()
+	if !token.WaitTimeout(ioTimeout) {
+		return fmt.Errorf("mqtt: publish to %s timed out after %s", topic, ioTimeout)
+	}
 	return token.Error()
 }
 
+// Subscribe waits at most ioTimeout for the broker's SUBACK — same
+// ioTimeout bound as Publish, for the same reconnecting-state reason
+// (see that constant's doc comment); Subscribe only runs once, from
+// Start, but there's no reason for it to risk the identical hang.
 func (c *pahoClient) Subscribe(topicFilter string, handler func(topic string, payload []byte)) error {
 	token := c.client.Subscribe(topicFilter, qos, func(_ paho.Client, msg paho.Message) {
 		handler(msg.Topic(), msg.Payload())
 	})
-	token.Wait()
+	if !token.WaitTimeout(ioTimeout) {
+		return fmt.Errorf("mqtt: subscribe to %s timed out after %s", topicFilter, ioTimeout)
+	}
 	return token.Error()
 }
 

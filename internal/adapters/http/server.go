@@ -266,7 +266,10 @@ const recentSessionsLimit = 5
 
 // home renders the Task 14 dashboard: aggregate learner statistics
 // (stat tiles + よくある間違い) plus a short list of recent sessions to
-// jump back into.
+// jump back into. Task 7 (PRD §15/§51) adds three richer sections:
+// 語彙ファネル (VocabFunnel), 弱点トレンド (WeaknessTrends, rendered as
+// per-subject sparklines via weaknessTrendVMs), and 自信の較正
+// (ConfidenceCalibration).
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
@@ -283,11 +286,29 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 	if len(recent) > recentSessionsLimit {
 		recent = recent[:recentSessionsLimit]
 	}
+	funnel, err := s.opts.Analytics.VocabFunnel(r.Context(), ident.ID)
+	if err != nil {
+		http.Error(w, "could not load vocabulary funnel", http.StatusInternalServerError)
+		return
+	}
+	trends, err := s.opts.Analytics.WeaknessTrends(r.Context(), ident.ID)
+	if err != nil {
+		http.Error(w, "could not load weakness trends", http.StatusInternalServerError)
+		return
+	}
+	calibration, err := s.opts.Analytics.ConfidenceCalibration(r.Context(), ident.ID)
+	if err != nil {
+		http.Error(w, "could not load confidence calibration", http.StatusInternalServerError)
+		return
+	}
 
 	Render(w, r, "home", map[string]any{
 		"Title":          "JLP",
 		"Identity":       ident,
 		"Stats":          stats,
 		"RecentSessions": recent,
+		"Funnel":         funnel,
+		"WeaknessTrends": weaknessTrendVMs(trends),
+		"Calibration":    calibration,
 	})
 }

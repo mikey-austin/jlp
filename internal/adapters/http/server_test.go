@@ -25,10 +25,41 @@ import (
 type fakeAnalyticsRepo struct {
 	stats storage.Statistics
 	err   error
+
+	funnel         storage.VocabFunnel
+	funnelErr      error
+	trends         []storage.SubjectTrend
+	trendsErr      error
+	calibration    []storage.ConfidenceCalibration
+	calibrationErr error
+	agentUsage     []storage.AgentUsage
+	agentUsageErr  error
+	system         storage.SystemStats
+	systemErr      error
 }
 
 func (f fakeAnalyticsRepo) Statistics(context.Context, learner.IdentityID) (storage.Statistics, error) {
 	return f.stats, f.err
+}
+
+func (f fakeAnalyticsRepo) VocabFunnel(context.Context, learner.IdentityID) (storage.VocabFunnel, error) {
+	return f.funnel, f.funnelErr
+}
+
+func (f fakeAnalyticsRepo) WeaknessTrends(context.Context, learner.IdentityID) ([]storage.SubjectTrend, error) {
+	return f.trends, f.trendsErr
+}
+
+func (f fakeAnalyticsRepo) ConfidenceCalibration(context.Context, learner.IdentityID) ([]storage.ConfidenceCalibration, error) {
+	return f.calibration, f.calibrationErr
+}
+
+func (f fakeAnalyticsRepo) AgentUsage(context.Context, learner.IdentityID) ([]storage.AgentUsage, error) {
+	return f.agentUsage, f.agentUsageErr
+}
+
+func (f fakeAnalyticsRepo) SystemStats(context.Context, learner.IdentityID) (storage.SystemStats, error) {
+	return f.system, f.systemErr
 }
 
 var errStatistics = errors.New("statistics unavailable")
@@ -130,15 +161,26 @@ func TestServerDoesNotTrustForwardedForHeader(t *testing.T) {
 // Options.Sessions.List.
 func TestHomeRenders(t *testing.T) {
 	opts := testOptionsWithSessions()
-	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{stats: storage.Statistics{
-		RunesWritten:         250,
-		SessionCount:         1,
-		FeedbackRequests:     3,
-		CorrectionsPresented: 4,
-		CorrectionsAccepted:  3,
-		CorrectionsRejected:  1,
-		TopErrorTypes:        []storage.ErrorTypeCount{{Type: "conjugation", Count: 3}},
-	}})
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{
+		stats: storage.Statistics{
+			RunesWritten:         250,
+			SessionCount:         1,
+			FeedbackRequests:     3,
+			CorrectionsPresented: 4,
+			CorrectionsAccepted:  3,
+			CorrectionsRejected:  1,
+			TopErrorTypes:        []storage.ErrorTypeCount{{Type: "conjugation", Count: 3}},
+		},
+		funnel: storage.VocabFunnel{LookedUp: 42, Produced: 17, ProducedCorrectly: 9},
+		trends: []storage.SubjectTrend{{
+			Subject: "i-adjective-past",
+			Weeks: []storage.WeeklyCount{
+				{Count: 0}, {Count: 0}, {Count: 0}, {Count: 0},
+				{Count: 1}, {Count: 0}, {Count: 2}, {Count: 3},
+			},
+		}},
+		calibration: []storage.ConfidenceCalibration{{Confidence: 4, Attempts: 5, CorrectRate: 0.8}},
+	})
 	sess, err := opts.Sessions.Create(context.Background(), "dev", "旅行について書く", "Diary", session.Profile{})
 	if err != nil {
 		t.Fatal(err)
@@ -172,6 +214,18 @@ func TestHomeRenders(t *testing.T) {
 	if !strings.Contains(body, "旅行について書く") {
 		t.Fatalf("home body missing recent session title: %s", body)
 	}
+	if !strings.Contains(body, "語彙ファネル") || !strings.Contains(body, "42") || !strings.Contains(body, "17") || !strings.Contains(body, "9") {
+		t.Fatalf("home body missing vocab funnel section/values: %s", body)
+	}
+	if !strings.Contains(body, "弱点トレンド") || !strings.Contains(body, "i-adjective-past") {
+		t.Fatalf("home body missing weakness trends section: %s", body)
+	}
+	if !strings.Contains(body, "<svg") || !strings.Contains(body, "<polyline") {
+		t.Fatalf("home body missing a sparkline <svg>/<polyline>: %s", body)
+	}
+	if !strings.Contains(body, "自信の較正") || !strings.Contains(body, "80%") {
+		t.Fatalf("home body missing confidence calibration section (CorrectRate 0.8 -> 80%%): %s", body)
+	}
 }
 
 // TestHomeStatisticsRepositoryErrorReturns500 mirrors the existing
@@ -186,6 +240,73 @@ func TestHomeStatisticsRepositoryErrorReturns500(t *testing.T) {
 	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// TestHomeVocabFunnelRepositoryErrorReturns500, ...WeaknessTrends...,
+// and ...ConfidenceCalibration... cover the Task 7 additions to home:
+// each new dashboard section's repository failure must surface as 500
+// too, same as Statistics above.
+func TestHomeVocabFunnelRepositoryErrorReturns500(t *testing.T) {
+	opts := testOptionsWithSessions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{funnelErr: errStatistics})
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestHomeWeaknessTrendsRepositoryErrorReturns500(t *testing.T) {
+	opts := testOptionsWithSessions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{trendsErr: errStatistics})
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+func TestHomeConfidenceCalibrationRepositoryErrorReturns500(t *testing.T) {
+	opts := testOptionsWithSessions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{calibrationErr: errStatistics})
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// TestHomeRendersEmptyStatesForNoTrendsOrCalibration covers the "no
+// rows" contract: an identity with no live weaknesses and no
+// confidence-rated attempts gets explicit empty-state text, not a
+// blank/broken section (and, implicitly, no NaN from an empty
+// ConfidenceCalibration slice).
+func TestHomeRendersEmptyStatesForNoTrendsOrCalibration(t *testing.T) {
+	opts := testOptionsWithSessions()
+	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{})
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("home status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Contains(body, "NaN") {
+		t.Fatalf("home body contains NaN: %s", body)
+	}
+	if !strings.Contains(body, "弱点トレンド") {
+		t.Fatalf("home body missing 弱点トレンド heading: %s", body)
+	}
+	if !strings.Contains(body, "自信の較正") {
+		t.Fatalf("home body missing 自信の較正 heading: %s", body)
 	}
 }
 

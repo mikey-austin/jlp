@@ -65,6 +65,7 @@ func (o *observer) GenerateStructured(ctx context.Context, req ai.StructuredRequ
 		CostUSD:       cost(o.pricing[resp.Model], resp.InputTokens, resp.OutputTokens),
 		Success:       callErr == nil,
 		CreatedAt:     start,
+		Agent:         req.Agent,
 	}
 	if callErr != nil {
 		rec.Error = callErr.Error()

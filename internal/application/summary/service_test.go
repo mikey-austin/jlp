@@ -31,6 +31,26 @@ func (f *fakeAnalyticsRepo) Statistics(context.Context, learner.IdentityID) (sto
 	return f.stats, nil
 }
 
+func (f *fakeAnalyticsRepo) VocabFunnel(context.Context, learner.IdentityID) (storage.VocabFunnel, error) {
+	panic("not used by summary tests")
+}
+
+func (f *fakeAnalyticsRepo) WeaknessTrends(context.Context, learner.IdentityID) ([]storage.SubjectTrend, error) {
+	panic("not used by summary tests")
+}
+
+func (f *fakeAnalyticsRepo) ConfidenceCalibration(context.Context, learner.IdentityID) ([]storage.ConfidenceCalibration, error) {
+	panic("not used by summary tests")
+}
+
+func (f *fakeAnalyticsRepo) AgentUsage(context.Context, learner.IdentityID) ([]storage.AgentUsage, error) {
+	panic("not used by summary tests")
+}
+
+func (f *fakeAnalyticsRepo) SystemStats(context.Context, learner.IdentityID) (storage.SystemStats, error) {
+	panic("not used by summary tests")
+}
+
 // fakePriorityRepo is a minimal storage.PriorityRepository double:
 // SendWeekly only ever calls Top.
 type fakePriorityRepo struct {

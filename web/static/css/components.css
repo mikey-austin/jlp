@@ -355,6 +355,9 @@ textarea:focus-visible,
 .table-card tbody tr:last-child td {
   border-bottom: none;
 }
+.table-card td.empty {
+  color: var(--fg-muted);
+}
 
 /* ============================== Correction card ========================= */
 /* The signature component: a rune-level diff, before/after pair,

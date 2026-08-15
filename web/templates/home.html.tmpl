@@ -23,4 +23,35 @@
       </ul>
     </div>
   </div>
+
+  <h2>語彙ファネル</h2>
+  <div class="funnel">
+    <div class="funnel__stage"><span class="funnel__value">{{.Funnel.LookedUp}}</span><span class="funnel__label">調べた</span></div>
+    <span class="funnel__arrow" aria-hidden="true">→</span>
+    <div class="funnel__stage"><span class="funnel__value">{{.Funnel.Produced}}</span><span class="funnel__label">使った</span></div>
+    <span class="funnel__arrow" aria-hidden="true">→</span>
+    <div class="funnel__stage"><span class="funnel__value">{{.Funnel.ProducedCorrectly}}</span><span class="funnel__label">正しく使えた</span></div>
+  </div>
+
+  <h2>弱点トレンド</h2>
+  <ul class="weakness-trends">
+    {{range .WeaknessTrends}}<li>
+      <span class="weakness-trends__subject">{{.Subject}}</span>
+      {{template "sparkline" .}}
+    </li>{{else}}<li class="empty">弱点が見つかりません</li>{{end}}
+  </ul>
+
+  <h2>自信の較正</h2>
+  <div class="table-card">
+    <table>
+      <thead><tr><th>自信</th><th>試行数</th><th>正答率</th></tr></thead>
+      <tbody>
+        {{range .Calibration}}<tr>
+          <td>{{.Confidence}}</td>
+          <td>{{.Attempts}}</td>
+          <td>{{percent .CorrectRate}}%</td>
+        </tr>{{else}}<tr><td colspan="3" class="empty">自信を記録した試行がありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
 </section>{{end}}

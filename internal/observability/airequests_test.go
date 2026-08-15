@@ -143,6 +143,9 @@ func TestObserverInsertsRecordAndStampsRequestID(t *testing.T) {
 	if rec.SessionID == nil || *rec.SessionID != *testRequest().SessionID {
 		t.Errorf("record.SessionID = %v, want %v", rec.SessionID, testRequest().SessionID)
 	}
+	if rec.Agent != "teacher" {
+		t.Errorf("record.Agent = %q, want %q (req.Agent must be persisted)", rec.Agent, "teacher")
+	}
 
 	// 1000 input tokens + 500 output tokens at {3.0, 15.0} per MTok:
 	// 1000/1e6*3.0 + 500/1e6*15.0 = 0.003 + 0.0075 = 0.0105.

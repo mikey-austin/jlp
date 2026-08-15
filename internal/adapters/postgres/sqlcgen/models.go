@@ -32,6 +32,7 @@ type AiRequest struct {
 	Success       bool
 	Error         string
 	CreatedAt     pgtype.Timestamptz
+	Agent         string
 }
 
 type AnkiCard struct {

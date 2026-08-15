@@ -55,6 +55,7 @@ func (r *AIRequestRepository) Insert(ctx context.Context, rec storage.AIRequestR
 		Success:       rec.Success,
 		Error:         rec.Error,
 		CreatedAt:     pgtype.Timestamptz{Time: rec.CreatedAt, Valid: true},
+		Agent:         rec.Agent,
 	})
 }
 
@@ -104,6 +105,7 @@ func fromAIRequestRow(row sqlcgen.AiRequest) (storage.AIRequestRecord, error) {
 		Success:       row.Success,
 		Error:         row.Error,
 		CreatedAt:     row.CreatedAt.Time,
+		Agent:         row.Agent,
 	}, nil
 }
 

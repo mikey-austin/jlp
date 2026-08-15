@@ -31,4 +31,33 @@
       </tbody>
     </table>
   </div>
+
+  <h2>エージェント利用</h2>
+  <div class="table-card">
+    <table>
+      <thead><tr><th>エージェント</th><th>リクエスト数</th><th>成功率</th><th>平均レイテンシ (ms)</th></tr></thead>
+      <tbody>
+        {{range .AgentUsage}}<tr>
+          <td>{{if .Agent}}{{.Agent}}{{else}}未分類{{end}}</td>
+          <td>{{.Requests}}</td>
+          <td>{{percent .SuccessRate}}%</td>
+          <td>{{.AvgLatencyMS}}</td>
+        </tr>{{else}}<tr><td colspan="4" class="empty">利用データがありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>システム</h2>
+  <div class="stat-grid">
+    <div class="stat"><span class="stat__value">{{.System.LearningEvents}}</span><span class="stat__label">学習イベント</span></div>
+    <div class="stat"><span class="stat__value">{{.System.AIRequests}}</span><span class="stat__label">AIリクエスト</span></div>
+  </div>
+  <div class="table-card">
+    <table>
+      <thead><tr><th>種類</th><th>件数</th></tr></thead>
+      <tbody>
+        {{range $type, $count := .System.EventsByType}}<tr><td>{{$type}}</td><td>{{$count}}</td></tr>{{else}}<tr><td colspan="2" class="empty">データがありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
 </section>{{end}}

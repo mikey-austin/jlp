@@ -9,6 +9,8 @@ import (
 	"testing"
 	"time"
 
+	paho "github.com/eclipse/paho.mqtt.golang"
+
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/vocabulary"
@@ -175,7 +177,7 @@ func newTestVocabService(repo *fakeVocabRepo) *vocabulary.Service {
 // than trivially passing.
 func TestTopicForEveryAllTypesEntry(t *testing.T) {
 	want := map[event.Type]string{
-		event.TypeWritingCreated:             "writing",
+		event.TypeWritingCreated:              "writing",
 		event.TypeWritingUpdated:              "writing",
 		event.TypeFeedbackRequested:           "feedback",
 		event.TypeCorrectionPresented:         "correction",
@@ -443,5 +445,91 @@ func TestStartConnectsAndSubscribesIngestFilter(t *testing.T) {
 	}
 	if len(fc.subscribed) != 1 || fc.subscribed[0] != ingestTopicFilter {
 		t.Fatalf("subscribed = %v, want [%s]", fc.subscribed, ingestTopicFilter)
+	}
+}
+
+// --- pahoClient bounded-wait regression (self-review CRITICAL fix) ---
+//
+// paho v1.5.1 has a specific trap: once a connected client loses its
+// connection with AutoReconnect enabled, it sits in a "reconnecting"
+// state where IsConnected() still reports true, but a QoS1 Publish
+// issued in that state returns a Token that NEVER has
+// setError/flowComplete called on it — Wait() blocks forever. The
+// fakes below reproduce exactly that Token shape (WaitTimeout
+// deterministically times out, nothing ever completes it) so
+// pahoClient.Publish/Subscribe's ioTimeout bound is proven against the
+// real trap shape without needing a live broker outage.
+
+// hangingToken simulates a paho Token that never completes — WaitTimeout
+// always reports "timed out" (false), matching what a real token stuck
+// in the reconnecting-state trap does. Wait() intentionally blocks
+// forever too (mirroring the real bug precisely), which is safe here
+// only because pahoClient.Publish/Subscribe never call it — they call
+// WaitTimeout exclusively, which is the whole point of this fix.
+type hangingToken struct{}
+
+func (hangingToken) Wait() bool { select {} }
+
+func (hangingToken) WaitTimeout(time.Duration) bool { return false }
+func (hangingToken) Done() <-chan struct{}          { return make(chan struct{}) }
+func (hangingToken) Error() error                   { return nil }
+
+// hangingPahoClient is a minimal paho.Client double: Publish and
+// Subscribe both return hangingToken{}; every other method is left to
+// the embedded nil paho.Client, so calling any of them (which
+// pahoClient.Publish/Subscribe never do) panics loudly rather than
+// silently returning a zero value — a future change accidentally
+// depending on more of the interface fails fast in this test rather
+// than passing for the wrong reason.
+type hangingPahoClient struct{ paho.Client }
+
+func (hangingPahoClient) Publish(string, byte, bool, interface{}) paho.Token {
+	return hangingToken{}
+}
+func (hangingPahoClient) Subscribe(string, byte, paho.MessageHandler) paho.Token {
+	return hangingToken{}
+}
+
+// testTimeout is how long these regression tests wait for
+// pahoClient.Publish/Subscribe to return before concluding the fix
+// regressed and the call is genuinely hanging — generous slack over
+// ioTimeout so this never flakes under load, while still being far
+// short of "the test suite hangs forever" if the bug reappears.
+const testTimeout = ioTimeout + 3*time.Second
+
+// TestPahoClientPublishReturnsErrorRatherThanHangingOnANeverCompletingToken
+// is the CRITICAL self-review fix's core regression test: before this
+// fix, pahoClient.Publish called token.Wait() unconditionally, which
+// for a token like hangingToken never returns — this test would hang
+// the whole `go test` process forever on the old code. It now calls
+// WaitTimeout(ioTimeout) instead, so Publish must return a non-nil
+// error within ioTimeout even for a token that never completes.
+func TestPahoClientPublishReturnsErrorRatherThanHangingOnANeverCompletingToken(t *testing.T) {
+	c := &pahoClient{client: hangingPahoClient{}}
+	done := make(chan error, 1)
+	go func() { done <- c.Publish("learner/dev/correction/correction.presented", []byte("{}")) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Publish returned nil for a token that never completes, want a timeout error")
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("Publish did not return within ioTimeout+slack for a token that never completes — it hung, reproducing the paho v1.5.1 reconnecting-state trap")
+	}
+}
+
+func TestPahoClientSubscribeReturnsErrorRatherThanHangingOnANeverCompletingToken(t *testing.T) {
+	c := &pahoClient{client: hangingPahoClient{}}
+	done := make(chan error, 1)
+	go func() { done <- c.Subscribe(ingestTopicFilter, func(string, []byte) {}) }()
+
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("Subscribe returned nil for a token that never completes, want a timeout error")
+		}
+	case <-time.After(testTimeout):
+		t.Fatal("Subscribe did not return within ioTimeout+slack for a token that never completes — it hung, reproducing the paho v1.5.1 reconnecting-state trap")
 	}
 }

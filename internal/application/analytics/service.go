@@ -42,3 +42,32 @@ func (s *Service) Statistics(ctx context.Context, identity learner.IdentityID) (
 	}
 	return stats, nil
 }
+
+// VocabFunnel, WeaknessTrends, ConfidenceCalibration, AgentUsage, and
+// SystemStats are plain pass-throughs to the repository, unlike
+// Statistics above: each repository query already returns a value
+// that's either raw (no ratio involved) or a ratio computed from a
+// GROUP BY bucket guaranteed non-empty (so it can never be the
+// division-by-a-legitimate-zero case Statistics' two ratios have to
+// guard against) — see storage.AnalyticsRepository's doc comments on
+// each method for why.
+
+func (s *Service) VocabFunnel(ctx context.Context, identity learner.IdentityID) (storage.VocabFunnel, error) {
+	return s.repo.VocabFunnel(ctx, identity)
+}
+
+func (s *Service) WeaknessTrends(ctx context.Context, identity learner.IdentityID) ([]storage.SubjectTrend, error) {
+	return s.repo.WeaknessTrends(ctx, identity)
+}
+
+func (s *Service) ConfidenceCalibration(ctx context.Context, identity learner.IdentityID) ([]storage.ConfidenceCalibration, error) {
+	return s.repo.ConfidenceCalibration(ctx, identity)
+}
+
+func (s *Service) AgentUsage(ctx context.Context, identity learner.IdentityID) ([]storage.AgentUsage, error) {
+	return s.repo.AgentUsage(ctx, identity)
+}
+
+func (s *Service) SystemStats(ctx context.Context, identity learner.IdentityID) (storage.SystemStats, error) {
+	return s.repo.SystemStats(ctx, identity)
+}

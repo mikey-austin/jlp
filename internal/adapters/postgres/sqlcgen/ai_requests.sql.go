@@ -15,9 +15,9 @@ const insertAIRequest = `-- name: InsertAIRequest :exec
 INSERT INTO ai_requests (
     id, identity_id, session_id, capability, provider, model,
     prompt_name, prompt_version, latency_ms, input_tokens, output_tokens,
-    cost_usd, success, error, created_at
+    cost_usd, success, error, created_at, agent
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 `
 
 type InsertAIRequestParams struct {
@@ -36,6 +36,7 @@ type InsertAIRequestParams struct {
 	Success       bool
 	Error         string
 	CreatedAt     pgtype.Timestamptz
+	Agent         string
 }
 
 func (q *Queries) InsertAIRequest(ctx context.Context, arg InsertAIRequestParams) error {
@@ -55,6 +56,7 @@ func (q *Queries) InsertAIRequest(ctx context.Context, arg InsertAIRequestParams
 		arg.Success,
 		arg.Error,
 		arg.CreatedAt,
+		arg.Agent,
 	)
 	return err
 }
@@ -62,7 +64,7 @@ func (q *Queries) InsertAIRequest(ctx context.Context, arg InsertAIRequestParams
 const listAIRequests = `-- name: ListAIRequests :many
 SELECT id, identity_id, session_id, capability, provider, model,
        prompt_name, prompt_version, latency_ms, input_tokens, output_tokens,
-       cost_usd, success, error, created_at
+       cost_usd, success, error, created_at, agent
 FROM ai_requests
 WHERE identity_id = $1
 ORDER BY created_at DESC
@@ -99,6 +101,7 @@ func (q *Queries) ListAIRequests(ctx context.Context, arg ListAIRequestsParams) 
 			&i.Success,
 			&i.Error,
 			&i.CreatedAt,
+			&i.Agent,
 		); err != nil {
 			return nil, err
 		}
