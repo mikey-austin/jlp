@@ -77,12 +77,18 @@ func main() {
 		grammarRepo := postgres.NewGrammarRepository(pool)
 		obsRepo := postgres.NewObservationRepository(pool)
 		prioRepo := postgres.NewPriorityRepository(pool)
+		// vocabRepo is constructed here (ahead of its usual spot further
+		// down, next to vocabSvc) because the teaching planner below now
+		// needs it too — see teachingPlanner's own comment.
+		vocabRepo := postgres.NewVocabularyRepository(pool)
 		// The heuristic teaching planner (Task 5, PRD §16) turns the
 		// learner model's observations into the ranked, explainable
 		// priority list feedback.Service.RequestFeedback reads back via
 		// Top(5) to fill the Teacher prompt's RecentErrors — closing the
-		// adapt loop.
-		teachingPlanner := planner.NewPlanner(obsRepo, eventRepo, grammarRepo, prioRepo, time.Now)
+		// adapt loop. Task 7 (PRD §55/§17.5) added a second
+		// responsibility, ActivationCandidates, which is why it now also
+		// takes vocabRepo.
+		teachingPlanner := planner.NewPlanner(obsRepo, eventRepo, grammarRepo, prioRepo, vocabRepo, time.Now)
 
 		// The learner model (Task 4, PRD §13/§14/§44) reacts to every
 		// correction.presented and grammar.concept.encountered event as
@@ -121,8 +127,8 @@ func main() {
 		// page's List (see httpx.Options.Vocabulary below); its
 		// DetectProduction is wired into feedback.Service so every review
 		// round also notices when a looked-up expression shows up,
-		// produced, in the learner's own writing.
-		vocabRepo := postgres.NewVocabularyRepository(pool)
+		// produced, in the learner's own writing. vocabRepo itself was
+		// constructed above, alongside teachingPlanner.
 		vocabSvc := vocabulary.NewService(vocabRepo, recorder)
 
 		teacherAgent := teacher.New(aiGen)
@@ -132,6 +138,7 @@ func main() {
 			postgres.NewFeedbackRepository(pool),
 			grammarRepo,
 			prioRepo,
+			teachingPlanner,
 			vocabSvc,
 			teacherAgent,
 			recorder,

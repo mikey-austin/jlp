@@ -10,6 +10,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -72,6 +73,36 @@ func (panicGrammarRepo) CorrectionsForConcept(context.Context, learner.IdentityI
 	panic("not used by planner wiring tests")
 }
 
+// panicVocabRepo is a storage.VocabularyRepository double for the same
+// reason panicGrammarRepo exists: these wiring tests exercise
+// planner.Recompute only, never ActivationCandidates, so every method
+// panics if actually called.
+type panicVocabRepo struct{}
+
+func (panicVocabRepo) UpsertOnLookup(context.Context, learner.IdentityID, string, string, string, string, string, vocabulary.Kind, string, time.Time) (vocabulary.Item, bool, error) {
+	panic("not used by planner wiring tests")
+}
+
+func (panicVocabRepo) RecordProduction(context.Context, learner.IdentityID, string, bool, time.Time) error {
+	panic("not used by planner wiring tests")
+}
+
+func (panicVocabRepo) List(context.Context, learner.IdentityID, string) ([]vocabulary.Item, error) {
+	panic("not used by planner wiring tests")
+}
+
+func (panicVocabRepo) ListActivationCandidates(context.Context, learner.IdentityID, int) ([]vocabulary.Item, error) {
+	panic("not used by planner wiring tests")
+}
+
+func (panicVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
+	panic("not used by planner wiring tests")
+}
+
+func (panicVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
+	panic("not used by planner wiring tests")
+}
+
 // TestHandleEventTriggersPlannerRecomputeWhenWired pins the live-path
 // half of the brief's Step 3 wiring — now debounced (see
 // debounce_test.go for the full coalescing contract): once SetPlanner
@@ -83,7 +114,7 @@ func TestHandleEventTriggersPlannerRecomputeWhenWired(t *testing.T) {
 	store := newFakeEventStore()
 	obs := newFakeObsRepo()
 	prios := &fakePriorityRepo{}
-	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, func() time.Time { return baseTime })
+	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, panicVocabRepo{}, func() time.Time { return baseTime })
 
 	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
 	u.SetPlanner(p)
@@ -133,7 +164,7 @@ func TestRebuildRecomputesPrioritiesExactlyOnceAtTheEnd(t *testing.T) {
 	obs := newFakeObsRepo()
 	prios := &fakePriorityRepo{}
 	rebuildClock := baseTime.Add(365 * 24 * time.Hour)
-	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, func() time.Time { return rebuildClock })
+	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, panicVocabRepo{}, func() time.Time { return rebuildClock })
 
 	if err := applearnermodel.Rebuild(ctx, testIdentity, store, obs, func() time.Time { return rebuildClock }, p); err != nil {
 		t.Fatalf("Rebuild: %v", err)

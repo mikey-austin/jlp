@@ -160,6 +160,43 @@ func (f *fakeVocabRepo) AllExpressions(_ context.Context, identity learner.Ident
 	return out, nil
 }
 
+// SeedBank mirrors the real adapter's insert-if-absent contract (see
+// storage.VocabularyRepository.SeedBank): a no-op per-entry when
+// (identity, expression) already has a row. Not exercised by this
+// package's tests — appvocabulary.Service never calls it — but
+// implemented for real (not a panic) since it's cheap and keeps this
+// fake usable if a future test needs it.
+func (f *fakeVocabRepo) SeedBank(_ context.Context, identity learner.IdentityID, entries []vocabulary.BankEntry, at time.Time) error {
+	for _, e := range entries {
+		k := vocabKey(identity, e.Expression)
+		if _, ok := f.items[k]; ok {
+			continue
+		}
+		f.nextID++
+		item := &vocabulary.Item{
+			ID:         fmt.Sprintf("vocab-%d", f.nextID),
+			IdentityID: identity,
+			Expression: e.Expression,
+			Reading:    e.Reading,
+			Meaning:    e.Meaning,
+			Kind:       e.Kind,
+			Source:     "expression bank",
+			FirstSeen:  at,
+			LastEvent:  at,
+		}
+		f.items[k] = item
+		f.byID[item.ID] = item
+	}
+	return nil
+}
+
+// ListActivationCandidates is not used by this package's tests —
+// appvocabulary.Service never calls it — so it panics if actually
+// called, same as the rest of this fake's unused-surface methods.
+func (f *fakeVocabRepo) ListActivationCandidates(context.Context, learner.IdentityID, int) ([]vocabulary.Item, error) {
+	panic("not used by vocabulary service tests")
+}
+
 const testIdentity = learner.IdentityID("learner-a")
 const testSessionID = session.ID("sess-1")
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 )
 
 const (
@@ -32,6 +34,11 @@ const (
 	// uses for web/templates: the repo root both in the container
 	// (WORKDIR /src) and when run directly from a checkout.
 	seedGrammarCatalogPath = "data/grammar/concepts.yaml"
+
+	// seedExpressionBankPath is the same repo-root-relative convention
+	// as seedGrammarCatalogPath, for Task 7's curated expression bank
+	// (PRD §55, §17.5).
+	seedExpressionBankPath = "data/expressions/core.yaml"
 )
 
 // runSeed populates a fresh dev database with the curated grammar
@@ -53,6 +60,13 @@ const (
 //     applied via GrammarRepository.UpsertConcepts, which is itself
 //     idempotent (ON CONFLICT slug DO UPDATE) — rerunning just refreshes
 //     every concept to match the file, never duplicates a row.
+//   - the expression bank is loaded from seedExpressionBankPath and
+//     applied via VocabularyRepository.SeedBankItem, which is
+//     insert-if-absent (ON CONFLICT DO NOTHING) rather than
+//     UpsertOnLookup's increment-on-conflict: a bank item's
+//     lookups/productions counts are deliberately NEVER touched by a
+//     re-seed, even after the learner has since looked one up or
+//     produced it for real (see SeedBankItem's own doc comment).
 //   - identities.Upsert is already idempotent — it just refreshes the
 //     dev/Dev Learner row.
 //   - the session is created only when no session titled
@@ -85,6 +99,10 @@ func runSeed(ctx context.Context, cfg config.Config) error {
 		return fmt.Errorf("seed: upsert identity: %w", err)
 	}
 	slog.Info("seed: identity ready", "id", identity.ID, "display_name", identity.DisplayName)
+
+	if err := seedExpressionBank(ctx, pool, identity.ID); err != nil {
+		return err
+	}
 
 	sessionsSvc := sessions.NewService(postgres.NewSessionRepository(pool))
 	existing, err := sessionsSvc.List(ctx, identity.ID)
@@ -155,5 +173,39 @@ func seedGrammarCatalog(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("seed: upsert grammar concepts: %w", err)
 	}
 	slog.Info("seed: grammar catalog loaded", "concepts", len(concepts))
+	return nil
+}
+
+// seedExpressionBank loads the curated expression bank (Task 7, PRD
+// §55/§17.5) from seedExpressionBankPath and seeds it, whole, into
+// identity's vocabulary as zero-count baseline items via
+// VocabularyRepository.SeedBank — one call, one transaction (mirroring
+// seedGrammarCatalog's UpsertConcepts call below it) — deliberately NOT
+// UpsertOnLookup, which would increment Lookups on every rerun and
+// eventually make every bank item look like a real, repeatedly-looked-up
+// expression. SeedBank's insert-if-absent contract means this is safe
+// to call unconditionally on every `jlp seed`, unlike the
+// session/document seeding above.
+func seedExpressionBank(ctx context.Context, pool *pgxpool.Pool, identity learner.IdentityID) error {
+	f, err := os.Open(seedExpressionBankPath)
+	if err != nil {
+		return fmt.Errorf("seed: open expression bank: %w", err)
+	}
+	defer func() {
+		if cerr := f.Close(); cerr != nil {
+			slog.Error("seed: close expression bank file", "err", cerr)
+		}
+	}()
+
+	entries, err := vocabulary.LoadBank(f)
+	if err != nil {
+		return fmt.Errorf("seed: load expression bank: %w", err)
+	}
+
+	repo := postgres.NewVocabularyRepository(pool)
+	if err := repo.SeedBank(ctx, identity, entries, time.Now().UTC()); err != nil {
+		return fmt.Errorf("seed: seed expression bank: %w", err)
+	}
+	slog.Info("seed: expression bank loaded", "expressions", len(entries))
 	return nil
 }

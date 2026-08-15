@@ -50,8 +50,9 @@ func toVocabularyItemView(item vocabulary.Item) vocabularyItemView {
 // vocabularyPage handles GET /vocabulary: the identity's personal
 // vocabulary catalog (Task 6, PRD §12), narrowed by the ?filter= query
 // param — "" (すべて), "looked-up" (調べた), "produced" (使えた), or
-// "activate" (活性化候補 — always empty until Task 7's expression bank
-// wires it up; see storage.VocabularyRepository.List's doc comment).
+// "activate" (活性化候補 — Task 7's expression-bank activation
+// candidates; see storage.VocabularyRepository.List's doc comment for
+// the exact condition).
 func (s *Server) vocabularyPage(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	filter := r.URL.Query().Get("filter")

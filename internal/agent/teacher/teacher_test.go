@@ -132,6 +132,47 @@ func TestReviewWritingRendersV2PromptWithConceptCandidates(t *testing.T) {
 	}
 }
 
+// TestReviewWritingRendersExpressionsToEncourage pins Task 7's PRD
+// §55/§17.5 addition: ReviewInput.ExpressionsToEncourage flows through
+// to the rendered teacher.feedback.v2 USER prompt as a bulleted list
+// under the "gently encourage one" instruction.
+func TestReviewWritingRendersExpressionsToEncourage(t *testing.T) {
+	gen := &spyGen{}
+	agent := teacher.New(gen)
+
+	in := testReviewInput()
+	in.ExpressionsToEncourage = []string{"それはそれとして — that aside; setting that aside for now"}
+
+	_, _, err := agent.ReviewWriting(context.Background(), in)
+	if err != nil {
+		t.Fatalf("ReviewWriting returned error: %v", err)
+	}
+
+	if !strings.Contains(gen.req.User, "gently encourage one") {
+		t.Fatalf("User prompt missing the encourage-block instruction: %s", gen.req.User)
+	}
+	if !strings.Contains(gen.req.User, "- それはそれとして — that aside; setting that aside for now") {
+		t.Fatalf("User prompt missing the bulleted candidate line: %s", gen.req.User)
+	}
+}
+
+// TestReviewWritingOmitsExpressionsToEncourageSectionWhenEmpty: an
+// empty/unset ExpressionsToEncourage must produce no encourage section
+// at all (the template's {{if .ExpressionsToEncourage}} guard), not an
+// empty-but-present header.
+func TestReviewWritingOmitsExpressionsToEncourageSectionWhenEmpty(t *testing.T) {
+	gen := &spyGen{}
+	agent := teacher.New(gen)
+
+	_, _, err := agent.ReviewWriting(context.Background(), testReviewInput())
+	if err != nil {
+		t.Fatalf("ReviewWriting returned error: %v", err)
+	}
+	if strings.Contains(gen.req.User, "gently encourage") {
+		t.Fatalf("User prompt unexpectedly contains the encourage section with no ExpressionsToEncourage set: %s", gen.req.User)
+	}
+}
+
 // flakyGen is a local ai.StructuredGenerator test double whose
 // GenerateStructured returns a fixed sequence of raw payloads: the Nth
 // call returns payloads[N] (clamped to the last entry once exhausted).

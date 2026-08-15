@@ -1,0 +1,201 @@
+# Curated expression bank (PRD §55, §17.5) — set expressions and
+# grammar patterns distinct from ordinary vocabulary.Kind entries: the
+# learner is expected to already understand these receptively, and the
+# vocabulary activator's job is to notice when one has gone a long time
+# without ever being *produced*. reading is left "" when expression is
+# already pure kana (nothing to disambiguate); otherwise it's the full
+# hiragana reading. kind is either "expression" (a standalone idiomatic
+# phrase) or "pattern" (a bound grammar construction that attaches to a
+# verb/adjective stem, marked here with a leading 〜).
+#
+# Loaded by `jlp seed` via internal/domain/vocabulary.LoadBank and
+# storage.VocabularyRepository.SeedBankItem (see cmd/jlp/seed.go) —
+# insert-if-absent, so re-running never resets a learner's real
+# lookup/production counts on an expression that's since been used.
+#
+# The first four entries are PRD §55's own worked examples.
+
+- expression: "〜というわけではない"
+  reading: ""
+  meaning: "It's not that...; that doesn't necessarily mean..."
+  kind: pattern
+
+- expression: "それはそれとして"
+  reading: ""
+  meaning: "That aside; setting that aside for now"
+  kind: expression
+
+- expression: "気がしないでもない"
+  reading: "きがしないでもない"
+  meaning: "I can't say I don't feel like...; I do feel a bit like..."
+  kind: expression
+
+- expression: "〜に越したことはない"
+  reading: "にこしたことはない"
+  meaning: "There's nothing better than...; it's best to..."
+  kind: pattern
+
+- expression: "〜ざるを得ない"
+  reading: "ざるをえない"
+  meaning: "Have no choice but to...; can't help but..."
+  kind: pattern
+
+- expression: "〜てからでないと"
+  reading: ""
+  meaning: "Not unless/until one has done... first"
+  kind: pattern
+
+- expression: "〜わけにはいかない"
+  reading: ""
+  meaning: "Can't (afford to); cannot possibly..."
+  kind: pattern
+
+- expression: "〜どころではない"
+  reading: ""
+  meaning: "Far from being able to...; this is no time for..."
+  kind: pattern
+
+- expression: "〜てたまらない"
+  reading: ""
+  meaning: "Unbearably...; can't stand how..."
+  kind: pattern
+
+- expression: "〜てしょうがない"
+  reading: ""
+  meaning: "Can't help feeling...; ...to no end"
+  kind: pattern
+
+- expression: "〜に違いない"
+  reading: "にちがいない"
+  meaning: "Must be...; no doubt that..."
+  kind: pattern
+
+- expression: "〜かねない"
+  reading: ""
+  meaning: "Might well (happen); there's a risk of..."
+  kind: pattern
+
+- expression: "〜かねる"
+  reading: ""
+  meaning: "To find it difficult to...; cannot readily..."
+  kind: pattern
+
+- expression: "〜てはいられない"
+  reading: ""
+  meaning: "Can't just keep on...; can't afford to keep..."
+  kind: pattern
+
+- expression: "差し支えない"
+  reading: "さしつかえない"
+  meaning: "There's no harm in...; it's fine to..."
+  kind: expression
+
+- expression: "〜べきではない"
+  reading: ""
+  meaning: "Should not..."
+  kind: pattern
+
+- expression: "〜ないことには"
+  reading: ""
+  meaning: "Unless one does..., (nothing will happen/change)"
+  kind: pattern
+
+- expression: "〜ないではいられない"
+  reading: ""
+  meaning: "Can't help but...; can't resist doing..."
+  kind: pattern
+
+- expression: "〜てはじめて"
+  reading: ""
+  meaning: "Only after doing... (does one realize/understand)"
+  kind: pattern
+
+- expression: "〜たところで"
+  reading: ""
+  meaning: "Even if one were to..., it wouldn't make a difference"
+  kind: pattern
+
+- expression: "〜まみれ"
+  reading: ""
+  meaning: "Covered in/with... (sweat, mud, blood)"
+  kind: pattern
+
+- expression: "〜ずくめ"
+  reading: ""
+  meaning: "Nothing but...; all... (good news, black clothes, etc.)"
+  kind: pattern
+
+- expression: "〜なりに"
+  reading: ""
+  meaning: "In one's own way; to the extent one is able"
+  kind: pattern
+
+- expression: "〜きらいがある"
+  reading: ""
+  meaning: "Have a tendency to... (usually something undesirable)"
+  kind: pattern
+
+- expression: "〜てもともと"
+  reading: ""
+  meaning: "Nothing to lose by doing...; even failing costs nothing"
+  kind: pattern
+
+- expression: "気が置けない"
+  reading: "きがおけない"
+  meaning: "Able to relax completely with (a close friend); no need to be on guard"
+  kind: expression
+
+- expression: "腹が立つ"
+  reading: "はらがたつ"
+  meaning: "To get angry; to feel irritated"
+  kind: expression
+
+- expression: "手が空く"
+  reading: "てがあく"
+  meaning: "To become free/available (of a person's time)"
+  kind: expression
+
+- expression: "目が離せない"
+  reading: "めがはなせない"
+  meaning: "Can't take one's eyes off; must watch closely"
+  kind: expression
+
+- expression: "気を使う"
+  reading: "きをつかう"
+  meaning: "To be considerate; to be careful of others' feelings"
+  kind: expression
+
+- expression: "口が滑る"
+  reading: "くちがすべる"
+  meaning: "To let something slip out by accident (say more than intended)"
+  kind: expression
+
+- expression: "顔が広い"
+  reading: "かおがひろい"
+  meaning: "To be well-connected; to know a lot of people"
+  kind: expression
+
+- expression: "耳が痛い"
+  reading: "みみがいたい"
+  meaning: "Painfully true; (criticism that) hits close to home"
+  kind: expression
+
+- expression: "骨が折れる"
+  reading: "ほねがおれる"
+  meaning: "To be a lot of hard work; to be a laborious task"
+  kind: expression
+
+- expression: "猫の手も借りたい"
+  reading: "ねこのてもかりたい"
+  meaning: "Extremely busy (lit: would even borrow a cat's paws)"
+  kind: expression
+
+- expression: "一石二鳥"
+  reading: "いっせきにちょう"
+  meaning: "Killing two birds with one stone"
+  kind: expression
+
+- expression: "石の上にも三年"
+  reading: "いしのうえにもさんねん"
+  meaning: "Perseverance pays off (lit: three years sitting on a stone)"
+  kind: expression

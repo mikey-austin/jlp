@@ -76,7 +76,7 @@ func TestHandleEventDebouncesBurstIntoOneRecompute(t *testing.T) {
 	store := newFakeEventStore()
 	obs := newFakeObsRepo()
 	prios := &fakePriorityRepo{}
-	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, func() time.Time { return baseTime })
+	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, panicVocabRepo{}, func() time.Time { return baseTime })
 
 	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
 	u.SetPlanner(p)
@@ -116,7 +116,7 @@ func TestHandleEventDebouncesPerIdentityIndependently(t *testing.T) {
 	store := newFakeEventStore()
 	obs := newFakeObsRepo()
 	prios := &fakePriorityRepo{}
-	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, func() time.Time { return baseTime })
+	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, panicVocabRepo{}, func() time.Time { return baseTime })
 
 	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
 	u.SetPlanner(p)
@@ -193,7 +193,7 @@ func TestRealTimerScheduleEventuallyFires(t *testing.T) {
 	store := newFakeEventStore()
 	obs := newFakeObsRepo()
 	prios := &fakePriorityRepo{}
-	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, func() time.Time { return baseTime })
+	p := planner.NewPlanner(obs, store, panicGrammarRepo{}, prios, panicVocabRepo{}, func() time.Time { return baseTime })
 
 	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
 	u.SetPlanner(p)

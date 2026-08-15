@@ -153,6 +153,69 @@ func (r *VocabularyRepository) List(ctx context.Context, identity learner.Identi
 	return out, nil
 }
 
+// ListActivationCandidates returns identity's "activate"-filter items,
+// ranked by Lookups DESC and capped at limit — see
+// storage.VocabularyRepository.ListActivationCandidates' doc comment
+// for why this is a dedicated query (ORDER BY + LIMIT pushed into SQL)
+// rather than a Go-side sort/slice over List's output. limit <= 0 is
+// clamped to 0 before reaching SQL, where NULLIF(0, 0) = NULL makes
+// LIMIT NULL — postgres' spelling of "no limit" — since a negative
+// LIMIT argument is itself a SQL error.
+func (r *VocabularyRepository) ListActivationCandidates(ctx context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error) {
+	if limit < 0 {
+		limit = 0
+	}
+	rows, err := r.q.ListVocabularyActivationCandidates(ctx, sqlcgen.ListVocabularyActivationCandidatesParams{
+		IdentityID: string(identity),
+		LimitCount: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]vocabulary.Item, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, fromVocabularyItemRow(row))
+	}
+	return out, nil
+}
+
+// SeedBank inserts entries as expression-bank baseline items, all in
+// one transaction (mirroring GrammarRepository.UpsertConcepts' shape),
+// doing nothing per-entry when (identity, expression) already has a
+// row — see storage.VocabularyRepository.SeedBank's doc comment for the
+// full idempotency contract this implements via
+// InsertVocabularyItemIfAbsent's ON CONFLICT DO NOTHING.
+func (r *VocabularyRepository) SeedBank(ctx context.Context, identity learner.IdentityID, entries []vocabulary.BankEntry, at time.Time) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has succeeded
+	qtx := r.q.WithTx(tx)
+
+	occurredAt := pgtype.Timestamptz{Time: at, Valid: true}
+	for _, e := range entries {
+		id, err := uuid.NewRandom()
+		if err != nil {
+			return err
+		}
+		if err := qtx.InsertVocabularyItemIfAbsent(ctx, sqlcgen.InsertVocabularyItemIfAbsentParams{
+			ID:         pgtype.UUID{Bytes: id, Valid: true},
+			IdentityID: string(identity),
+			Expression: e.Expression,
+			Reading:    e.Reading,
+			Meaning:    e.Meaning,
+			Kind:       string(e.Kind),
+			Source:     "expression bank",
+			FirstSeen:  occurredAt,
+		}); err != nil {
+			return fmt.Errorf("vocabulary: seed bank entry %q: %w", e.Expression, err)
+		}
+	}
+
+	return tx.Commit(ctx)
+}
+
 func (r *VocabularyRepository) AllExpressions(ctx context.Context, identity learner.IdentityID) (map[string]string, error) {
 	rows, err := r.q.ListVocabularyExpressions(ctx, string(identity))
 	if err != nil {

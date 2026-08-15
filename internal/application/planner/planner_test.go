@@ -3,6 +3,7 @@ package planner_test
 import (
 	"context"
 	"math"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -98,6 +100,57 @@ func (f *fakePriorityRepo) Top(context.Context, learner.IdentityID, int) ([]stor
 	panic("not used by planner tests")
 }
 
+// fakeVocabRepo is an in-memory storage.VocabularyRepository double
+// exercised only by the ActivationCandidates tests below: byIdentity
+// holds pre-set, already-"activate"-filtered data (the real WHERE-clause
+// filter is pinned at the postgres integration layer, not
+// re-implemented here — same "canned data" style fakePriorityRepo.Top
+// uses); ListActivationCandidates mirrors the real adapter's own
+// contract by sorting/capping it (see
+// storage.VocabularyRepository.ListActivationCandidates), so these
+// tests exercise planner.ActivationCandidates as the thin passthrough
+// it now is.
+type fakeVocabRepo struct {
+	byIdentity map[learner.IdentityID][]vocabulary.Item
+	listErr    error
+}
+
+func (f *fakeVocabRepo) UpsertOnLookup(context.Context, learner.IdentityID, string, string, string, string, string, vocabulary.Kind, string, time.Time) (vocabulary.Item, bool, error) {
+	panic("not used by planner tests")
+}
+
+func (f *fakeVocabRepo) RecordProduction(context.Context, learner.IdentityID, string, bool, time.Time) error {
+	panic("not used by planner tests")
+}
+
+func (f *fakeVocabRepo) List(context.Context, learner.IdentityID, string) ([]vocabulary.Item, error) {
+	panic("not used by planner tests")
+}
+
+// ListActivationCandidates copies byIdentity's slice before sorting it
+// (never mutating the test's own backing array in place) — mirroring
+// the real postgres adapter, whose SQL query always returns a fresh
+// slice, never a reference into caller-owned state.
+func (f *fakeVocabRepo) ListActivationCandidates(_ context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	items := append([]vocabulary.Item(nil), f.byIdentity[identity]...)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Lookups > items[j].Lookups })
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
+func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
+	panic("not used by planner tests")
+}
+
+func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
+	panic("not used by planner tests")
+}
+
 // conceptEvent builds a grammar.concept.encountered event exactly as
 // internal/application/feedback's pipeline records one: Subject is the
 // concept slug, Evidence carries the originating correction_id (the
@@ -129,7 +182,11 @@ func correctionEvent(correctionID, corrType, severity string, at time.Time) even
 }
 
 func newPlanner(obs *fakeObsRepo, events *fakeEventStore, grammarRepo *fakeGrammarRepo, prios *fakePriorityRepo, now time.Time) *planner.Planner {
-	return planner.NewPlanner(obs, events, grammarRepo, prios, func() time.Time { return now })
+	return newPlannerWithVocab(obs, events, grammarRepo, prios, &fakeVocabRepo{}, now)
+}
+
+func newPlannerWithVocab(obs *fakeObsRepo, events *fakeEventStore, grammarRepo *fakeGrammarRepo, prios *fakePriorityRepo, vocab *fakeVocabRepo, now time.Time) *planner.Planner {
+	return planner.NewPlanner(obs, events, grammarRepo, prios, vocab, func() time.Time { return now })
 }
 
 // TestWeaknessScorePinnedExample pins the brief's exact worked example
@@ -348,5 +405,81 @@ func TestRecomputePropagatesReplaceAllError(t *testing.T) {
 	p := newPlanner(obs, events, grammarRepo, prios, now)
 	if err := p.Recompute(context.Background(), testIdentity); err == nil {
 		t.Fatal("expected an error when ReplaceAll fails, got nil")
+	}
+}
+
+// --- ActivationCandidates (Task 7, PRD §55/§17.5) ---
+
+// TestActivationCandidatesOrdersByLookupsDescendingAndLimits pins the
+// brief's "ordered lookups DESC, LIMIT n" contract: List's own
+// ordering (last_event DESC in the real query) must NOT leak through —
+// ActivationCandidates re-sorts by Lookups DESC itself before applying
+// limit.
+func TestActivationCandidatesOrdersByLookupsDescendingAndLimits(t *testing.T) {
+	vocab := &fakeVocabRepo{byIdentity: map[learner.IdentityID][]vocabulary.Item{
+		testIdentity: {
+			{ID: "v1", Expression: "気配", Lookups: 3},
+			{ID: "v2", Expression: "それはそれとして", Lookups: 7},
+			{ID: "v3", Expression: "〜に越したことはない", Lookups: 5},
+		},
+	}}
+	p := newPlannerWithVocab(&fakeObsRepo{}, &fakeEventStore{}, &fakeGrammarRepo{}, &fakePriorityRepo{}, vocab, time.Now())
+
+	got, err := p.ActivationCandidates(context.Background(), testIdentity, 2)
+	if err != nil {
+		t.Fatalf("ActivationCandidates: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2 (limited)", len(got))
+	}
+	if got[0].Expression != "それはそれとして" || got[1].Expression != "〜に越したことはない" {
+		t.Fatalf("got = %+v, want [それはそれとして(7), 〜に越したことはない(5)] in that order", got)
+	}
+}
+
+// TestActivationCandidatesLimitLessThanOrEqualZeroReturnsAllSorted:
+// limit<=0 means "no cap" — every matching item comes back, still
+// sorted.
+func TestActivationCandidatesLimitLessThanOrEqualZeroReturnsAllSorted(t *testing.T) {
+	vocab := &fakeVocabRepo{byIdentity: map[learner.IdentityID][]vocabulary.Item{
+		testIdentity: {
+			{ID: "v1", Expression: "a", Lookups: 1},
+			{ID: "v2", Expression: "b", Lookups: 9},
+		},
+	}}
+	p := newPlannerWithVocab(&fakeObsRepo{}, &fakeEventStore{}, &fakeGrammarRepo{}, &fakePriorityRepo{}, vocab, time.Now())
+
+	got, err := p.ActivationCandidates(context.Background(), testIdentity, 0)
+	if err != nil {
+		t.Fatalf("ActivationCandidates: %v", err)
+	}
+	if len(got) != 2 || got[0].Expression != "b" || got[1].Expression != "a" {
+		t.Fatalf("got = %+v, want both items, [b, a] sorted by Lookups DESC", got)
+	}
+}
+
+// TestActivationCandidatesNoneReturnsEmpty: an identity with nothing
+// matching the activate filter gets an empty (not nil-panicking) slice.
+func TestActivationCandidatesNoneReturnsEmpty(t *testing.T) {
+	vocab := &fakeVocabRepo{byIdentity: map[learner.IdentityID][]vocabulary.Item{}}
+	p := newPlannerWithVocab(&fakeObsRepo{}, &fakeEventStore{}, &fakeGrammarRepo{}, &fakePriorityRepo{}, vocab, time.Now())
+
+	got, err := p.ActivationCandidates(context.Background(), testIdentity, 5)
+	if err != nil {
+		t.Fatalf("ActivationCandidates: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("got = %+v, want empty", got)
+	}
+}
+
+// TestActivationCandidatesPropagatesListError: a repository failure
+// must surface to the caller, not be swallowed.
+func TestActivationCandidatesPropagatesListError(t *testing.T) {
+	vocab := &fakeVocabRepo{listErr: context.DeadlineExceeded}
+	p := newPlannerWithVocab(&fakeObsRepo{}, &fakeEventStore{}, &fakeGrammarRepo{}, &fakePriorityRepo{}, vocab, time.Now())
+
+	if _, err := p.ActivationCandidates(context.Background(), testIdentity, 5); err == nil {
+		t.Fatal("expected an error when List fails, got nil")
 	}
 }

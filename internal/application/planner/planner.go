@@ -21,6 +21,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -49,14 +50,44 @@ type Planner struct {
 	events  storage.LearningEventRepository
 	grammar storage.GrammarRepository
 	prios   storage.PriorityRepository
+	vocab   storage.VocabularyRepository
 	clock   func() time.Time
 }
 
 // NewPlanner builds a Planner. clock is injectable so tests control
 // what "now" means for the recency window and each Priority's
 // UpdatedAt — mirroring learnermodel.NewUpdater's injectable clock.
-func NewPlanner(obs storage.ObservationRepository, events storage.LearningEventRepository, grammar storage.GrammarRepository, prios storage.PriorityRepository, clock func() time.Time) *Planner {
-	return &Planner{obs: obs, events: events, grammar: grammar, prios: prios, clock: clock}
+// vocab backs ActivationCandidates below (PRD §55/§17.5's vocabulary
+// activator) — a second, independent responsibility this package took
+// on in Task 7 alongside Recompute's priority scoring; it imports only
+// ports/storage here too, so the package doc comment's no-cycle
+// argument still holds.
+func NewPlanner(obs storage.ObservationRepository, events storage.LearningEventRepository, grammar storage.GrammarRepository, prios storage.PriorityRepository, vocab storage.VocabularyRepository, clock func() time.Time) *Planner {
+	return &Planner{obs: obs, events: events, grammar: grammar, prios: prios, vocab: vocab, clock: clock}
+}
+
+// ActivationCandidates returns up to limit of identity's vocabulary
+// items ripe for active encouragement in the Teacher prompt (PRD
+// §55/§17.5), ranked by Lookups DESC (the strongest available signal
+// that an expression is "well known but dormant"): a thin passthrough
+// to storage.VocabularyRepository.ListActivationCandidates, which does
+// the actual filtering/ranking/capping in SQL — see that method's doc
+// comment for the exact condition and why the ORDER BY/LIMIT live
+// there rather than here. limit <= 0 means no cap — every matching item
+// is returned, still ranked.
+//
+// Deliberately NOT gated behind Recompute: unlike the priority list
+// (recomputed only when the learner model's observations change — see
+// application/learnermodel's SetPlanner), this is a live query over
+// vocabulary_items with no derived/cached state of its own, so calling
+// it on every feedback request (see application/feedback.Service) costs
+// one indexed SELECT, not a rebuild.
+func (p *Planner) ActivationCandidates(ctx context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error) {
+	items, err := p.vocab.ListActivationCandidates(ctx, identity, limit)
+	if err != nil {
+		return nil, fmt.Errorf("planner: list activation candidates: %w", err)
+	}
+	return items, nil
 }
 
 // Recompute rebuilds identity's whole priority list from its current

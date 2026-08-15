@@ -35,13 +35,50 @@ type VocabularyRepository interface {
 	// List returns identity's vocabulary items, most-recently-active
 	// first, narrowed by filter: "" (all), "looked-up" (Lookups > 0 —
 	// i.e. every item, since every item is created by a lookup),
-	// "produced" (Productions > 0), or "activate" — Task 7's expression
-	// bank activation-candidate filter, which always answers empty
-	// until that task wires it up.
+	// "produced" (Productions > 0), or "activate" — PRD §55/§17.5's
+	// vocabulary activator: items looked up often but never produced
+	// (Lookups >= 3 AND Productions = 0), OR any bank expression/pattern
+	// never produced (Kind IN (expression, pattern) AND Productions =
+	// 0) — the latter clause is what makes a freshly-seeded bank item
+	// (Lookups=0) a candidate from the moment it's seeded, not only
+	// after the learner has looked it up three times themselves.
+	// This filter's raw membership; used by the /vocabulary page's
+	// 活性化候補 tab, unlimited. application/planner.Planner.
+	// ActivationCandidates — backed by ListActivationCandidates below,
+	// NOT this method — is the intended caller for a ranked/limited
+	// view of the same condition.
 	List(ctx context.Context, identity learner.IdentityID, filter string) ([]vocabulary.Item, error)
+	// ListActivationCandidates returns identity's "activate"-filter
+	// items (same condition as List's "activate" branch — see that
+	// method's doc comment), ordered by Lookups DESC and capped at
+	// limit (limit <= 0 means unlimited) — pushed down into SQL (ORDER
+	// BY ... LIMIT), the same convention PriorityRepository.Top uses
+	// for its analogous "top N" query, rather than fetching everything
+	// and sorting/capping in Go. This is what backs
+	// application/planner.Planner.ActivationCandidates, called on every
+	// feedback request (see application/feedback.Service), so it stays
+	// one indexed query regardless of how large a learner's vocabulary
+	// grows.
+	ListActivationCandidates(ctx context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error)
 	// AllExpressions returns every one of identity's vocabulary
 	// expressions mapped to its item ID — the candidate set
 	// application/vocabulary.Service.DetectProduction scans a reviewed
 	// text against.
 	AllExpressions(ctx context.Context, identity learner.IdentityID) (map[string]string, error)
+	// SeedBank inserts entries as expression-bank baseline items (Task
+	// 7, PRD §55/§17.5) — the curated catalog from
+	// data/expressions/core.yaml — each with Lookups/Productions/
+	// SuccessfulProductions zero, all in ONE transaction (mirroring
+	// GrammarRepository.UpsertConcepts' bulk-in-one-tx shape for the
+	// analogous curated-catalog seed path), but ONLY inserting entries
+	// whose (identity, expression) has no existing row. Unlike
+	// UpsertOnLookup, an entry that already has a row (because a prior
+	// `jlp seed` already inserted it, or the learner has since looked it
+	// up or produced it for real) is a silent no-op for that entry: it
+	// must never reset or touch that row's counts. Implemented per-entry
+	// as INSERT ... ON CONFLICT (identity_id, expression) DO NOTHING
+	// against the same UNIQUE constraint UpsertOnLookup's own ON
+	// CONFLICT targets — see cmd/jlp/seed.go's seedExpressionBank for
+	// the only intended caller.
+	SeedBank(ctx context.Context, identity learner.IdentityID, entries []vocabulary.BankEntry, at time.Time) error
 }

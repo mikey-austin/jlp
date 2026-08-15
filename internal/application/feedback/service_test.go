@@ -15,10 +15,12 @@ import (
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	appfeedback "github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
+	"github.com/mikeyaustin/jlp/internal/application/planner"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
@@ -243,6 +245,25 @@ func (f *fakeGrammarRepo) CorrectionsForConcept(context.Context, learner.Identit
 	panic("not used by feedback service tests")
 }
 
+// fakeObsRepo is a minimal in-memory storage.ObservationRepository
+// double, needed only because planner.NewPlanner (wired into the
+// harness below so feedback.Service can call its
+// ActivationCandidates) requires one — no feedback service test
+// exercises observations, so every method panics if actually called.
+type fakeObsRepo struct{}
+
+func (f *fakeObsRepo) Upsert(context.Context, learnermodel.Observation) error {
+	panic("not used by feedback service tests")
+}
+
+func (f *fakeObsRepo) List(context.Context, learner.IdentityID) ([]learnermodel.Observation, error) {
+	panic("not used by feedback service tests")
+}
+
+func (f *fakeObsRepo) DeleteAll(context.Context, learner.IdentityID) error {
+	panic("not used by feedback service tests")
+}
+
 // fakePriorityRepo is an in-memory storage.PriorityRepository double:
 // a test sets rows directly (via the top field) rather than needing a
 // real planner.Recompute to populate them — these tests are about the
@@ -277,6 +298,20 @@ type fakeVocabRepo struct {
 	// RequestFeedback swallows a downstream vocabulary failure rather
 	// than propagating it to the caller.
 	recordErr error
+	// activateItems is what ListActivationCandidates sorts/caps and
+	// returns — pre-set directly by a test (the same "canned data, not
+	// a real filter re-implementation" style fakePriorityRepo.Top
+	// already uses), since the real WHERE-clause filter logic is pinned
+	// at the postgres integration layer (see
+	// adapters/postgres/vocabulary_test.go), not re-derived here.
+	// Consumed via planner.ActivationCandidates, wired into the
+	// harness's real *planner.Planner (see newTestHarnessWithGenerator),
+	// to fill teacher.ReviewInput.ExpressionsToEncourage.
+	activateItems []vocabulary.Item
+	// listErr, when set, fails every List call — used to prove a
+	// planner.ActivationCandidates failure surfaces as a
+	// RequestFeedback error.
+	listErr error
 }
 
 type productionCall struct {
@@ -311,12 +346,36 @@ func (f *fakeVocabRepo) List(context.Context, learner.IdentityID, string) ([]voc
 	panic("not used by feedback service tests")
 }
 
+// ListActivationCandidates mirrors the real adapter's contract (sort
+// activateItems by Lookups DESC, cap at limit) — the same "canned data,
+// real sort/limit" shape application/planner's own fakeVocabRepo uses,
+// since planner.ActivationCandidates is now a thin passthrough with no
+// sort/limit logic of its own (see that method's doc comment).
+func (f *fakeVocabRepo) ListActivationCandidates(_ context.Context, _ learner.IdentityID, limit int) ([]vocabulary.Item, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	items := append([]vocabulary.Item(nil), f.activateItems...)
+	sort.SliceStable(items, func(i, j int) bool { return items[i].Lookups > items[j].Lookups })
+	if limit > 0 && len(items) > limit {
+		items = items[:limit]
+	}
+	return items, nil
+}
+
 func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
 	out := map[string]string{}
 	for expr, item := range f.items {
 		out[expr] = item.ID
 	}
 	return out, nil
+}
+
+// SeedBank is not used by feedback service tests — the harness's
+// planner.Planner only ever calls ListActivationCandidates, never the
+// seed path.
+func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
+	panic("not used by feedback service tests")
 }
 
 // knownConceptsForFakeAI mirrors the two concept slugs
@@ -371,8 +430,17 @@ func newTestHarnessWithGenerator(gen ai.StructuredGenerator) *testHarness {
 	rec := learning.NewRecorder(events, inprocbus.New())
 	vocabRepo := newFakeVocabRepo()
 	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
+	// teachingPlanner is a REAL planner.Planner (not a fake) over
+	// vocabRepo, the same "real collaborator, fake edges" shape the rest
+	// of this harness uses — RequestFeedback calls its
+	// ActivationCandidates directly (see this package's controller
+	// resolution in the Task 7 brief: a thin repo passthrough, not
+	// Recompute, so it's safe to leave on the request path). obs/events/
+	// grammar/priorities are only there to satisfy NewPlanner's
+	// signature; ActivationCandidates never touches them.
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, events, grammarRepo, priorities, vocabRepo, time.Now)
 	t := teacher.New(gen)
-	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, vocabSvc, t, rec)
+	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, teachingPlanner, vocabSvc, t, rec)
 	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events, priorities: priorities, vocab: vocabRepo}
 }
 
@@ -1087,5 +1155,143 @@ func TestRequestFeedbackVocabularyDetectionFailureIsNonFatal(t *testing.T) {
 	}
 	if len(h.repo.feedback) != 1 {
 		t.Fatalf("persisted feedback count = %d, want 1 (the review itself must still succeed)", len(h.repo.feedback))
+	}
+}
+
+// TestRequestFeedbackExpressionsToEncourageReachRenderedPrompt is Task
+// 7's closing-the-loop pin (PRD §55/§17.5): an activation candidate
+// seeded into the VocabularyRepository (via planner.ActivationCandidates,
+// a thin passthrough over List(filter="activate")) must actually reach
+// the rendered teacher.feedback.v2 USER prompt, formatted
+// "expression (reading) — meaning" — not just live in the in-memory
+// ReviewInput.ExpressionsToEncourage slice a template bug could
+// silently drop. Captured via a stub generator, mirroring
+// TestRequestFeedbackRecentErrorsReachRenderedPrompt's Task 5 pin.
+func TestRequestFeedbackExpressionsToEncourageReachRenderedPrompt(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.vocab.activateItems = []vocabulary.Item{
+		{Expression: "それはそれとして", Reading: "それはそれとして", Meaning: "that aside; setting that aside", Kind: vocabulary.KindExpression},
+		{Expression: "気がしないでもない", Reading: "きがしないでもない", Meaning: "I do feel a bit like...", Kind: vocabulary.KindExpression},
+	}
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+
+	if !strings.Contains(gen.lastReq.User, "gently encourage one") {
+		t.Fatalf("rendered prompt User = %q, missing the encourage-block instruction", gen.lastReq.User)
+	}
+	// Reading equals Expression here (both pure kana), so the
+	// formatted line must omit the redundant parenthetical.
+	wantLine := "- それはそれとして — that aside; setting that aside"
+	if !strings.Contains(gen.lastReq.User, wantLine) {
+		t.Fatalf("rendered prompt User = %q, missing %q", gen.lastReq.User, wantLine)
+	}
+	if gen.lastReq.PromptVersion != "v2" {
+		t.Fatalf("PromptVersion = %q, want v2", gen.lastReq.PromptVersion)
+	}
+}
+
+// TestRequestFeedbackNoActivationCandidatesOmitsEncourageSection: an
+// identity with no activation candidates yet must render a prompt with
+// no ExpressionsToEncourage section at all (the v2 template's
+// {{if .ExpressionsToEncourage}} guard), not an empty-but-present one —
+// the default harness (h.vocab.activateItems unset) exercises this.
+func TestRequestFeedbackNoActivationCandidatesOmitsEncourageSection(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	if strings.Contains(gen.lastReq.User, "gently encourage") {
+		t.Fatalf("rendered prompt User unexpectedly contains the encourage section with no activation candidates seeded: %q", gen.lastReq.User)
+	}
+}
+
+// TestRequestFeedbackExpressionsToEncourageCappedAtFive pins the
+// brief's "ActivationCandidates(5)" cap: seeding 7 candidates must
+// still only render 5 lines, the highest-Lookups ones (planner.
+// ActivationCandidates orders by Lookups DESC before limiting — see
+// that method's own unit tests in application/planner for the sort
+// itself; this test is about the cap actually reaching the prompt).
+func TestRequestFeedbackExpressionsToEncourageCappedAtFive(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	items := make([]vocabulary.Item, 7)
+	for i := range items {
+		items[i] = vocabulary.Item{
+			Expression: fmt.Sprintf("expr%d", i),
+			Meaning:    "m",
+			Kind:       vocabulary.KindExpression,
+			Lookups:    7 - i, // expr0 highest, expr6 lowest
+		}
+	}
+	h.vocab.activateItems = items
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+
+	count := strings.Count(gen.lastReq.User, "- expr")
+	if count != 5 {
+		t.Fatalf("rendered prompt has %d encourage lines, want 5 (capped): %q", count, gen.lastReq.User)
+	}
+	for _, want := range []string{"expr0", "expr1", "expr2", "expr3", "expr4"} {
+		if !strings.Contains(gen.lastReq.User, want) {
+			t.Fatalf("rendered prompt missing top-5-by-lookups candidate %q: %q", want, gen.lastReq.User)
+		}
+	}
+	for _, notWant := range []string{"expr5", "expr6"} {
+		if strings.Contains(gen.lastReq.User, notWant) {
+			t.Fatalf("rendered prompt unexpectedly contains lower-ranked candidate %q: %q", notWant, gen.lastReq.User)
+		}
+	}
+}
+
+// TestRequestFeedbackActivationCandidatesErrorPropagates: a failure
+// listing activation candidates must surface as a RequestFeedback
+// error, the same fatal treatment RecentErrors' underlying Top(5) call
+// gets — this is a query feeding the prompt, not enrichment layered on
+// top of an already-successful review (contrast with vocab.
+// DetectProduction's deliberately non-fatal treatment, below).
+func TestRequestFeedbackActivationCandidatesErrorPropagates(t *testing.T) {
+	h := newTestHarness()
+	h.vocab.listErr = errors.New("boom: vocab repo unavailable")
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err == nil {
+		t.Fatal("expected an error when listing activation candidates fails, got nil")
+	}
+	if len(h.repo.feedback) != 0 {
+		t.Fatalf("persisted feedback count = %d, want 0 (nothing should persist before the review even starts)", len(h.repo.feedback))
 	}
 }

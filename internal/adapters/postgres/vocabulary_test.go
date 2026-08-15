@@ -242,12 +242,139 @@ func TestVocabularyRecordProductionIncrementsCounts(t *testing.T) {
 		t.Fatalf("List(\"produced\") = %+v, want exactly the produced item", filtered)
 	}
 
+	// Neither seeded item qualifies for "activate" (Task 7, PRD
+	// §55/§17.5): 取り組む is kind=word with Lookups=1 (< 3) and
+	// Productions=2 (!= 0); 気配 is kind=word with Productions=0 but
+	// Lookups=1 (< 3) — see TestVocabularyActivateFilterMatchesEitherClause
+	// below for the filter actually matching something.
 	activate, err := repo.List(ctx, identity, "activate")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(activate) != 0 {
-		t.Fatalf("List(\"activate\") = %+v, want empty (Task 7 wires this filter up)", activate)
+		t.Fatalf("List(\"activate\") = %+v, want empty (neither seeded item matches the filter)", activate)
+	}
+}
+
+// TestVocabularyActivateFilterMatchesEitherClause pins Task 7's exact
+// activation-candidate condition (PRD §55/§17.5): (Lookups >= 3 AND
+// Productions = 0) OR (Kind IN (expression, pattern) AND Productions =
+// 0) — five items, one per boundary, prove both clauses independently
+// and that Productions != 0 excludes an item from EITHER clause.
+func TestVocabularyActivateFilterMatchesEitherClause(t *testing.T) {
+	repo, identity := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	// A: kind=word, Lookups=3, Productions=0 -> matches clause 1.
+	if _, _, err := repo.UpsertOnLookup(ctx, identity, "見送る", "", "", "", "", vocabulary.KindWord, "", now); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ { // two more lookups -> Lookups=3
+		if _, _, err := repo.UpsertOnLookup(ctx, identity, "見送る", "", "", "", "", vocabulary.KindWord, "", now.Add(time.Duration(i+1)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// B: kind=word, Lookups=2, Productions=0 -> matches neither clause
+	// (below the Lookups>=3 floor, and not a bank kind).
+	if _, _, err := repo.UpsertOnLookup(ctx, identity, "様子", "", "", "", "", vocabulary.KindWord, "", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.UpsertOnLookup(ctx, identity, "様子", "", "", "", "", vocabulary.KindWord, "", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	// C: a freshly-seeded bank item, kind=expression, Lookups=0,
+	// Productions=0 -> matches clause 2 from the moment it's seeded,
+	// with no lookups of its own at all.
+	if err := repo.SeedBank(ctx, identity, []vocabulary.BankEntry{{Expression: "それはそれとして", Meaning: "that aside", Kind: vocabulary.KindExpression}}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	// D: kind=pattern, Lookups=3, but Productions=1 -> excluded from
+	// BOTH clauses despite satisfying the Lookups>=3 floor, because
+	// Productions != 0.
+	itemD, _, err := repo.UpsertOnLookup(ctx, identity, "〜に越したことはない", "", "", "", "", vocabulary.KindPattern, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		if _, _, err := repo.UpsertOnLookup(ctx, identity, "〜に越したことはない", "", "", "", "", vocabulary.KindPattern, "", now.Add(time.Duration(i+1)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := repo.RecordProduction(ctx, identity, itemD.ID, true, now.Add(5*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	activate, err := repo.List(ctx, identity, "activate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make(map[string]bool, len(activate))
+	for _, item := range activate {
+		got[item.Expression] = true
+	}
+	if len(activate) != 2 || !got["見送る"] || !got["それはそれとして"] {
+		t.Fatalf("List(\"activate\") = %+v, want exactly [見送る, それはそれとして]", activate)
+	}
+}
+
+// TestVocabularyListActivationCandidatesOrdersAndLimitsInSQL pins the
+// code-review fix that moved ORDER BY lookups DESC / LIMIT out of
+// application/planner.Planner.ActivationCandidates (a Go-side sort over
+// List's output) and into this dedicated query — the same convention
+// PriorityRepository.Top already uses. Three bank items with distinct
+// Lookups counts, requested with limit=2, must come back highest-first
+// and capped.
+func TestVocabularyListActivationCandidatesOrdersAndLimitsInSQL(t *testing.T) {
+	repo, identity := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	entries := []vocabulary.BankEntry{
+		{Expression: "それはそれとして", Meaning: "m1", Kind: vocabulary.KindExpression},
+		{Expression: "〜に越したことはない", Meaning: "m2", Kind: vocabulary.KindPattern},
+		{Expression: "気が置けない", Meaning: "m3", Kind: vocabulary.KindExpression},
+	}
+	if err := repo.SeedBank(ctx, identity, entries, now); err != nil {
+		t.Fatal(err)
+	}
+	// Bump lookups for two of the three (bank items start at 0) via real
+	// lookups, giving them distinct, orderable counts; the third stays
+	// at 0 and should be excluded once limit=2 caps the result.
+	for i := 0; i < 5; i++ {
+		if _, _, err := repo.UpsertOnLookup(ctx, identity, "それはそれとして", "", "", "", "", vocabulary.KindExpression, "", now.Add(time.Duration(i+1)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 2; i++ {
+		if _, _, err := repo.UpsertOnLookup(ctx, identity, "〜に越したことはない", "", "", "", "", vocabulary.KindPattern, "", now.Add(time.Duration(i+10)*time.Minute)); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	got, err := repo.ListActivationCandidates(ctx, identity, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListActivationCandidates(limit=2) = %+v, want exactly 2 items", got)
+	}
+	if got[0].Expression != "それはそれとして" || got[0].Lookups != 5 {
+		t.Fatalf("got[0] = %+v, want それはそれとして with Lookups=5 (highest)", got[0])
+	}
+	if got[1].Expression != "〜に越したことはない" || got[1].Lookups != 2 {
+		t.Fatalf("got[1] = %+v, want 〜に越したことはない with Lookups=2", got[1])
+	}
+
+	all, err := repo.ListActivationCandidates(ctx, identity, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("ListActivationCandidates(limit=0) = %+v, want all 3 items (unlimited)", all)
 	}
 }
 
@@ -269,5 +396,141 @@ func TestVocabularyAllExpressionsMapsExpressionToItemID(t *testing.T) {
 	}
 	if got["取り組む"] != item.ID {
 		t.Fatalf("AllExpressions()[取り組む] = %q, want %q", got["取り組む"], item.ID)
+	}
+}
+
+// TestVocabularySeedBankInsertsOnceAndNeverResetsCounts pins the
+// brief's seed-idempotency requirement (Task 7, PRD §55/§17.5): a first
+// SeedBank call creates a zero-count baseline row; once the learner has
+// actually looked the expression up for real (Lookups bumped by
+// UpsertOnLookup), a SECOND SeedBank call for the same expression —
+// exactly what a `jlp seed` rerun does — must be a silent no-op: no
+// duplicate row, and critically, Lookups must NOT be reset back to 0.
+// This is what distinguishes SeedBank from UpsertOnLookup, whose own ON
+// CONFLICT DO UPDATE would have clobbered it.
+func TestVocabularySeedBankInsertsOnceAndNeverResetsCounts(t *testing.T) {
+	repo, identity := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	entry := []vocabulary.BankEntry{{Expression: "それはそれとして", Meaning: "that aside; setting that aside", Kind: vocabulary.KindExpression}}
+
+	if err := repo.SeedBank(ctx, identity, entry, now); err != nil {
+		t.Fatal(err)
+	}
+	first, err := repo.List(ctx, identity, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(first) != 1 {
+		t.Fatalf("List after first seed = %+v, want exactly 1 item", first)
+	}
+	if first[0].Lookups != 0 || first[0].Productions != 0 {
+		t.Fatalf("seeded item = %+v, want Lookups=0 Productions=0 (bank baseline)", first[0])
+	}
+	if first[0].Kind != vocabulary.KindExpression {
+		t.Fatalf("seeded item Kind = %q, want %q", first[0].Kind, vocabulary.KindExpression)
+	}
+
+	// Simulate real learner usage: a genuine lookup bumps Lookups to 1.
+	if _, _, err := repo.UpsertOnLookup(ctx, identity, "それはそれとして", "", "", "", "", vocabulary.KindExpression, "", now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-seed (simulating a second `jlp seed` run) — must be a no-op.
+	if err := repo.SeedBank(ctx, identity, entry, now.Add(2*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := repo.List(ctx, identity, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(second) != 1 {
+		t.Fatalf("List after re-seed = %+v, want still exactly 1 item (no duplicate row)", second)
+	}
+	if second[0].Lookups != 1 {
+		t.Fatalf("re-seed reset Lookups to %d, want 1 preserved from the real lookup in between", second[0].Lookups)
+	}
+	if second[0].ID != first[0].ID {
+		t.Fatalf("re-seed produced a different item ID: %q vs original %q", second[0].ID, first[0].ID)
+	}
+}
+
+// TestVocabularySeedBankDoesNotOverwriteAnExistingLookedUpItem covers
+// the other order: an expression the learner already looked up BEFORE
+// it was ever in the bank (e.g. they encountered it naturally, then a
+// later `data/expressions/core.yaml` edit adds it) must keep its real
+// Reading/Meaning/Source from that lookup — SeedBank must not silently
+// overwrite them with the bank's own values.
+func TestVocabularySeedBankDoesNotOverwriteAnExistingLookedUpItem(t *testing.T) {
+	repo, identity := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	item, _, err := repo.UpsertOnLookup(ctx, identity, "気が置けない", "きがおけない", "learner's own note", "novel: 何か", "", vocabulary.KindExpression, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	entry := []vocabulary.BankEntry{{Expression: "気が置けない", Reading: "きがおけない", Meaning: "bank meaning", Kind: vocabulary.KindExpression}}
+	if err := repo.SeedBank(ctx, identity, entry, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := repo.List(ctx, identity, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("List = %+v, want exactly 1 item (no duplicate)", all)
+	}
+	if all[0].ID != item.ID || all[0].Lookups != 1 || all[0].Meaning != "learner's own note" {
+		t.Fatalf("item = %+v, want the learner's original lookup untouched by the later seed", all[0])
+	}
+}
+
+// TestVocabularySeedBankInsertsMultipleEntriesInOneTransaction pins the
+// code-review fix that made SeedBank bulk (mirroring
+// GrammarRepository.UpsertConcepts' shape) instead of one transaction
+// per entry: a single call with several entries — one brand new, one
+// already present from a prior real lookup — commits every new entry
+// and leaves the pre-existing one untouched, all in the SAME call.
+func TestVocabularySeedBankInsertsMultipleEntriesInOneTransaction(t *testing.T) {
+	repo, identity := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	if _, _, err := repo.UpsertOnLookup(ctx, identity, "腹が立つ", "はらがたつ", "learner's own note", "", "", vocabulary.KindExpression, "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	entries := []vocabulary.BankEntry{
+		{Expression: "それはそれとして", Meaning: "that aside", Kind: vocabulary.KindExpression},
+		{Expression: "腹が立つ", Reading: "はらがたつ", Meaning: "bank meaning (should not apply)", Kind: vocabulary.KindExpression},
+		{Expression: "〜に越したことはない", Reading: "にこしたことはない", Meaning: "there's nothing better than", Kind: vocabulary.KindPattern},
+	}
+	if err := repo.SeedBank(ctx, identity, entries, now.Add(time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := repo.List(ctx, identity, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("List = %+v, want exactly 3 items (1 pre-existing + 2 newly seeded)", all)
+	}
+	byExpr := make(map[string]vocabulary.Item, len(all))
+	for _, item := range all {
+		byExpr[item.Expression] = item
+	}
+	if got := byExpr["腹が立つ"]; got.Lookups != 1 || got.Meaning != "learner's own note" {
+		t.Fatalf("腹が立つ = %+v, want the pre-existing lookup untouched by the batch seed", got)
+	}
+	if got := byExpr["それはそれとして"]; got.Lookups != 0 || got.Meaning != "that aside" {
+		t.Fatalf("それはそれとして = %+v, want a fresh bank baseline", got)
+	}
+	if got := byExpr["〜に越したことはない"]; got.Kind != vocabulary.KindPattern {
+		t.Fatalf("〜に越したことはない = %+v, want Kind=pattern", got)
 	}
 }

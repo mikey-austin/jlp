@@ -9,12 +9,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	appfeedback "github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
+	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -161,8 +163,14 @@ func feedbackTestServer(t *testing.T, content string) (http.Handler, session.Ses
 	opts.Sessions = sessions.NewService(sessionRepo)
 	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
-	vocabSvc := appvocabulary.NewService(newFakeVocabRepo(), rec)
-	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, vocabSvc, teacher.New(fakeai.New()), rec)
+	vocabRepo := newFakeVocabRepo()
+	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
+	// teachingPlanner is real (not a fake): RequestFeedback calls its
+	// ActivationCandidates directly (see application/feedback.Service's
+	// NewService doc comment). obsRepo is only there to satisfy
+	// NewPlanner's signature — ActivationCandidates never touches it.
+	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, fakeGrammarRepo{}, fakePriorityRepo{}, vocabRepo, time.Now)
+	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec)
 
 	sess, err := opts.Sessions.Create(context.Background(), "dev", "日記", "Diary", session.Profile{
 		TeacherMode:         "teacher",

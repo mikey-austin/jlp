@@ -60,21 +60,31 @@ type ReviewInput struct {
 	// the v2 system template's "chosen ONLY from the provided candidate
 	// list" instruction.
 	ConceptCandidates []string
+	// ExpressionsToEncourage is PRD §55/§17.5's vocabulary activator:
+	// up to 5 "expression (reading) — meaning" lines for expressions the
+	// learner knows but hasn't produced (see
+	// application/planner.Planner.ActivationCandidates, which
+	// application/feedback.Service formats this from). Unlike
+	// RecentErrors/ConceptCandidates, this is advisory, not
+	// instructional — the v2 user template asks the model to weave ONE
+	// in only when it fits naturally, never to force it.
+	ExpressionsToEncourage []string
 }
 
 // promptData mirrors exactly what templates/teacher.feedback.v2.*.md
 // range/index over.
 type promptData struct {
-	TeacherMode         string
-	Strictness          string
-	ExplanationLanguage string
-	Purpose             string
-	Audience            string
-	Register            string
-	Context             string
-	Selection           string
-	RecentErrors        []string
-	ConceptCandidates   []string
+	TeacherMode            string
+	Strictness             string
+	ExplanationLanguage    string
+	Purpose                string
+	Audience               string
+	Register               string
+	Context                string
+	Selection              string
+	RecentErrors           []string
+	ConceptCandidates      []string
+	ExpressionsToEncourage []string
 }
 
 // The following DTOs mirror schemas/defs/correction_result.v1.json
@@ -106,16 +116,17 @@ type correctionResultDTO struct {
 // latter carries RequestID/provenance the feedback pipeline persists).
 func (a *Agent) ReviewWriting(ctx context.Context, in ReviewInput) (correction.Result, ai.StructuredResponse, error) {
 	data := promptData{
-		TeacherMode:         in.Session.Profile.TeacherMode,
-		Strictness:          in.Session.Profile.Strictness,
-		ExplanationLanguage: in.Session.Profile.ExplanationLanguage,
-		Purpose:             in.Session.Purpose,
-		Audience:            in.Session.Profile.Audience,
-		Register:            in.Session.Profile.Register,
-		Context:             in.Context,
-		Selection:           in.Selection,
-		RecentErrors:        in.RecentErrors,
-		ConceptCandidates:   in.ConceptCandidates,
+		TeacherMode:            in.Session.Profile.TeacherMode,
+		Strictness:             in.Session.Profile.Strictness,
+		ExplanationLanguage:    in.Session.Profile.ExplanationLanguage,
+		Purpose:                in.Session.Purpose,
+		Audience:               in.Session.Profile.Audience,
+		Register:               in.Session.Profile.Register,
+		Context:                in.Context,
+		Selection:              in.Selection,
+		RecentErrors:           in.RecentErrors,
+		ConceptCandidates:      in.ConceptCandidates,
+		ExpressionsToEncourage: in.ExpressionsToEncourage,
 	}
 	rendered, err := prompts.Render(promptName, promptVersion, data)
 	if err != nil {

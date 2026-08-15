@@ -84,6 +84,107 @@ func (q *Queries) InsertVocabularyEvent(ctx context.Context, arg InsertVocabular
 	return err
 }
 
+const insertVocabularyItemIfAbsent = `-- name: InsertVocabularyItemIfAbsent :exec
+INSERT INTO vocabulary_items
+    (id, identity_id, expression, reading, meaning, kind, source, lookups, productions, successful_productions, first_seen, last_event)
+VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0, 0, $8, $8)
+ON CONFLICT (identity_id, expression) DO NOTHING
+`
+
+type InsertVocabularyItemIfAbsentParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+	Expression string
+	Reading    string
+	Meaning    string
+	Kind       string
+	Source     string
+	FirstSeen  pgtype.Timestamptz
+}
+
+// Task 7's expression-bank seed path: unlike UpsertVocabularyItemOnLookup,
+// a conflict on (identity_id, expression) is a silent no-op — an
+// existing item's lookups/productions/reading/etc. are never touched.
+// This is what makes `jlp seed` re-runnable without resetting a
+// learner's real usage of a bank expression back to zero.
+func (q *Queries) InsertVocabularyItemIfAbsent(ctx context.Context, arg InsertVocabularyItemIfAbsentParams) error {
+	_, err := q.db.Exec(ctx, insertVocabularyItemIfAbsent,
+		arg.ID,
+		arg.IdentityID,
+		arg.Expression,
+		arg.Reading,
+		arg.Meaning,
+		arg.Kind,
+		arg.Source,
+		arg.FirstSeen,
+	)
+	return err
+}
+
+const listVocabularyActivationCandidates = `-- name: ListVocabularyActivationCandidates :many
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event
+FROM vocabulary_items
+WHERE identity_id = $1
+  AND (
+        (lookups >= 3 AND productions = 0)
+        OR (kind IN ('expression', 'pattern') AND productions = 0)
+      )
+ORDER BY lookups DESC
+LIMIT NULLIF($2::int, 0)
+`
+
+type ListVocabularyActivationCandidatesParams struct {
+	IdentityID string
+	LimitCount int32
+}
+
+// PRD §55/§17.5's vocabulary activator, ranked and capped in SQL — the
+// same WHERE condition ListVocabularyItems' "activate" branch uses
+// above, but with ORDER BY lookups DESC LIMIT pushed down here instead
+// of fetched-then-sorted in Go, matching the ORDER BY ... LIMIT $n
+// convention TopPriorities already uses for the analogous "top N"
+// query over learner_priorities. application/planner.Planner.
+// ActivationCandidates is a thin passthrough to this (not to
+// ListVocabularyItems), precisely so it stays cheap to call on every
+// feedback request even as a learner's vocabulary grows.
+// limit_count = 0 means unlimited (NULLIF makes LIMIT NULL, i.e. no
+// cap) — see application/planner.Planner.ActivationCandidates' doc
+// comment for why limit<=0 is a documented "no cap" affordance.
+func (q *Queries) ListVocabularyActivationCandidates(ctx context.Context, arg ListVocabularyActivationCandidatesParams) ([]VocabularyItem, error) {
+	rows, err := q.db.Query(ctx, listVocabularyActivationCandidates, arg.IdentityID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VocabularyItem
+	for rows.Next() {
+		var i VocabularyItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdentityID,
+			&i.Expression,
+			&i.Reading,
+			&i.Meaning,
+			&i.Kind,
+			&i.JlptLevel,
+			&i.Source,
+			&i.Lookups,
+			&i.Productions,
+			&i.SuccessfulProductions,
+			&i.FirstSeen,
+			&i.LastEvent,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVocabularyExpressions = `-- name: ListVocabularyExpressions :many
 SELECT id, expression FROM vocabulary_items WHERE identity_id = $1
 `
@@ -122,7 +223,10 @@ WHERE identity_id = $1
         $2::text = ''
         OR ($2::text = 'looked-up' AND lookups > 0)
         OR ($2::text = 'produced' AND productions > 0)
-        OR ($2::text = 'activate' AND false) -- Task 7 wires this up; empty until then
+        OR ($2::text = 'activate' AND (
+              (lookups >= 3 AND productions = 0)
+              OR (kind IN ('expression', 'pattern') AND productions = 0)
+            ))
       )
 ORDER BY last_event DESC
 `

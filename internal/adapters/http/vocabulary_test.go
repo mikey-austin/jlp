@@ -116,6 +116,46 @@ func (f *fakeVocabRepo) AllExpressions(_ context.Context, identity learner.Ident
 	return out, nil
 }
 
+// SeedBank mirrors the real adapter's insert-if-absent contract (see
+// storage.VocabularyRepository.SeedBank): a no-op per-entry when
+// (identity, expression) already has a row. Not exercised by any
+// httpx test — implemented for real rather than panicking so this
+// fake stays usable if a future test needs it.
+func (f *fakeVocabRepo) SeedBank(_ context.Context, identity learner.IdentityID, entries []vocabulary.BankEntry, at time.Time) error {
+	for _, e := range entries {
+		k := vocabKey(identity, e.Expression)
+		if _, ok := f.items[k]; ok {
+			continue
+		}
+		f.nextID++
+		item := &vocabulary.Item{
+			ID:         "vocab-" + string(rune('0'+f.nextID)),
+			IdentityID: identity,
+			Expression: e.Expression,
+			Reading:    e.Reading,
+			Meaning:    e.Meaning,
+			Kind:       e.Kind,
+			Source:     "expression bank",
+			FirstSeen:  at,
+			LastEvent:  at,
+		}
+		f.items[k] = item
+		f.byID[item.ID] = item
+	}
+	return nil
+}
+
+// ListActivationCandidates must NOT panic: feedback_test.go's
+// feedbackTestServer wires this same fake into a real planner.Planner,
+// and RequestFeedback calls its ActivationCandidates (backed by this
+// method) on every review round. No httpx test asserts on its
+// contents, so it just answers empty — mirroring this fake's
+// pre-existing List(filter="activate") behavior, which always
+// `continue`d past every item.
+func (f *fakeVocabRepo) ListActivationCandidates(context.Context, learner.IdentityID, int) ([]vocabulary.Item, error) {
+	return nil, nil
+}
+
 func vocabularyTestOptions() (Options, *fakeVocabRepo) {
 	opts := testOptions()
 	repo := newFakeVocabRepo()

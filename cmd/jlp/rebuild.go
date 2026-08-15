@@ -32,7 +32,8 @@ func runRebuildModel(ctx context.Context, cfg config.Config) error {
 	obsRepo := postgres.NewObservationRepository(pool)
 	grammarRepo := postgres.NewGrammarRepository(pool)
 	prioRepo := postgres.NewPriorityRepository(pool)
-	p := planner.NewPlanner(obsRepo, eventRepo, grammarRepo, prioRepo, time.Now)
+	vocabRepo := postgres.NewVocabularyRepository(pool)
+	p := planner.NewPlanner(obsRepo, eventRepo, grammarRepo, prioRepo, vocabRepo, time.Now)
 
 	identities, err := identityRepo.ListIdentities(ctx)
 	if err != nil {

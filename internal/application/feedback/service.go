@@ -15,6 +15,7 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
+	"github.com/mikeyaustin/jlp/internal/application/planner"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/diff"
@@ -35,6 +36,11 @@ const contextWindow = 200
 // steer severity/emphasis without crowding out the rest of the prompt.
 const recentErrorsLimit = 5
 
+// activationCandidatesLimit caps how many activation candidates feed
+// the Teacher prompt's ExpressionsToEncourage — PRD §55/§17.5's
+// vocabulary activator, the brief's "ActivationCandidates(5)".
+const activationCandidatesLimit = 5
+
 // ErrInvalidSelection is returned when Request's Start/End don't
 // satisfy 0 <= Start <= End <= len(document runes).
 var ErrInvalidSelection = errors.New("feedback: invalid selection range")
@@ -49,6 +55,7 @@ type Service struct {
 	repo       storage.FeedbackRepository
 	grammar    storage.GrammarRepository
 	priorities storage.PriorityRepository
+	planner    *planner.Planner
 	vocab      *appvocabulary.Service
 	teacher    *teacher.Agent
 	rec        *learning.Recorder
@@ -56,15 +63,24 @@ type Service struct {
 
 // NewService wires the feedback pipeline. priorities feeds the Teacher
 // prompt's RecentErrors (see RequestFeedback below) — the service reads
-// storage.PriorityRepository.Top directly rather than taking a
-// *planner.Planner, deliberately keeping the planner's own Recompute
-// off the request path: priorities are kept fresh by the learnermodel
-// Updater (see that package's SetPlanner) reacting to the PRECEDING
-// request's events, not recomputed synchronously on every review.
+// storage.PriorityRepository.Top directly rather than going through
+// planner, deliberately keeping the planner's own Recompute off the
+// request path: priorities are kept fresh by the learnermodel Updater
+// (see that package's SetPlanner) reacting to the PRECEDING request's
+// events, not recomputed synchronously on every review.
+//
+// planner IS used directly, though, for its ActivationCandidates method
+// (PRD §55/§17.5's vocabulary activator — see expressionsToEncourage
+// below): unlike Recompute, ActivationCandidates is a thin,
+// stateless passthrough over storage.VocabularyRepository.List — one
+// indexed SELECT plus an in-memory sort, no derived state to keep
+// fresh — so calling it live on every request costs nothing Recompute's
+// off-request-path treatment was guarding against.
+//
 // vocab.DetectProduction runs at the very end of every RequestFeedback
 // call — see that method's closing comment for why it's non-fatal.
-func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, vocab *appvocabulary.Service, t *teacher.Agent, rec *learning.Recorder) *Service {
-	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, vocab: vocab, teacher: t, rec: rec}
+func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, plnr *planner.Planner, vocab *appvocabulary.Service, t *teacher.Agent, rec *learning.Recorder) *Service {
+	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, planner: plnr, vocab: vocab, teacher: t, rec: rec}
 }
 
 // Request asks for AI feedback on a slice of a document. Start/End are
@@ -170,13 +186,23 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		return Feedback{}, fmt.Errorf("feedback: list priorities: %w", err)
 	}
 
+	expressionsToEncourage, err := s.expressionsToEncourage(ctx, req.Identity)
+	if err != nil {
+		// Phrased distinctly from planner.ActivationCandidates' own
+		// "planner: list activation candidates: %w" wrap, so the two
+		// don't stutter into "feedback: list activation candidates:
+		// planner: list activation candidates: ...".
+		return Feedback{}, fmt.Errorf("feedback: expressions to encourage: %w", err)
+	}
+
 	result, resp, err := s.teacher.ReviewWriting(ctx, teacher.ReviewInput{
-		Identity:          req.Identity,
-		Session:           sess,
-		Selection:         selectionText,
-		Context:           contextText,
-		RecentErrors:      recentErrors,
-		ConceptCandidates: conceptCandidates,
+		Identity:               req.Identity,
+		Session:                sess,
+		Selection:              selectionText,
+		Context:                contextText,
+		RecentErrors:           recentErrors,
+		ConceptCandidates:      conceptCandidates,
+		ExpressionsToEncourage: expressionsToEncourage,
 	})
 	if err != nil {
 		return Feedback{}, err
@@ -455,6 +481,32 @@ func (s *Service) recentErrors(ctx context.Context, identity learner.IdentityID)
 	lines := make([]string, 0, len(top))
 	for _, p := range top {
 		lines = append(lines, fmt.Sprintf("%s (%s weakness, score %.1f): %s", p.Subject, p.SubjectType, p.Score, p.Reason))
+	}
+	return lines, nil
+}
+
+// expressionsToEncourage formats identity's top activation candidates
+// (PRD §55/§17.5's vocabulary activator — application/planner.Planner's
+// ActivationCandidates, capped at activationCandidatesLimit) as the
+// human-readable lines the teacher.feedback.v2 prompt's
+// ExpressionsToEncourage range renders directly: "expression (reading)
+// — meaning", with the parenthetical reading dropped when it's empty or
+// identical to the expression itself (a pure-kana entry has nothing to
+// disambiguate). An identity with no candidates yet gets an empty
+// slice — the prompt template already tolerates that via
+// {{if .ExpressionsToEncourage}}.
+func (s *Service) expressionsToEncourage(ctx context.Context, identity learner.IdentityID) ([]string, error) {
+	items, err := s.planner.ActivationCandidates(ctx, identity, activationCandidatesLimit)
+	if err != nil {
+		return nil, err
+	}
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.Reading != "" && item.Reading != item.Expression {
+			lines = append(lines, fmt.Sprintf("%s (%s) — %s", item.Expression, item.Reading, item.Meaning))
+		} else {
+			lines = append(lines, fmt.Sprintf("%s — %s", item.Expression, item.Meaning))
+		}
 	}
 	return lines, nil
 }

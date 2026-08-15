@@ -12,3 +12,6 @@ The learner's recent recurring problem areas (weigh these when deciding severity
 {{if .ConceptCandidates}}Known grammar concepts (slug — name):
 {{range .ConceptCandidates}}{{.}}
 {{end}}{{end}}
+{{if .ExpressionsToEncourage}}If any of these expressions the learner knows but hasn't used would fit naturally, gently encourage one:
+{{range .ExpressionsToEncourage}}- {{.}}
+{{end}}{{end}}
