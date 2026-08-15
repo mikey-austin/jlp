@@ -284,6 +284,22 @@ func (t *jsonrpcTransport) Run(ctx context.Context) error {
 	readDone := make(chan struct{})
 	go func() {
 		defer close(readDone)
+		// Belt-and-suspenders, same as every other spawned goroutine in
+		// this codebase's adapters (dispatch/handleEvent above,
+		// internal/adapters/slack's own dispatch/handleEvent,
+		// cmd/jlp/summary.go's summaryJob, internal/tools/registry.go's
+		// Invoke): a panic anywhere in readLoop — a malformed line
+		// tripping something json.Unmarshal's own type didn't already
+		// guard against, say — must never take down the whole process
+		// just because it happened on this goroutine rather than
+		// dispatch's. Recovering here still leaves readLoop's own
+		// return path (io.EOF/read error) as the normal, expected way
+		// this goroutine ends; this only guards the abnormal one.
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("signal: read loop panicked", "panic", r, "stack", string(debug.Stack()))
+			}
+		}()
 		t.readLoop(conn)
 	}()
 
@@ -356,13 +372,28 @@ func (t *jsonrpcTransport) call(ctx context.Context, method string, params any) 
 		t.pendingMu.Unlock()
 	}()
 
+	// connMu is held across the Write itself, not just the read of
+	// t.conn: two concurrent calls (Adapter.Send is documented as
+	// callable outside handle's own synchronous cycle — see
+	// ports/channels.Channel's doc comment — so concurrent callers are
+	// an anticipated, not merely theoretical, case) must never have
+	// their two request lines' bytes interleaved on the wire, which an
+	// unlocked conn.Write from two goroutines could otherwise risk —
+	// net.Conn permits concurrent use (Read/Write/Close from different
+	// goroutines is documented-safe), but does NOT guarantee two
+	// concurrent Write calls stay byte-atomic relative to each other,
+	// and this protocol is framed by newlines, not length-prefixed, so
+	// an interleaved write would corrupt more than just the two calls
+	// involved.
 	t.connMu.Lock()
 	conn := t.conn
-	t.connMu.Unlock()
 	if conn == nil {
+		t.connMu.Unlock()
 		return nil, fmt.Errorf("signal: %s: not connected", method)
 	}
-	if _, err := conn.Write(append(line, '\n')); err != nil {
+	_, err = conn.Write(append(line, '\n'))
+	t.connMu.Unlock()
+	if err != nil {
 		return nil, fmt.Errorf("signal: write %s request: %w", method, err)
 	}
 

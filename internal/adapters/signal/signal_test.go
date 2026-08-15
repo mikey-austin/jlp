@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"strings"
@@ -597,6 +598,105 @@ func TestJSONRPCTransportForwardsReceiveNotificationOverRealConnection(t *testin
 
 	cancel()
 	<-runDone
+}
+
+// TestJSONRPCTransportConcurrentSendMessageDoesNotInterleaveWrites pins
+// that concurrent SendMessage calls (Adapter.Send is documented as
+// callable outside handle's own synchronous cycle — see
+// ports/channels.Channel's doc comment, so concurrent callers are an
+// anticipated case, not a hypothetical one) never have their JSON-RPC
+// request lines' bytes interleaved on the wire: every line the fake
+// daemon receives must decode as exactly one well-formed request
+// carrying exactly one of the messages this test sent, never a
+// corrupted merge of two.
+func TestJSONRPCTransportConcurrentSendMessageDoesNotInterleaveWrites(t *testing.T) {
+	const n = 50
+
+	var mu sync.Mutex
+	seen := map[string]bool{}
+	var malformedLines int
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		scanner := bufio.NewScanner(conn)
+		for scanner.Scan() {
+			var req rpcRequest
+			if err := json.Unmarshal(scanner.Bytes(), &req); err != nil {
+				mu.Lock()
+				malformedLines++
+				mu.Unlock()
+				continue
+			}
+			var params map[string]any
+			_ = json.Unmarshal(mustMarshal(req.Params), &params)
+			if req.Method == "subscribeReceive" {
+				resp, _ := json.Marshal(rpcMessage{JSONRPC: "2.0", Result: json.RawMessage(`1`), ID: &req.ID})
+				_, _ = conn.Write(append(resp, '\n'))
+				continue
+			}
+			msg, _ := params["message"].(string)
+			mu.Lock()
+			seen[msg] = true
+			mu.Unlock()
+			resp, _ := json.Marshal(rpcMessage{JSONRPC: "2.0", Result: json.RawMessage(`{"timestamp":1}`), ID: &req.ID})
+			_, _ = conn.Write(append(resp, '\n'))
+		}
+	}()
+
+	tr := newJSONRPCTransport(ln.Addr().String(), "+15555550199")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- tr.Run(ctx) }()
+	time.Sleep(50 * time.Millisecond)
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			errCh <- tr.SendMessage(context.Background(), "+15555550100", fmt.Sprintf("message-%d", i))
+		}(i)
+	}
+	wg.Wait()
+	close(errCh)
+	for err := range errCh {
+		if err != nil {
+			t.Fatalf("SendMessage() = %v, want nil", err)
+		}
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if malformedLines != 0 {
+		t.Fatalf("daemon saw %d malformed/corrupted lines, want 0 (interleaved writes)", malformedLines)
+	}
+	if len(seen) != n {
+		t.Fatalf("daemon saw %d distinct messages, want %d — a write was corrupted or lost", len(seen), n)
+	}
+	for i := 0; i < n; i++ {
+		if !seen[fmt.Sprintf("message-%d", i)] {
+			t.Fatalf("daemon never saw message-%d intact", i)
+		}
+	}
+
+	cancel()
+	<-runDone
+}
+
+func mustMarshal(v any) []byte {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 // TestJSONRPCTransportRunFailsFastOnUnreachableDaemon pins Run's one
