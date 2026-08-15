@@ -13,7 +13,7 @@ import (
 // zero-count Item baseline so PRD §55/§17.5's activator has something
 // to encourage even before the learner has ever looked one up
 // themselves — see cmd/jlp/seed.go's seedExpressionBank and
-// storage.VocabularyRepository.SeedBankItem for how this loads into
+// storage.VocabularyRepository.SeedBank for how this loads into
 // vocabulary_items without disturbing an existing item's counts.
 type BankEntry struct {
 	Expression string `yaml:"expression"`

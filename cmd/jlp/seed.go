@@ -61,12 +61,12 @@ const (
 //     idempotent (ON CONFLICT slug DO UPDATE) — rerunning just refreshes
 //     every concept to match the file, never duplicates a row.
 //   - the expression bank is loaded from seedExpressionBankPath and
-//     applied via VocabularyRepository.SeedBankItem, which is
+//     applied via VocabularyRepository.SeedBank, which is
 //     insert-if-absent (ON CONFLICT DO NOTHING) rather than
 //     UpsertOnLookup's increment-on-conflict: a bank item's
 //     lookups/productions counts are deliberately NEVER touched by a
 //     re-seed, even after the learner has since looked one up or
-//     produced it for real (see SeedBankItem's own doc comment).
+//     produced it for real (see SeedBank's own doc comment).
 //   - identities.Upsert is already idempotent — it just refreshes the
 //     dev/Dev Learner row.
 //   - the session is created only when no session titled
@@ -180,7 +180,7 @@ func seedGrammarCatalog(ctx context.Context, pool *pgxpool.Pool) error {
 // §55/§17.5) from seedExpressionBankPath and seeds it, whole, into
 // identity's vocabulary as zero-count baseline items via
 // VocabularyRepository.SeedBank — one call, one transaction (mirroring
-// seedGrammarCatalog's UpsertConcepts call below it) — deliberately NOT
+// seedGrammarCatalog's UpsertConcepts call above it) — deliberately NOT
 // UpsertOnLookup, which would increment Lookups on every rerun and
 // eventually make every bank item look like a real, repeatedly-looked-up
 // expression. SeedBank's insert-if-absent contract means this is safe

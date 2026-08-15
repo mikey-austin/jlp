@@ -21,14 +21,17 @@ linters:
             - { pkg: github.com/jackc, desc: "Rule 2" }
             - { pkg: github.com/spf13/viper, desc: "Rule 2" }
         # agents-no-repos and application-no-adapters also apply to test
-        # files by default. The exact three test files that construct
+        # files by default. The test files that construct
         # fakeai/inprocbus as port-shaped test doubles (injected through
         # the same constructors production wiring uses) carry an inline
         # //nolint:depguard on the specific import line rather than a
-        # blanket file exemption — see
+        # blanket file exemption — currently:
         # internal/agent/teacher/teacher_test.go,
+        # internal/agent/drill/drill_test.go,
+        # internal/application/vocabulary/service_test.go,
         # internal/application/feedback/service_test.go,
-        # internal/application/writing/service_test.go. Any other file
+        # internal/application/writing/service_test.go,
+        # internal/application/practice/service_test.go. Any other file
         # under internal/agent/** or internal/application/** that imports
         # a real adapter is still flagged.
         agents-no-repos:
