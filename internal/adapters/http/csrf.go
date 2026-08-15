@@ -102,8 +102,54 @@ func csrfReject(method, secFetchSite, origin, host string) bool {
 
 // isExtensionOrigin reports whether origin's scheme is
 // chrome-extension: or moz-extension: — see csrfReject's tier 1 doc
-// comment for why this is checked first, unconditionally, and why
-// that's safe (Origin is an unforgeable, browser-set header).
+// comment for why this is checked first, unconditionally.
+//
+// Deliberately NOT scoped to this extension's own ID (Task 2's
+// chrome-extension/) — any installed extension whose Origin has one of
+// these two schemes passes. That is intentional, not an oversight, and
+// an extension-ID allowlist here would not actually change the
+// resulting security posture. What this carve-out does and does not
+// defend against:
+//
+//   - What it defends against: CSRF's actual threat model — a
+//     cross-site, unprivileged WEB PAGE tricking a victim's browser into
+//     submitting a state-changing request that rides the victim's
+//     session cookie. A page's own script cannot set or spoof the
+//     Origin header (Fetch spec: Origin is FORBIDDEN to script), so it
+//     cannot forge chrome-extension://... regardless of which ID would
+//     be required — narrowing this to an allowlisted ID would not close
+//     any gap a page-driven attacker could otherwise exploit, because
+//     that attacker was never able to reach this tier in the first
+//     place.
+//   - What it does NOT defend against, allowlist or not: any browser
+//     extension the user has personally installed and granted HOST
+//     PERMISSION for this app's origin to (the same
+//     optional_host_permissions grant Task 2's own options page
+//     requests — see chrome-extension/README.md's CORS/extension-host-
+//     permissions section). That precondition — host permission for
+//     this origin — is also exactly what's required to inject a content
+//     script into a page already open on this origin, and a
+//     content-script-issued fetch/XHR runs in the PAGE's origin, not the
+//     extension's: it arrives here as an ordinary SAME-ORIGIN request
+//     (Origin matching Host, or no Sec-Fetch-Site cross-site signal at
+//     all), which tier 2/3 below pass unconditionally on their own —
+//     with no extension-scheme Origin involved, and thus nothing an
+//     ID allowlist on THIS function could ever intercept. In other
+//     words: any extension capable of tripping this tier at all already
+//     has a strictly easier path (same-origin content-script injection)
+//     that bypasses CSRF checking entirely, allowlist or not — so
+//     restricting isExtensionOrigin to a specific ID would add
+//     complexity (a config value, a pinned extension ID to keep in
+//     sync) without closing any real gap. It would be security theater.
+//
+// The actual mitigation for "a different, malicious/compromised
+// extension abuses its host permission to this origin" is outside this
+// server's control: it's the same one that applies to any extension a
+// user grants broad host access to — install only trusted extensions,
+// review the permissions an extension requests before granting them,
+// and remove ones no longer needed. That trust decision is made once,
+// at install/grant time, in the browser's own UI — this server has no
+// visibility into it and no way to enforce it after the fact.
 func isExtensionOrigin(origin string) bool {
 	if origin == "" {
 		return false

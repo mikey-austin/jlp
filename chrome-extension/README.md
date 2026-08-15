@@ -24,6 +24,13 @@ nothing to compile.
 4. Click **Load unpacked**, and select this `chrome-extension/` directory
    (not a zip — `make ext-build`'s zip is for distribution, not for
    `chrome://extensions` itself, which wants an unpacked directory).
+   Chrome shows the generic gray puzzle-piece icon for it in the
+   toolbar/extensions list — that's expected, not a missing asset:
+   `manifest.json` deliberately omits `icons`/`action.default_icon`
+   rather than rasterizing `web/static/icons/icon.svg` to the PNGs MV3
+   requires (SVG isn't a valid extension icon format), which would mean
+   adding an image-conversion step to a project that otherwise has no
+   build tooling at all for this extension.
 5. Click the extension's **Details → Extension options** (or the
    toolbar icon's right-click menu → Options) and set:
    - **Base URL** — where your JLP app is running, e.g.

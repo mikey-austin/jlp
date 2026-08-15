@@ -126,7 +126,6 @@ function renderFeedback(dto) {
 function renderCorrectionCard(c) {
   const article = document.createElement("article");
   article.className = "correction";
-  article.dataset.status = c.status || "";
 
   const header = document.createElement("header");
   header.appendChild(badge("badge", c.type));
@@ -255,9 +254,25 @@ function wireVocabForm() {
 // testing) and, when one is present, kicks off the matching flow
 // automatically — this is what makes a real right-click -> popup open
 // actually show results without further user action.
+//
+// The chrome.storage.session read below is consumed ONE-SHOT, cleared
+// immediately after reading and BEFORE acting on it: background.js
+// stashes {selection,title,mode} on every context-menu click and never
+// clears it itself, and popup.html is ALSO the toolbar's
+// action.default_popup — without this, opening the toolbar icon later in
+// the same browser session (with no fresh context-menu click) would
+// silently replay whatever the last context-menu action was. For
+// saveVocabulary that's a real duplicate POST to
+// /api/v1/vocabulary/events: client_event_id is freshly generated per
+// call (see saveVocabulary), so the server's idempotency check never
+// catches a client-side replay like this. Clearing first means a stale
+// (or already-consumed) storage.session state can only ever produce the
+// neutral idle view ("empty-state" below), never a second automatic
+// action.
 async function init() {
   wireVocabForm();
   const stored = await chrome.storage.session.get({ selection: "", title: "", mode: "" });
+  await chrome.storage.session.remove(["selection", "title", "mode"]);
   const params = new URLSearchParams(location.search);
   const text = stored.selection || params.get("text") || "";
   const title = stored.title || params.get("title") || "";
