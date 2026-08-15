@@ -40,6 +40,41 @@ var ErrUnsupportedType = errors.New("vocabulary: unsupported ingest event type")
 // there is nothing to look up, track, or later detect a production of.
 var ErrEmptyExpression = errors.New("vocabulary: expression is required")
 
+// maxWordsPerRequest caps POST /api/v1/words's batch size (Phase 3
+// Task 8's brief pins this exact number): comfortably larger than any
+// legitimate single Anki-deck-sized sync, small enough that
+// BulkUpsertWords' one-transaction loop stays bounded.
+const maxWordsPerRequest = 1000
+
+// ErrEmptyWordBatch is returned by IngestWords when words is empty —
+// there is nothing to import.
+var ErrEmptyWordBatch = errors.New("words is required and must not be empty")
+
+// ErrTooManyWords is returned by IngestWords when the batch exceeds
+// maxWordsPerRequest. Its exact text is pinned by Nihongo Daily's
+// contract (Task 8 brief): callers surface err.Error() verbatim as the
+// 400 response's "error" field.
+var ErrTooManyWords = fmt.Errorf("too many words in one request (max %d)", maxWordsPerRequest)
+
+// WordValidationError is returned by IngestWords for a single
+// malformed word, naming the offending index (0-based, matching the
+// wire request's "words" array) so a caller can point a reader-app
+// author at exactly which entry is wrong.
+type WordValidationError struct {
+	Index int
+	Msg   string
+}
+
+func (e *WordValidationError) Error() string {
+	return fmt.Sprintf("words[%d]: %s", e.Index, e.Msg)
+}
+
+// importSampleSize is how many imported expressions IngestWords
+// includes in its vocabulary.imported event's Evidence["sample"] —
+// enough to eyeball what a batch contained without the event log
+// carrying an unbounded list for a 1000-word sync.
+const importSampleSize = 5
+
 type Service struct {
 	repo storage.VocabularyRepository
 	rec  *learning.Recorder
@@ -109,6 +144,88 @@ func (s *Service) Ingest(ctx context.Context, identity learner.IdentityID, ev In
 	}
 
 	return item, nil
+}
+
+// IngestWords is POST /api/v1/words's single write path (Phase 3 Task
+// 8, Nihongo Daily's bulk vocabulary sync contract, implemented
+// verbatim from /home/mikey/Workspace/nihongo-daily/doc/openapi.yaml):
+// it validates every word, then upserts the whole batch in one
+// transaction via storage.VocabularyRepository.BulkUpsertWords (NOT
+// UpsertOnLookup — see that method's doc comment for why a sync must
+// never touch Lookups/Productions/SuccessfulProductions), and records
+// exactly ONE vocabulary.imported event for the batch — a per-word
+// event for a 1000-word sync would flood the history the same number
+// of rows the sync touches.
+//
+// Validation runs over the WHOLE batch before anything is written:
+// words must be non-empty and at most maxWordsPerRequest long, and
+// every entry's Expression/Reading/Meaning must be non-empty after
+// TrimSpace and JLPTLevel must be 0..5 — the first violation found
+// returns a *WordValidationError naming its 0-based index, and NO
+// words from the batch are written (an all-or-nothing batch, matching
+// BulkUpsertWords' one-transaction contract).
+//
+// A Recorder failure here is a hard failure for the same reason
+// Ingest's is: by the time Record would run, the batch is already
+// durably upserted, so a lost event would silently desync the event
+// log from data that's visibly on the /vocabulary page.
+func (s *Service) IngestWords(ctx context.Context, identity learner.IdentityID, words []storage.WordInput) (int, error) {
+	if len(words) == 0 {
+		return 0, ErrEmptyWordBatch
+	}
+	if len(words) > maxWordsPerRequest {
+		return 0, ErrTooManyWords
+	}
+
+	trimmed := make([]storage.WordInput, len(words))
+	for i, w := range words {
+		w.Expression = strings.TrimSpace(w.Expression)
+		w.Reading = strings.TrimSpace(w.Reading)
+		w.Meaning = strings.TrimSpace(w.Meaning)
+		if w.Expression == "" {
+			return 0, &WordValidationError{Index: i, Msg: "kanji is required"}
+		}
+		if w.Reading == "" {
+			return 0, &WordValidationError{Index: i, Msg: "reading is required"}
+		}
+		if w.Meaning == "" {
+			return 0, &WordValidationError{Index: i, Msg: "meaning is required"}
+		}
+		if w.JLPTLevel < 0 || w.JLPTLevel > 5 {
+			return 0, &WordValidationError{Index: i, Msg: "jlpt_level must be between 0 and 5"}
+		}
+		trimmed[i] = w
+	}
+
+	count, err := s.repo.BulkUpsertWords(ctx, identity, trimmed, time.Now().UTC())
+	if err != nil {
+		return 0, fmt.Errorf("vocabulary: bulk upsert words: %w", err)
+	}
+
+	source := "external"
+	sample := make([]string, 0, importSampleSize)
+	for i, w := range trimmed {
+		if i == 0 && w.Source != "" {
+			source = w.Source
+		}
+		if len(sample) < importSampleSize {
+			sample = append(sample, w.Expression)
+		}
+	}
+
+	if err := s.rec.Record(ctx, event.LearningEvent{
+		IdentityID: identity,
+		Type:       event.TypeVocabularyImported,
+		Subject:    source,
+		Evidence: map[string]any{
+			"count":  count,
+			"sample": sample,
+		},
+	}); err != nil {
+		return 0, fmt.Errorf("vocabulary: record %s: %w", event.TypeVocabularyImported, err)
+	}
+
+	return count, nil
 }
 
 // List returns identity's vocabulary items narrowed by filter — a

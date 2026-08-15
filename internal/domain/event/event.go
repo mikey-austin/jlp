@@ -76,6 +76,16 @@ const (
 	// learner model reacts to a correction's.
 	TypeAnkiCardCreated  Type = "anki.card.created"
 	TypeAnkiCardExported Type = "anki.card.exported"
+
+	// TypeVocabularyImported fires once per POST /api/v1/words batch
+	// (Phase 3 Task 8, Nihongo Daily's bulk ingestion contract) — never
+	// once per word, which would flood the history the same number of
+	// rows a batch import touches. Subject is the batch's source (the
+	// first non-empty WordInput.Source in the batch) or "external" when
+	// none is given; Evidence carries {"count": N, "sample": [...up to
+	// 5 imported expressions]}. See application/vocabulary.Service.
+	// IngestWords for exactly how Subject/Evidence are built.
+	TypeVocabularyImported Type = "vocabulary.imported"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

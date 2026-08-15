@@ -7,16 +7,18 @@
     <a href="/vocabulary?filter=activate"{{if eq .Filter "activate"}} class="active"{{end}}>活性化候補</a>
   </nav>
   <table class="sessions-table vocabulary-table">
-    <thead><tr><th>表現</th><th>読み方</th><th>意味</th><th>種類</th><th>検索回数</th><th>使用</th></tr></thead>
+    <thead><tr><th>表現</th><th>読み方</th><th>意味</th><th>English</th><th>タグ</th><th>種類</th><th>検索回数</th><th>使用</th></tr></thead>
     <tbody>
       {{range .Items}}<tr>
         <td>{{.Expression}}</td>
         <td>{{.Reading}}</td>
         <td>{{.Meaning}}</td>
+        <td>{{if .MeaningEN}}{{.MeaningEN}}{{end}}</td>
+        <td>{{if .TagsJoined}}{{.TagsJoined}}{{end}}</td>
         <td>{{.KindLabel}}</td>
         <td>{{.Lookups}}</td>
         <td>✓{{.SuccessfulProductions}} ✗{{.FailedProductions}}</td>
-      </tr>{{else}}<tr><td colspan="6">語彙がありません</td></tr>{{end}}
+      </tr>{{else}}<tr><td colspan="8">語彙がありません</td></tr>{{end}}
     </tbody>
   </table>
 </section>{{end}}

@@ -14,17 +14,20 @@ import (
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
+	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
 // fakeVocabRepo is an in-memory storage.VocabularyRepository double for
-// the /vocabulary page and /api/v1/vocabulary/events tests — the same
-// role fakeLearnerPriorityRepo/fakeObservationRepo play for /learner.
+// the /vocabulary page, /api/v1/vocabulary/events, and /api/v1/words
+// (Phase 3 Task 8) tests — the same role fakeLearnerPriorityRepo/
+// fakeObservationRepo play for /learner.
 type fakeVocabRepo struct {
 	items        map[string]*vocabulary.Item
 	byID         map[string]*vocabulary.Item
 	clientEvents map[string]string
 	nextID       int
 	listErr      error
+	bulkUpserts  [][]storage.WordInput
 }
 
 func newFakeVocabRepo() *fakeVocabRepo {
@@ -156,6 +159,53 @@ func (f *fakeVocabRepo) ListActivationCandidates(context.Context, learner.Identi
 	return nil, nil
 }
 
+// BulkUpsertWords mirrors the real adapter's sparse-merge contract
+// (storage.VocabularyRepository.BulkUpsertWords' doc comment) so
+// words_test.go can exercise create-then-sparser-update through the
+// handler, not just the happy path: empty incoming string fields never
+// overwrite existing non-empty values, JLPTLevel 0 never overwrites a
+// known level, Tags replaces wholesale only when non-empty, and
+// counters are never touched.
+func (f *fakeVocabRepo) BulkUpsertWords(_ context.Context, identity learner.IdentityID, words []storage.WordInput, at time.Time) (int, error) {
+	f.bulkUpserts = append(f.bulkUpserts, words)
+	for _, w := range words {
+		k := vocabKey(identity, w.Expression)
+		item, ok := f.items[k]
+		if !ok {
+			f.nextID++
+			item = &vocabulary.Item{
+				ID:         "vocab-" + string(rune('0'+f.nextID)),
+				IdentityID: identity,
+				Expression: w.Expression,
+				Kind:       vocabulary.KindWord,
+				FirstSeen:  at,
+			}
+			f.items[k] = item
+			f.byID[item.ID] = item
+		}
+		item.LastEvent = at
+		if w.Reading != "" {
+			item.Reading = w.Reading
+		}
+		if w.Meaning != "" {
+			item.Meaning = w.Meaning
+		}
+		if w.MeaningEN != "" {
+			item.MeaningEN = w.MeaningEN
+		}
+		if w.JLPTLevel != 0 {
+			item.JLPTLevel = w.JLPTLevel
+		}
+		if w.Source != "" {
+			item.Source = w.Source
+		}
+		if len(w.Tags) > 0 {
+			item.Tags = w.Tags
+		}
+	}
+	return len(words), nil
+}
+
 func vocabularyTestOptions() (Options, *fakeVocabRepo) {
 	opts := testOptions()
 	repo := newFakeVocabRepo()
@@ -204,6 +254,36 @@ func TestVocabularyPageFilterTabsRender(t *testing.T) {
 	for _, want := range []string{"すべて", "調べた", "使えた", "活性化候補"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("GET /vocabulary body missing filter tab %q: %s", want, body)
+		}
+	}
+}
+
+// TestVocabularyPageShowsMeaningENAndTagsWhenPresent covers Phase 3
+// Task 8: an item imported via POST /api/v1/words (MeaningEN/Tags set)
+// shows its English gloss and tags on /vocabulary, while an item that
+// only ever came from a vocabulary.lookup event (both zero-value)
+// renders those columns empty rather than showing e.g. "<nil>" or "[]".
+func TestVocabularyPageShowsMeaningENAndTagsWhenPresent(t *testing.T) {
+	opts, repo := vocabularyTestOptions()
+	repo.items["dev/勉強"] = &vocabulary.Item{
+		ID: "vocab-1", IdentityID: "dev", Expression: "勉強", Reading: "べんきょう",
+		Meaning: "学ぶこと", MeaningEN: "studying", Tags: []string{"education", "noun"}, Kind: vocabulary.KindWord,
+	}
+	repo.items["dev/取り組む"] = &vocabulary.Item{
+		ID: "vocab-2", IdentityID: "dev", Expression: "取り組む", Reading: "とりくむ",
+		Meaning: "to tackle", Kind: vocabulary.KindWord,
+	}
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/vocabulary", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /vocabulary status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"studying", "education, noun"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /vocabulary body missing %q: %s", want, body)
 		}
 	}
 }

@@ -460,6 +460,12 @@ func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabula
 	panic("not used by feedback service tests")
 }
 
+// BulkUpsertWords is not used by feedback service tests either — same
+// reasoning as SeedBank above.
+func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
+	panic("not used by feedback service tests")
+}
+
 // knownConceptsForFakeAI mirrors the two concept slugs
 // internal/adapters/fakeai tags corrections with (i-adjective-past,
 // particle-ni-direction), so the default test harness's candidate list

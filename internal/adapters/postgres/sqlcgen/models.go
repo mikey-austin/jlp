@@ -204,4 +204,6 @@ type VocabularyItem struct {
 	SuccessfulProductions int32
 	FirstSeen             pgtype.Timestamptz
 	LastEvent             pgtype.Timestamptz
+	MeaningEn             string
+	Tags                  []byte
 }

@@ -241,6 +241,25 @@ the manual `chrome://extensions` install checklist, the
 extension-host-permissions distinction that governs how its API calls
 work (and how they're verified without a real install).
 
+## External reader-app integration (`POST /api/v1/words`)
+
+`POST /api/v1/words` bulk-ingests vocabulary from an external reader
+app — built for Nihongo Daily, implementing its `/api/v1/words`
+contract verbatim (field names, the `200` status, the
+`{"imported":N}`/`{"error":"..."}` shapes). Words are upserted by
+(identity, kanji) in one transaction; a sync never touches
+lookups/productions/successful_productions (that's what
+`vocabulary.lookup`/`/api/v1/vocabulary/events` are for), and a sparse
+re-sync never blanks out richer data a prior sync already recorded.
+
+See **[`docs/api/words-ingestion.md`](docs/api/words-ingestion.md)**
+for the full request/response contract, the upsert/counter semantics,
+the 1000-word batch limit, a working `curl` example, and how
+authentication behaves under `APP_AUTH_MODE=static` vs. Authelia (this
+endpoint has no separate service-token scheme — see that doc's
+Authentication section before relying on it from a non-LAN
+deployment).
+
 ## Deploying
 
 The production stack (`deploy/compose.prod.yml`) is a separate compose

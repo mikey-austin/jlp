@@ -99,6 +99,10 @@ func (panicVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[s
 	panic("not used by planner wiring tests")
 }
 
+func (panicVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
+	panic("not used by planner wiring tests")
+}
+
 func (panicVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
 	panic("not used by planner wiring tests")
 }

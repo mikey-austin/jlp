@@ -162,6 +162,10 @@ func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabula
 	panic("not used by planner tests")
 }
 
+func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
+	panic("not used by planner tests")
+}
+
 // conceptEvent builds a grammar.concept.encountered event exactly as
 // internal/application/feedback's pipeline records one: Subject is the
 // concept slug, Evidence carries the originating correction_id (the

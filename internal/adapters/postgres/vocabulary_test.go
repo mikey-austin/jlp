@@ -12,6 +12,7 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
+	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
 // vocabTestSetup migrates and returns a pool plus a freshly-upserted
@@ -532,5 +533,176 @@ func TestVocabularySeedBankInsertsMultipleEntriesInOneTransaction(t *testing.T) 
 	}
 	if got := byExpr["〜に越したことはない"]; got.Kind != vocabulary.KindPattern {
 		t.Fatalf("〜に越したことはない = %+v, want Kind=pattern", got)
+	}
+}
+
+// --- BulkUpsertWords (Phase 3 Task 8: POST /api/v1/words) ---
+
+func benkyouWordInput() storage.WordInput {
+	return storage.WordInput{
+		Expression: "勉強",
+		Reading:    "べんきょう",
+		Meaning:    "学ぶこと、学習すること",
+		MeaningEN:  "studying",
+		JLPTLevel:  3,
+		Tags:       []string{"education", "noun"},
+		Source:     "Anki Deck",
+	}
+}
+
+// TestVocabularyBulkUpsertWordsThreeWordBatchReportsThree pins the
+// brief's headline contract: a 3-word batch (one rich, two sparser —
+// the OpenAPI example's shape) reports imported=3, counters all start
+// at 0 (a sync is not a lookup), and tags round-trip as a JSON array.
+func TestVocabularyBulkUpsertWordsThreeWordBatchReportsThree(t *testing.T) {
+	repo, identity := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	words := []storage.WordInput{
+		benkyouWordInput(),
+		{Expression: "猫", Reading: "ねこ", Meaning: "cat animal", Source: "Anki Deck"},
+		{Expression: "犬", Reading: "いぬ", Meaning: "dog animal"},
+	}
+
+	count, err := repo.BulkUpsertWords(ctx, identity, words, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 3 {
+		t.Fatalf("count = %d, want 3", count)
+	}
+
+	items, err := repo.List(ctx, identity, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("List = %+v, want 3 items", items)
+	}
+	byExpr := make(map[string]vocabulary.Item, len(items))
+	for _, item := range items {
+		byExpr[item.Expression] = item
+	}
+
+	benkyou := byExpr["勉強"]
+	if benkyou.Reading != "べんきょう" || benkyou.Meaning != "学ぶこと、学習すること" || benkyou.MeaningEN != "studying" {
+		t.Fatalf("勉強 = %+v, want fields set from the batch", benkyou)
+	}
+	if benkyou.JLPTLevel != 3 {
+		t.Fatalf("勉強.JLPTLevel = %d, want 3", benkyou.JLPTLevel)
+	}
+	if len(benkyou.Tags) != 2 || benkyou.Tags[0] != "education" || benkyou.Tags[1] != "noun" {
+		t.Fatalf("勉強.Tags = %#v, want [education noun] (round-tripped as a JSON array)", benkyou.Tags)
+	}
+	if benkyou.Lookups != 0 || benkyou.Productions != 0 || benkyou.SuccessfulProductions != 0 {
+		t.Fatalf("勉強 counters = %+v, want all 0 — a bulk sync is not a lookup event", benkyou)
+	}
+	if benkyou.Kind != vocabulary.KindWord {
+		t.Fatalf("勉強.Kind = %q, want %q", benkyou.Kind, vocabulary.KindWord)
+	}
+
+	neko := byExpr["猫"]
+	if len(neko.Tags) != 0 {
+		t.Fatalf("猫.Tags = %#v, want empty (no tags given)", neko.Tags)
+	}
+	if neko.Lookups != 0 {
+		t.Fatalf("猫.Lookups = %d, want 0", neko.Lookups)
+	}
+}
+
+// TestVocabularyBulkUpsertWordsSparseResyncPreservesRicherData pins
+// the brief's most delicate contract: a second, SPARSER batch for an
+// already-imported word (kanji/reading/meaning only, like a caller
+// re-syncing without the optional fields) must NOT erase the richer
+// meaning_en/jlpt_level/tags/source recorded on the first import, must
+// still update what it DOES carry (reading/meaning here), and must
+// leave lookups untouched throughout.
+func TestVocabularyBulkUpsertWordsSparseResyncPreservesRicherData(t *testing.T) {
+	repo, identity := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	if _, err := repo.BulkUpsertWords(ctx, identity, []storage.WordInput{benkyouWordInput()}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	sparse := storage.WordInput{
+		Expression: "勉強",
+		Reading:    "べんきょう",
+		Meaning:    "学ぶこと、学習すること（改訂）", // deliberately different, to prove non-empty DOES update
+	}
+	count, err := repo.BulkUpsertWords(ctx, identity, []storage.WordInput{sparse}, now.Add(time.Minute))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if count != 1 {
+		t.Fatalf("count = %d, want 1", count)
+	}
+
+	items, err := repo.List(ctx, identity, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("List = %+v, want exactly 1 row (upsert by (identity, expression), not a second row)", items)
+	}
+	got := items[0]
+	if got.Meaning != "学ぶこと、学習すること（改訂）" {
+		t.Fatalf("Meaning = %q, want the updated (non-empty) value from the sparser batch", got.Meaning)
+	}
+	if got.MeaningEN != "studying" {
+		t.Fatalf("MeaningEN = %q, want the original \"studying\" preserved (sparser batch sent empty)", got.MeaningEN)
+	}
+	if got.JLPTLevel != 3 {
+		t.Fatalf("JLPTLevel = %d, want the original 3 preserved (sparser batch sent 0)", got.JLPTLevel)
+	}
+	if len(got.Tags) != 2 {
+		t.Fatalf("Tags = %#v, want the original [education noun] preserved (sparser batch sent none)", got.Tags)
+	}
+	if got.Source != "Anki Deck" {
+		t.Fatalf("Source = %q, want the original preserved (sparser batch sent none)", got.Source)
+	}
+	if got.Lookups != 0 {
+		t.Fatalf("Lookups = %d, want 0 — a re-sync is still not a lookup event", got.Lookups)
+	}
+}
+
+// TestVocabularyBulkUpsertWordsCrossIdentityIsolation: the same
+// expression imported under two different identities stays two
+// distinct rows — the (identity_id, expression) UNIQUE constraint is
+// scoped per-learner, matching UpsertOnLookup's own isolation.
+func TestVocabularyBulkUpsertWordsCrossIdentityIsolation(t *testing.T) {
+	repo, identityA := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	identities := NewIdentityRepository(repo.pool)
+	identityB := learner.Identity{ID: learner.IdentityID("test-vocab-b-" + uuid.NewString()), DisplayName: "Vocab B"}
+	if err := identities.Upsert(ctx, identityB); err != nil {
+		t.Fatal(err)
+	}
+
+	word := storage.WordInput{Expression: "勉強", Reading: "べんきょう", Meaning: "study"}
+	if _, err := repo.BulkUpsertWords(ctx, identityA, []storage.WordInput{word}, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := repo.BulkUpsertWords(ctx, identityB.ID, []storage.WordInput{word}, now); err != nil {
+		t.Fatal(err)
+	}
+
+	itemsA, err := repo.List(ctx, identityA, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	itemsB, err := repo.List(ctx, identityB.ID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(itemsA) != 1 || len(itemsB) != 1 {
+		t.Fatalf("itemsA=%+v itemsB=%+v, want exactly 1 row each (same expression, two identities, two rows)", itemsA, itemsB)
+	}
+	if itemsA[0].ID == itemsB[0].ID {
+		t.Fatalf("identity A and B share item ID %q, want distinct rows", itemsA[0].ID)
 	}
 }

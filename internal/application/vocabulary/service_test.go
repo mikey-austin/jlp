@@ -48,6 +48,7 @@ type fakeVocabRepo struct {
 	nextID       int
 
 	productions []productionCall
+	bulkUpserts []bulkUpsertCall
 }
 
 type productionCall struct {
@@ -195,6 +196,63 @@ func (f *fakeVocabRepo) SeedBank(_ context.Context, identity learner.IdentityID,
 // called, same as the rest of this fake's unused-surface methods.
 func (f *fakeVocabRepo) ListActivationCandidates(context.Context, learner.IdentityID, int) ([]vocabulary.Item, error) {
 	panic("not used by vocabulary service tests")
+}
+
+// bulkUpsertCall records one BulkUpsertWords invocation's arguments —
+// TestIngestWords* asserts against this to prove IngestWords passes
+// the whole (trimmed) batch through in one call, not one call per
+// word.
+type bulkUpsertCall struct {
+	Identity learner.IdentityID
+	Words    []storage.WordInput
+}
+
+// BulkUpsertWords mirrors the real adapter's sparse-merge contract
+// (storage.VocabularyRepository.BulkUpsertWords' doc comment): empty
+// incoming string fields never overwrite existing non-empty values,
+// JLPTLevel 0 never overwrites a known level, and Tags replaces
+// wholesale only when non-empty. Counters are never touched. Kind is
+// always vocabulary.KindWord on first insert, matching the real
+// adapter (this endpoint is word-only, unlike UpsertOnLookup's
+// caller-supplied Kind).
+func (f *fakeVocabRepo) BulkUpsertWords(_ context.Context, identity learner.IdentityID, words []storage.WordInput, at time.Time) (int, error) {
+	f.bulkUpserts = append(f.bulkUpserts, bulkUpsertCall{Identity: identity, Words: words})
+	for _, w := range words {
+		k := vocabKey(identity, w.Expression)
+		item, ok := f.items[k]
+		if !ok {
+			f.nextID++
+			item = &vocabulary.Item{
+				ID:         fmt.Sprintf("vocab-%d", f.nextID),
+				IdentityID: identity,
+				Expression: w.Expression,
+				Kind:       vocabulary.KindWord,
+				FirstSeen:  at,
+			}
+			f.items[k] = item
+			f.byID[item.ID] = item
+		}
+		item.LastEvent = at
+		if w.Reading != "" {
+			item.Reading = w.Reading
+		}
+		if w.Meaning != "" {
+			item.Meaning = w.Meaning
+		}
+		if w.MeaningEN != "" {
+			item.MeaningEN = w.MeaningEN
+		}
+		if w.JLPTLevel != 0 {
+			item.JLPTLevel = w.JLPTLevel
+		}
+		if w.Source != "" {
+			item.Source = w.Source
+		}
+		if len(w.Tags) > 0 {
+			item.Tags = w.Tags
+		}
+	}
+	return len(words), nil
 }
 
 const testIdentity = learner.IdentityID("learner-a")
@@ -439,5 +497,208 @@ func TestDetectProductionNoMatchDoesNothing(t *testing.T) {
 	}
 	if len(h.repo.productions) != 0 {
 		t.Fatalf("RecordProduction called %d times, want 0", len(h.repo.productions))
+	}
+}
+
+// --- IngestWords (Phase 3 Task 8: POST /api/v1/words) ---
+
+func benkyouWord() storage.WordInput {
+	return storage.WordInput{
+		Expression: "勉強",
+		Reading:    "べんきょう",
+		Meaning:    "学ぶこと、学習すること",
+		MeaningEN:  "studying",
+		JLPTLevel:  3,
+		Tags:       []string{"education", "noun"},
+		Source:     "Anki Deck",
+	}
+}
+
+// TestIngestWordsHappyPathReturnsCountAndRecordsOneImportedEvent pins
+// the brief's core contract: a valid 3-word batch returns imported=3
+// and records EXACTLY ONE vocabulary.imported event (never one per
+// word), carrying count and a sample of the imported expressions.
+func TestIngestWordsHappyPathReturnsCountAndRecordsOneImportedEvent(t *testing.T) {
+	h := newHarness()
+	words := []storage.WordInput{
+		benkyouWord(),
+		{Expression: "猫", Reading: "ねこ", Meaning: "cat animal", Source: "Anki Deck"},
+		{Expression: "犬", Reading: "いぬ", Meaning: "dog animal"},
+	}
+
+	count, err := h.svc.IngestWords(context.Background(), testIdentity, words)
+	if err != nil {
+		t.Fatalf("IngestWords returned error: %v", err)
+	}
+	if count != 3 {
+		t.Fatalf("count = %d, want 3", count)
+	}
+	if len(h.repo.bulkUpserts) != 1 {
+		t.Fatalf("BulkUpsertWords called %d times, want 1 (whole batch, not per-word)", len(h.repo.bulkUpserts))
+	}
+	if len(h.repo.bulkUpserts[0].Words) != 3 {
+		t.Fatalf("BulkUpsertWords received %d words, want 3", len(h.repo.bulkUpserts[0].Words))
+	}
+
+	var imported []event.LearningEvent
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeVocabularyImported {
+			imported = append(imported, ev)
+		}
+	}
+	if len(imported) != 1 {
+		t.Fatalf("recorded %d vocabulary.imported events, want exactly 1: %+v", len(imported), imported)
+	}
+	ev := imported[0]
+	if ev.Subject != "Anki Deck" {
+		t.Errorf("Subject = %q, want %q (first word's source)", ev.Subject, "Anki Deck")
+	}
+	if got := ev.Evidence["count"]; got != 3 {
+		t.Errorf("Evidence[count] = %v, want 3", got)
+	}
+	sample, ok := ev.Evidence["sample"].([]string)
+	if !ok || len(sample) != 3 || sample[0] != "勉強" {
+		t.Errorf("Evidence[sample] = %#v, want [勉強 猫 犬]", ev.Evidence["sample"])
+	}
+}
+
+// TestIngestWordsSubjectDefaultsToExternalWhenNoSource: when no word
+// in the batch carries a Source, the event's Subject falls back to
+// "external" rather than being left blank.
+func TestIngestWordsSubjectDefaultsToExternalWhenNoSource(t *testing.T) {
+	h := newHarness()
+	words := []storage.WordInput{{Expression: "猫", Reading: "ねこ", Meaning: "cat"}}
+
+	if _, err := h.svc.IngestWords(context.Background(), testIdentity, words); err != nil {
+		t.Fatalf("IngestWords returned error: %v", err)
+	}
+	if len(h.events.events) != 1 {
+		t.Fatalf("recorded %d events, want 1", len(h.events.events))
+	}
+	if got := h.events.events[0].Subject; got != "external" {
+		t.Errorf("Subject = %q, want %q", got, "external")
+	}
+}
+
+// TestIngestWordsSampleCapsAtFive: a batch larger than 5 words still
+// carries only the first 5 expressions in Evidence["sample"] — the
+// event log must not blow up for a 1000-word sync.
+func TestIngestWordsSampleCapsAtFive(t *testing.T) {
+	h := newHarness()
+	words := make([]storage.WordInput, 0, 7)
+	for i := 0; i < 7; i++ {
+		words = append(words, storage.WordInput{
+			Expression: fmt.Sprintf("word%d", i),
+			Reading:    "reading",
+			Meaning:    "meaning",
+		})
+	}
+
+	count, err := h.svc.IngestWords(context.Background(), testIdentity, words)
+	if err != nil {
+		t.Fatalf("IngestWords returned error: %v", err)
+	}
+	if count != 7 {
+		t.Fatalf("count = %d, want 7", count)
+	}
+	sample, _ := h.events.events[0].Evidence["sample"].([]string)
+	if len(sample) != 5 {
+		t.Fatalf("sample length = %d, want 5 (capped, even though the batch had 7)", len(sample))
+	}
+}
+
+// TestIngestWordsMissingRequiredFieldNamesTheIndex covers each of
+// kanji/reading/meaning being blank (including whitespace-only, which
+// TrimSpace must catch): the returned error must be a
+// *WordValidationError naming the exact 0-based index of the bad
+// entry, and NOTHING must be written (BulkUpsertWords never called) —
+// a batch either fully succeeds or fully fails.
+func TestIngestWordsMissingRequiredFieldNamesTheIndex(t *testing.T) {
+	cases := []struct {
+		name  string
+		words []storage.WordInput
+	}{
+		{"missing kanji", []storage.WordInput{
+			benkyouWord(),
+			{Expression: "  ", Reading: "ねこ", Meaning: "cat"},
+		}},
+		{"missing reading", []storage.WordInput{
+			benkyouWord(),
+			{Expression: "猫", Reading: "", Meaning: "cat"},
+		}},
+		{"missing meaning", []storage.WordInput{
+			benkyouWord(),
+			{Expression: "猫", Reading: "ねこ", Meaning: ""},
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness()
+			_, err := h.svc.IngestWords(context.Background(), testIdentity, tc.words)
+			var verr *appvocabulary.WordValidationError
+			if !errors.As(err, &verr) {
+				t.Fatalf("err = %v, want a *WordValidationError", err)
+			}
+			if verr.Index != 1 {
+				t.Errorf("Index = %d, want 1 (the second, invalid entry)", verr.Index)
+			}
+			if len(h.repo.bulkUpserts) != 0 {
+				t.Error("BulkUpsertWords was called despite a validation failure — batch must be all-or-nothing")
+			}
+			if len(h.events.events) != 0 {
+				t.Error("an event was recorded despite a validation failure")
+			}
+		})
+	}
+}
+
+// TestIngestWordsInvalidJLPTLevelReturnsValidationError: jlpt_level
+// outside 0..5 (the brief's example is 6) fails validation naming the
+// offending index, same as a missing required field.
+func TestIngestWordsInvalidJLPTLevelReturnsValidationError(t *testing.T) {
+	h := newHarness()
+	words := []storage.WordInput{
+		benkyouWord(),
+		{Expression: "猫", Reading: "ねこ", Meaning: "cat", JLPTLevel: 6},
+	}
+
+	_, err := h.svc.IngestWords(context.Background(), testIdentity, words)
+	var verr *appvocabulary.WordValidationError
+	if !errors.As(err, &verr) {
+		t.Fatalf("err = %v, want a *WordValidationError", err)
+	}
+	if verr.Index != 1 {
+		t.Errorf("Index = %d, want 1", verr.Index)
+	}
+}
+
+// TestIngestWordsTooManyWordsReturnsError: 1001 words (one over
+// maxWordsPerRequest) is rejected without touching storage.
+func TestIngestWordsTooManyWordsReturnsError(t *testing.T) {
+	h := newHarness()
+	words := make([]storage.WordInput, 1001)
+	for i := range words {
+		words[i] = storage.WordInput{Expression: fmt.Sprintf("w%d", i), Reading: "r", Meaning: "m"}
+	}
+
+	_, err := h.svc.IngestWords(context.Background(), testIdentity, words)
+	if !errors.Is(err, appvocabulary.ErrTooManyWords) {
+		t.Fatalf("err = %v, want ErrTooManyWords", err)
+	}
+	if err.Error() != "too many words in one request (max 1000)" {
+		t.Errorf("err.Error() = %q, want the exact wire message", err.Error())
+	}
+	if len(h.repo.bulkUpserts) != 0 {
+		t.Error("BulkUpsertWords was called despite an oversized batch")
+	}
+}
+
+// TestIngestWordsEmptyBatchReturnsError: an empty "words" array is
+// rejected — there's nothing to import.
+func TestIngestWordsEmptyBatchReturnsError(t *testing.T) {
+	h := newHarness()
+	_, err := h.svc.IngestWords(context.Background(), testIdentity, nil)
+	if !errors.Is(err, appvocabulary.ErrEmptyWordBatch) {
+		t.Fatalf("err = %v, want ErrEmptyWordBatch", err)
 	}
 }

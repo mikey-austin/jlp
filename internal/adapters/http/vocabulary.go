@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"net/http"
+	"strings"
 
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 )
@@ -28,8 +29,14 @@ func vocabularyKindLabel(k vocabulary.Kind) string {
 // subtracted in the template — html/template has no arithmetic, see
 // render.go's funcs doc comment) as Productions-SuccessfulProductions,
 // the ✗ half of the ✓/✗ production ladder the brief calls for.
+// MeaningEN/Tags are Phase 3 Task 8's POST /api/v1/words fields — the
+// template shows them only when non-empty (TagsJoined is "" for an
+// item with no tags, which {{if}} treats the same as absent), since
+// most items still only ever came from a vocabulary.lookup event and
+// have neither.
 type vocabularyItemView struct {
 	Expression, Reading, Meaning, KindLabel, Source                string
+	MeaningEN, TagsJoined                                          string
 	Lookups, Productions, SuccessfulProductions, FailedProductions int
 }
 
@@ -40,6 +47,8 @@ func toVocabularyItemView(item vocabulary.Item) vocabularyItemView {
 		Meaning:               item.Meaning,
 		KindLabel:             vocabularyKindLabel(item.Kind),
 		Source:                item.Source,
+		MeaningEN:             item.MeaningEN,
+		TagsJoined:            strings.Join(item.Tags, ", "),
 		Lookups:               item.Lookups,
 		Productions:           item.Productions,
 		SuccessfulProductions: item.SuccessfulProductions,

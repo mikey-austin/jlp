@@ -213,6 +213,15 @@ func (s *Server) routes() http.Handler {
 			r.Get("/learner/priorities", s.apiLearnerPriorities)
 			r.Post("/ratings", s.apiRatingsCreate)
 			r.Post("/vocabulary/events", s.apiVocabularyIngest)
+
+			// Phase 3 Task 8: bulk vocabulary ingestion for external
+			// reader apps (Nihongo Daily's contract, implemented verbatim
+			// — see words.go's package doc comment). Sits in this same
+			// authenticated group like every other learner-owned write;
+			// no CSRF special-casing needed — a non-browser caller sends
+			// no Origin header and passes Task 1's CSRF middleware
+			// unchanged.
+			r.Post("/words", s.apiWordsIngest)
 		})
 	})
 	return r

@@ -30,7 +30,8 @@ func (q *Queries) GetVocabularyEventItemByClientID(ctx context.Context, arg GetV
 
 const getVocabularyItem = `-- name: GetVocabularyItem :one
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
-       lookups, productions, successful_productions, first_seen, last_event
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags
 FROM vocabulary_items
 WHERE id = $1
 `
@@ -52,6 +53,8 @@ func (q *Queries) GetVocabularyItem(ctx context.Context, id pgtype.UUID) (Vocabu
 		&i.SuccessfulProductions,
 		&i.FirstSeen,
 		&i.LastEvent,
+		&i.MeaningEn,
+		&i.Tags,
 	)
 	return i, err
 }
@@ -123,7 +126,8 @@ func (q *Queries) InsertVocabularyItemIfAbsent(ctx context.Context, arg InsertVo
 
 const listVocabularyActivationCandidates = `-- name: ListVocabularyActivationCandidates :many
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
-       lookups, productions, successful_productions, first_seen, last_event
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags
 FROM vocabulary_items
 WHERE identity_id = $1
   AND (
@@ -174,6 +178,8 @@ func (q *Queries) ListVocabularyActivationCandidates(ctx context.Context, arg Li
 			&i.SuccessfulProductions,
 			&i.FirstSeen,
 			&i.LastEvent,
+			&i.MeaningEn,
+			&i.Tags,
 		); err != nil {
 			return nil, err
 		}
@@ -216,7 +222,8 @@ func (q *Queries) ListVocabularyExpressions(ctx context.Context, identityID stri
 
 const listVocabularyItems = `-- name: ListVocabularyItems :many
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
-       lookups, productions, successful_productions, first_seen, last_event
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags
 FROM vocabulary_items
 WHERE identity_id = $1
   AND (
@@ -259,6 +266,8 @@ func (q *Queries) ListVocabularyItems(ctx context.Context, arg ListVocabularyIte
 			&i.SuccessfulProductions,
 			&i.FirstSeen,
 			&i.LastEvent,
+			&i.MeaningEn,
+			&i.Tags,
 		); err != nil {
 			return nil, err
 		}
@@ -306,7 +315,8 @@ ON CONFLICT (identity_id, expression) DO UPDATE SET
     meaning    = CASE WHEN EXCLUDED.meaning <> '' THEN EXCLUDED.meaning ELSE vocabulary_items.meaning END,
     source     = CASE WHEN EXCLUDED.source  <> '' THEN EXCLUDED.source  ELSE vocabulary_items.source  END
 RETURNING id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
-          lookups, productions, successful_productions, first_seen, last_event
+          lookups, productions, successful_productions, first_seen, last_event,
+          meaning_en, tags
 `
 
 type UpsertVocabularyItemOnLookupParams struct {
@@ -346,6 +356,61 @@ func (q *Queries) UpsertVocabularyItemOnLookup(ctx context.Context, arg UpsertVo
 		&i.SuccessfulProductions,
 		&i.FirstSeen,
 		&i.LastEvent,
+		&i.MeaningEn,
+		&i.Tags,
 	)
 	return i, err
+}
+
+const upsertVocabularyWord = `-- name: UpsertVocabularyWord :exec
+INSERT INTO vocabulary_items
+    (id, identity_id, expression, reading, meaning, meaning_en, kind, jlpt_level, source, tags, lookups, productions, successful_productions, first_seen, last_event)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, 0, 0, $11, $11)
+ON CONFLICT (identity_id, expression) DO UPDATE SET
+    reading    = CASE WHEN EXCLUDED.reading    <> '' THEN EXCLUDED.reading    ELSE vocabulary_items.reading    END,
+    meaning    = CASE WHEN EXCLUDED.meaning    <> '' THEN EXCLUDED.meaning    ELSE vocabulary_items.meaning    END,
+    meaning_en = CASE WHEN EXCLUDED.meaning_en <> '' THEN EXCLUDED.meaning_en ELSE vocabulary_items.meaning_en END,
+    jlpt_level = CASE WHEN EXCLUDED.jlpt_level <> 0  THEN EXCLUDED.jlpt_level ELSE vocabulary_items.jlpt_level END,
+    source     = CASE WHEN EXCLUDED.source     <> '' THEN EXCLUDED.source     ELSE vocabulary_items.source     END,
+    tags       = CASE WHEN jsonb_array_length(EXCLUDED.tags) > 0 THEN EXCLUDED.tags ELSE vocabulary_items.tags END,
+    last_event = EXCLUDED.last_event
+`
+
+type UpsertVocabularyWordParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+	Expression string
+	Reading    string
+	Meaning    string
+	MeaningEn  string
+	Kind       string
+	JlptLevel  int32
+	Source     string
+	Tags       []byte
+	FirstSeen  pgtype.Timestamptz
+}
+
+// Phase 3 Task 8's bulk sync path (POST /api/v1/words): unlike
+// UpsertVocabularyItemOnLookup above, lookups/productions/
+// successful_productions are NEVER touched by this — a sync is not a
+// lookup event, so they stay at their existing value (0 on first
+// insert). Every string field does a sparse merge (empty incoming
+// value keeps the existing one; jlpt_level 0 keeps the existing
+// level) EXCEPT tags, which replaces wholesale when the incoming
+// array is non-empty rather than merging entry-by-entry.
+func (q *Queries) UpsertVocabularyWord(ctx context.Context, arg UpsertVocabularyWordParams) error {
+	_, err := q.db.Exec(ctx, upsertVocabularyWord,
+		arg.ID,
+		arg.IdentityID,
+		arg.Expression,
+		arg.Reading,
+		arg.Meaning,
+		arg.MeaningEn,
+		arg.Kind,
+		arg.JlptLevel,
+		arg.Source,
+		arg.Tags,
+		arg.FirstSeen,
+	)
+	return err
 }

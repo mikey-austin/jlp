@@ -167,6 +167,9 @@ func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map
 func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
 	panic("not used by practice service tests")
 }
+func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
+	panic("not used by practice service tests")
+}
 
 // --- test harness ---
 

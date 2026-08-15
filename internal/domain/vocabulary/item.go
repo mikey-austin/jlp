@@ -45,6 +45,16 @@ type Item struct {
 	JLPTLevel  int    // 0 unknown
 	Source     string // free text, e.g. "novel: コンビニ人間"
 
+	// MeaningEN and Tags are populated by POST /api/v1/words (Phase 3
+	// Task 8, Nihongo Daily's bulk ingestion contract): an English gloss
+	// alongside Meaning's Japanese definition, and free-form tags
+	// ("education", "noun", …) the source deck carried. Both are zero
+	// value ("" / nil) for items that only ever came from a
+	// vocabulary.lookup event — MeaningEN/Tags are never inferred from
+	// Meaning/Source.
+	MeaningEN string
+	Tags      []string
+
 	Lookups               int
 	Productions           int
 	SuccessfulProductions int

@@ -81,4 +81,37 @@ type VocabularyRepository interface {
 	// CONFLICT targets — see cmd/jlp/seed.go's seedExpressionBank for
 	// the only intended caller.
 	SeedBank(ctx context.Context, identity learner.IdentityID, entries []vocabulary.BankEntry, at time.Time) error
+	// BulkUpsertWords upserts words by (identity_id, expression) in ONE
+	// transaction (Phase 3 Task 8: POST /api/v1/words, Nihongo Daily's
+	// bulk sync contract) and returns how many rows were
+	// created-or-updated (== len(words); every entry is validated by
+	// application/vocabulary.Service.IngestWords before this is called,
+	// so each one always touches exactly one row).
+	//
+	// Unlike UpsertOnLookup, counters (Lookups/Productions/
+	// SuccessfulProductions) are NEVER touched — importing a deck is not
+	// a lookup event — and Kind is always vocabulary.KindWord on first
+	// insert. Sparse re-sync must not erase richer data already on
+	// file: an empty incoming Expression/Reading/Meaning/MeaningEN/
+	// Source string does NOT overwrite an existing non-empty value, and
+	// JLPTLevel 0 does not overwrite a known level. Tags is the one
+	// field that replaces wholesale rather than merging: a non-empty
+	// incoming Tags list replaces the stored list outright (never
+	// unioned), while an empty/nil incoming Tags leaves the stored list
+	// untouched.
+	BulkUpsertWords(ctx context.Context, identity learner.IdentityID, words []WordInput, at time.Time) (int, error)
+}
+
+// WordInput is one entry of POST /api/v1/words's "words" array,
+// translated from the wire's "kanji" field name into vocabulary.Item's
+// own Expression — see internal/adapters/http/words.go's wordInputDTO
+// for the wire shape this is decoded from.
+type WordInput struct {
+	Expression string // "kanji" on the wire
+	Reading    string
+	Meaning    string // Japanese definition
+	MeaningEN  string
+	JLPTLevel  int // 0..5, 0 = unknown
+	Tags       []string
+	Source     string
 }

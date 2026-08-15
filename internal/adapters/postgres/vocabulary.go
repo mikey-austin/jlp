@@ -228,10 +228,75 @@ func (r *VocabularyRepository) AllExpressions(ctx context.Context, identity lear
 	return out, nil
 }
 
+// BulkUpsertWords upserts words by (identity_id, expression) in ONE
+// transaction — see storage.VocabularyRepository.BulkUpsertWords' doc
+// comment for the exact sparse-merge/counters-untouched contract
+// UpsertVocabularyWord's ON CONFLICT clause implements. Unlike
+// SeedBank's ON CONFLICT DO NOTHING, a conflict here DOES update the
+// row (that's the whole point of a re-sync), just without ever
+// touching lookups/productions/successful_productions.
+func (r *VocabularyRepository) BulkUpsertWords(ctx context.Context, identity learner.IdentityID, words []storage.WordInput, at time.Time) (int, error) {
+	if len(words) == 0 {
+		return 0, nil
+	}
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has succeeded
+	qtx := r.q.WithTx(tx)
+
+	occurredAt := pgtype.Timestamptz{Time: at, Valid: true}
+	for _, w := range words {
+		id, err := uuid.NewRandom()
+		if err != nil {
+			return 0, err
+		}
+		tags := w.Tags
+		if tags == nil {
+			tags = []string{}
+		}
+		tagsJSON, err := json.Marshal(tags)
+		if err != nil {
+			return 0, fmt.Errorf("vocabulary: marshal tags for %q: %w", w.Expression, err)
+		}
+
+		if err := qtx.UpsertVocabularyWord(ctx, sqlcgen.UpsertVocabularyWordParams{
+			ID:         pgtype.UUID{Bytes: id, Valid: true},
+			IdentityID: string(identity),
+			Expression: w.Expression,
+			Reading:    w.Reading,
+			Meaning:    w.Meaning,
+			MeaningEn:  w.MeaningEN,
+			Kind:       string(vocabulary.KindWord),
+			JlptLevel:  int32(w.JLPTLevel),
+			Source:     w.Source,
+			Tags:       tagsJSON,
+			FirstSeen:  occurredAt,
+		}); err != nil {
+			return 0, fmt.Errorf("vocabulary: bulk upsert word %q: %w", w.Expression, err)
+		}
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return len(words), nil
+}
+
 // ensure the interface is satisfied at compile time.
 var _ storage.VocabularyRepository = (*VocabularyRepository)(nil)
 
 func fromVocabularyItemRow(row sqlcgen.VocabularyItem) vocabulary.Item {
+	var tags []string
+	if len(row.Tags) > 0 {
+		// A malformed tags payload can't happen from this adapter's own
+		// writes (BulkUpsertWords always marshals a valid []string), but
+		// tolerate it defensively rather than propagating a read error —
+		// tags is display-only, unlike the required fields above.
+		_ = json.Unmarshal(row.Tags, &tags)
+	}
 	return vocabulary.Item{
 		ID:                    uuid.UUID(row.ID.Bytes).String(),
 		IdentityID:            learner.IdentityID(row.IdentityID),
@@ -246,5 +311,7 @@ func fromVocabularyItemRow(row sqlcgen.VocabularyItem) vocabulary.Item {
 		SuccessfulProductions: int(row.SuccessfulProductions),
 		FirstSeen:             row.FirstSeen.Time,
 		LastEvent:             row.LastEvent.Time,
+		MeaningEN:             row.MeaningEn,
+		Tags:                  tags,
 	}
 }
