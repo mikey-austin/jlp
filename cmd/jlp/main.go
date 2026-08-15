@@ -147,6 +147,7 @@ func main() {
 		)
 		analyticsSvc := analytics.NewService(postgres.NewAnalyticsRepository(pool))
 		aiRatingRepo := postgres.NewAIRatingRepository(pool)
+		aiQualityRepo := postgres.NewAIQualityRepository(pool)
 
 		// The drill engine (Task 9, PRD §17.2/§58): drillAgent generates
 		// and evaluates exercises through the same always-observed aiGen
@@ -183,6 +184,7 @@ func main() {
 			AI:           aiGen,
 			AIRequests:   aiRequestRepo,
 			AIRatings:    aiRatingRepo,
+			AIQuality:    aiQualityRepo,
 			Grammar:      grammarRepo,
 			Priorities:   prioRepo,
 			Observations: obsRepo,

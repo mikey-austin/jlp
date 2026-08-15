@@ -45,6 +45,11 @@ type Options struct {
 	// AIRatings backs the feedback partial's star widget and the /ai
 	// page's rating column (Task 15).
 	AIRatings storage.AIRatingRepository
+	// AIQuality backs the /ai page's プロバイダー比較 and プロンプト品質
+	// sections (Task 10, PRD §26): aggregate quality numbers computed
+	// server-side over the same ai_requests/ai_ratings tables AIRequests
+	// and AIRatings above read individual rows from.
+	AIQuality storage.AIQualityRepository
 	// Grammar backs the /grammar catalog + per-concept detail pages
 	// (Task 3): ConceptStats drives the list, GetConcept and
 	// CorrectionsForConcept drive the detail page. The same repository

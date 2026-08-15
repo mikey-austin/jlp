@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -65,9 +66,35 @@ func (f fakeAIRequestRepo) List(context.Context, learner.IdentityID, int) ([]sto
 	return f.records, nil
 }
 
+// fakeAIQualityRepo is an in-memory storage.AIQualityRepository double
+// for HTTP-layer tests: a test configures byProvider/byPrompt directly
+// (the postgres repo's aggregate SQL and identity scoping are covered
+// by aiquality_test.go's integration tests), or sets err to exercise
+// the handler's error path.
+type fakeAIQualityRepo struct {
+	byProvider []storage.ProviderStats
+	byPrompt   []storage.PromptStats
+	err        error
+}
+
+func (f *fakeAIQualityRepo) ByProvider(context.Context, learner.IdentityID) ([]storage.ProviderStats, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.byProvider, nil
+}
+
+func (f *fakeAIQualityRepo) ByPrompt(context.Context, learner.IdentityID) ([]storage.PromptStats, error) {
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.byPrompt, nil
+}
+
 func aiTestOptions() Options {
 	opts := testOptions()
 	opts.AIRatings = newFakeAIRatingRepo()
+	opts.AIQuality = &fakeAIQualityRepo{}
 	return opts
 }
 
@@ -226,5 +253,93 @@ func TestAIRequestsPageRendersTable(t *testing.T) {
 	}
 	if !strings.Contains(body, ">4<") {
 		t.Errorf("GET /ai body missing rendered rating 4: %s", body)
+	}
+}
+
+// TestAIRequestsPageRendersProviderAndPromptStats covers the /ai page's
+// two aggregate sections (PRD §26): プロバイダー比較 (ProviderStats,
+// including p95 latency and cost) and プロンプト品質 (PromptStats,
+// keeping distinct prompt versions as separate rows rather than folding
+// them together — the whole point of tracking prompt version quality).
+func TestAIRequestsPageRendersProviderAndPromptStats(t *testing.T) {
+	opts := aiTestOptions()
+	opts.AIRequests = fakeAIRequestRepo{}
+	quality := opts.AIQuality.(*fakeAIQualityRepo)
+	quality.byProvider = []storage.ProviderStats{
+		{
+			Provider:     "fake",
+			Model:        "fake-1",
+			Requests:     5,
+			SuccessRate:  0.8,
+			AvgRating:    4.2,
+			AvgLatencyMS: 220,
+			P95LatencyMS: 808,
+			TotalCostUSD: 0.015,
+		},
+	}
+	quality.byPrompt = []storage.PromptStats{
+		{PromptName: "teacher.feedback", PromptVersion: "v2", Requests: 3, AvgRating: 3.5, SuccessRate: 1.0},
+		{PromptName: "teacher.feedback", PromptVersion: "v3", Requests: 2, AvgRating: 4.5, SuccessRate: 1.0},
+		{PromptName: "drill.generate", PromptVersion: "v1", Requests: 1, AvgRating: 0, SuccessRate: 1.0},
+	}
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ai", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /ai status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"プロバイダー比較", "プロンプト品質", "最近のリクエスト",
+		"fake", "fake-1", "808", "220", "80%",
+		"teacher.feedback", "v2", "v3", "drill.generate",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /ai body missing %q: %s", want, body)
+		}
+	}
+	// drill.generate/v1's AvgRating is 0 (unrated) and must render as an
+	// em dash, the same convention the last-50 table's Rating column
+	// uses — not a bare 0 that reads as "rated zero stars".
+	if !strings.Contains(body, "—") {
+		t.Errorf("GET /ai body missing em-dash rendering for unrated prompt stats: %s", body)
+	}
+}
+
+// TestAIRequestsPageRendersZeroStateForEmptyQualityStats: a fresh
+// identity with no ai_requests yet must see explicit zero-state text in
+// both aggregate sections, not an empty/broken table.
+func TestAIRequestsPageRendersZeroStateForEmptyQualityStats(t *testing.T) {
+	opts := aiTestOptions()
+	opts.AIRequests = fakeAIRequestRepo{}
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ai", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /ai status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if strings.Count(body, "まだAIリクエストがありません") != 3 {
+		t.Errorf("GET /ai zero-state text should appear once per section (3 total): %s", body)
+	}
+}
+
+// TestAIRequestsPageReturns500WhenQualityStatsFail: an AIQuality error
+// must surface as a 500, same as every other failed load this handler
+// makes (AIRequests.List, AIRatings.ForRequests) — never a page that
+// silently renders without its aggregate sections.
+func TestAIRequestsPageReturns500WhenQualityStatsFail(t *testing.T) {
+	opts := aiTestOptions()
+	opts.AIRequests = fakeAIRequestRepo{}
+	opts.AIQuality.(*fakeAIQualityRepo).err = errors.New("boom")
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/ai", nil))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("GET /ai status = %d, want 500, body=%s", rec.Code, rec.Body.String())
 	}
 }

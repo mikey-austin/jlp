@@ -1,5 +1,38 @@
 {{define "content"}}<section class="ai-requests">
-  <h1>AIリクエスト</h1>
+  <h1>AI品質ダッシュボード</h1>
+
+  <h2>プロバイダー比較</h2>
+  <table class="sessions-table ai-table">
+    <thead><tr><th>Provider</th><th>Model</th><th>Requests</th><th>Success rate</th><th>Avg rating</th><th>Avg latency (ms)</th><th>P95 latency (ms)</th><th>Total cost (USD)</th></tr></thead>
+    <tbody>
+      {{range .ProviderStats}}<tr>
+        <td>{{.Provider}}</td>
+        <td>{{.Model}}</td>
+        <td>{{.Requests}}</td>
+        <td>{{percent .SuccessRate}}%</td>
+        <td>{{if .AvgRating}}{{printf "%.1f" .AvgRating}}{{else}}—{{end}}</td>
+        <td>{{.AvgLatencyMS}}</td>
+        <td>{{.P95LatencyMS}}</td>
+        <td>{{printf "%.6f" .TotalCostUSD}}</td>
+      </tr>{{else}}<tr><td colspan="8" class="empty">まだAIリクエストがありません</td></tr>{{end}}
+    </tbody>
+  </table>
+
+  <h2>プロンプト品質</h2>
+  <table class="sessions-table ai-table">
+    <thead><tr><th>Prompt</th><th>Version</th><th>Requests</th><th>Avg rating</th><th>Success rate</th></tr></thead>
+    <tbody>
+      {{range .PromptStats}}<tr>
+        <td>{{.PromptName}}</td>
+        <td>{{.PromptVersion}}</td>
+        <td>{{.Requests}}</td>
+        <td>{{if .AvgRating}}{{printf "%.1f" .AvgRating}}{{else}}—{{end}}</td>
+        <td>{{percent .SuccessRate}}%</td>
+      </tr>{{else}}<tr><td colspan="5" class="empty">まだAIリクエストがありません</td></tr>{{end}}
+    </tbody>
+  </table>
+
+  <h2>最近のリクエスト</h2>
   <table class="sessions-table ai-table">
     <thead><tr><th>Provider</th><th>Model</th><th>Prompt</th><th>Latency (ms)</th><th>Tokens in/out</th><th>Cost (USD)</th><th>Success</th><th>Rating</th></tr></thead>
     <tbody>

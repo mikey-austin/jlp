@@ -43,9 +43,12 @@ func toAIRequestView(rec storage.AIRequestRecord, rating int) aiRequestView {
 	}
 }
 
-// aiRequests handles GET /ai: the observability page listing the
-// caller's last 50 ai_requests (provider, model, prompt, latency,
-// tokens, cost, success) alongside their own rating of each, if any.
+// aiRequests handles GET /ai: the observability page (PRD §26), three
+// sections. プロバイダー比較 and プロンプト品質 are aggregate quality
+// numbers computed server-side (Options.AIQuality, over the identity's
+// full ai_requests/ai_ratings history); 最近のリクエスト is the
+// pre-existing last-50 table listing the caller's ai_requests alongside
+// their own rating of each, if any.
 func (s *Server) aiRequests(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
@@ -69,10 +72,23 @@ func (s *Server) aiRequests(w http.ResponseWriter, r *http.Request) {
 		views = append(views, toAIRequestView(rec, ratings[rec.ID]))
 	}
 
+	byProvider, err := s.opts.AIQuality.ByProvider(r.Context(), ident.ID)
+	if err != nil {
+		http.Error(w, "could not load provider stats", http.StatusInternalServerError)
+		return
+	}
+	byPrompt, err := s.opts.AIQuality.ByPrompt(r.Context(), ident.ID)
+	if err != nil {
+		http.Error(w, "could not load prompt stats", http.StatusInternalServerError)
+		return
+	}
+
 	Render(w, r, "ai", map[string]any{
-		"Title":    "AI Requests",
-		"Identity": ident,
-		"Requests": views,
+		"Title":         "AI Requests",
+		"Identity":      ident,
+		"Requests":      views,
+		"ProviderStats": byProvider,
+		"PromptStats":   byPrompt,
 	})
 }
 
