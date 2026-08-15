@@ -11,6 +11,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
@@ -59,6 +60,15 @@ type Options struct {
 	// Priorities — shown alongside the priority table so a learner can
 	// see both the current read AND what it's derived from.
 	Observations storage.ObservationRepository
+	// Vocabulary backs both the /vocabulary page's List and POST
+	// /api/v1/vocabulary/events's Ingest (Task 6, PRD §12) — a single
+	// application-layer service rather than a raw repository (unlike
+	// Priorities/Observations above), since Ingest carries real
+	// business logic (idempotency, event recording) an HTTP handler
+	// must never duplicate. The same instance's DetectProduction is
+	// also wired into Feedback (see main.go), so a lookup made here and
+	// a production detected there share one vocabulary catalog.
+	Vocabulary *appvocabulary.Service
 }
 
 type Server struct {
@@ -125,6 +135,7 @@ func (s *Server) routes() http.Handler {
 		r.Get("/grammar", s.grammarList)
 		r.Get("/grammar/{slug}", s.grammarDetail)
 		r.Get("/learner", s.learnerPage)
+		r.Get("/vocabulary", s.vocabularyPage)
 
 		// /api/v1: the versioned JSON API (Task 16). It shares the exact
 		// same application services as the HTML routes above — no new
@@ -142,6 +153,7 @@ func (s *Server) routes() http.Handler {
 			r.Get("/learner/statistics", s.apiLearnerStatistics)
 			r.Get("/learner/priorities", s.apiLearnerPriorities)
 			r.Post("/ratings", s.apiRatingsCreate)
+			r.Post("/vocabulary/events", s.apiVocabularyIngest)
 		})
 	})
 	return r

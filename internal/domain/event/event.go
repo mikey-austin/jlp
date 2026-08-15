@@ -19,6 +19,17 @@ const (
 	TypeCorrectionAccepted        Type = "correction.accepted"
 	TypeCorrectionRejected        Type = "correction.rejected"
 	TypeGrammarConceptEncountered Type = "grammar.concept.encountered"
+
+	// The three vocabulary events (Phase 2 Task 6, PRD §12): looked-up
+	// fires on every application/vocabulary.Service.Ingest call;
+	// produced/produced-correctly fire from DetectProduction when a
+	// looked-up expression turns up in the learner's own writing —
+	// produced-correctly when no correction touched its occurrence,
+	// produced otherwise. See DetectProduction's doc comment for the
+	// exact "touched" definition.
+	TypeVocabularyLookedUp          Type = "vocabulary.looked-up"
+	TypeVocabularyProduced          Type = "vocabulary.produced"
+	TypeVocabularyProducedCorrectly Type = "vocabulary.produced-correctly"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

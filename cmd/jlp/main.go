@@ -21,6 +21,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	"github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
@@ -115,6 +116,15 @@ func main() {
 		aiRequestRepo := postgres.NewAIRequestRepository(pool)
 		aiGen := observability.NewAIObserver(innerGen, aiRequestRepo, aiPricing())
 
+		// The learner's personal vocabulary (Task 6, PRD §12): vocabSvc's
+		// Ingest backs POST /api/v1/vocabulary/events and the /vocabulary
+		// page's List (see httpx.Options.Vocabulary below); its
+		// DetectProduction is wired into feedback.Service so every review
+		// round also notices when a looked-up expression shows up,
+		// produced, in the learner's own writing.
+		vocabRepo := postgres.NewVocabularyRepository(pool)
+		vocabSvc := vocabulary.NewService(vocabRepo, recorder)
+
 		teacherAgent := teacher.New(aiGen)
 		feedbackSvc := feedback.NewService(
 			postgres.NewSessionRepository(pool),
@@ -122,6 +132,7 @@ func main() {
 			postgres.NewFeedbackRepository(pool),
 			grammarRepo,
 			prioRepo,
+			vocabSvc,
 			teacherAgent,
 			recorder,
 		)
@@ -157,6 +168,7 @@ func main() {
 			Grammar:      grammarRepo,
 			Priorities:   prioRepo,
 			Observations: obsRepo,
+			Vocabulary:   vocabSvc,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

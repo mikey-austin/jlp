@@ -8,16 +8,19 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"    //nolint:depguard // fakeai/inprocbus are port-shaped test doubles; PRD §75 forbids agents/application importing real adapters, not fakes
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus" //nolint:depguard // see fakeai above
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	appfeedback "github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
+	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
@@ -261,6 +264,61 @@ func (f *fakePriorityRepo) Top(_ context.Context, _ learner.IdentityID, limit in
 	return out, nil
 }
 
+// fakeVocabRepo is an in-memory storage.VocabularyRepository double
+// wired into the harness's real appvocabulary.Service, letting
+// TestRequestFeedbackDetectsVocabularyProduction (below) capture
+// exactly what DetectProduction, called from the very end of
+// RequestFeedback, records — without a database.
+type fakeVocabRepo struct {
+	items       map[string]*vocabulary.Item // key: expression (single test identity)
+	productions []productionCall
+	// recordErr, when set, fails every RecordProduction call — used by
+	// TestRequestFeedbackVocabularyDetectionFailureIsNonFatal to prove
+	// RequestFeedback swallows a downstream vocabulary failure rather
+	// than propagating it to the caller.
+	recordErr error
+}
+
+type productionCall struct {
+	ItemID     string
+	Successful bool
+}
+
+func newFakeVocabRepo() *fakeVocabRepo {
+	return &fakeVocabRepo{items: map[string]*vocabulary.Item{}}
+}
+
+// seed pre-populates an item as if it had already been looked up —
+// tests use this instead of going through Ingest, since RequestFeedback
+// only ever calls AllExpressions/RecordProduction, never UpsertOnLookup.
+func (f *fakeVocabRepo) seed(id, expression string) {
+	f.items[expression] = &vocabulary.Item{ID: id, Expression: expression}
+}
+
+func (f *fakeVocabRepo) UpsertOnLookup(context.Context, learner.IdentityID, string, string, string, string, vocabulary.Kind, string, time.Time) (vocabulary.Item, bool, error) {
+	panic("not used by feedback service tests")
+}
+
+func (f *fakeVocabRepo) RecordProduction(_ context.Context, _ learner.IdentityID, itemID string, successful bool, _ time.Time) error {
+	if f.recordErr != nil {
+		return f.recordErr
+	}
+	f.productions = append(f.productions, productionCall{ItemID: itemID, Successful: successful})
+	return nil
+}
+
+func (f *fakeVocabRepo) List(context.Context, learner.IdentityID, string) ([]vocabulary.Item, error) {
+	panic("not used by feedback service tests")
+}
+
+func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
+	out := map[string]string{}
+	for expr, item := range f.items {
+		out[expr] = item.ID
+	}
+	return out, nil
+}
+
 // knownConceptsForFakeAI mirrors the two concept slugs
 // internal/adapters/fakeai tags corrections with (i-adjective-past,
 // particle-ni-direction), so the default test harness's candidate list
@@ -289,6 +347,7 @@ type testHarness struct {
 	grammar    *fakeGrammarRepo
 	events     *fakeEventStore
 	priorities *fakePriorityRepo
+	vocab      *fakeVocabRepo
 }
 
 // newTestHarness wires the default harness over fakeai — its
@@ -310,9 +369,11 @@ func newTestHarnessWithGenerator(gen ai.StructuredGenerator) *testHarness {
 	priorities := &fakePriorityRepo{}
 	events := &fakeEventStore{}
 	rec := learning.NewRecorder(events, inprocbus.New())
+	vocabRepo := newFakeVocabRepo()
+	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
 	t := teacher.New(gen)
-	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, t, rec)
-	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events, priorities: priorities}
+	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, vocabSvc, t, rec)
+	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events, priorities: priorities, vocab: vocabRepo}
 }
 
 func (h *testHarness) putSession(s session.Session) {
@@ -947,5 +1008,84 @@ func TestSetCorrectionStatusInvalidStatus(t *testing.T) {
 	}
 	if len(h.events.events) != baseline {
 		t.Fatalf("recorded %d new events, want 0 for a rejected invalid status", len(h.events.events)-baseline)
+	}
+}
+
+// TestRequestFeedbackDetectsVocabularyProduction pins the Task 6 hook:
+// RequestFeedback, at the very end, calls vocab.DetectProduction over
+// the reviewed text — a looked-up expression present in that text
+// (here, untouched by the round's one correction) gets
+// RecordProduction(successful=true) and a vocabulary.produced-correctly
+// event, alongside the ordinary feedback.requested/correction.presented
+// events the round already produces.
+func TestRequestFeedbackDetectsVocabularyProduction(t *testing.T) {
+	h := newTestHarness() // fakeai's i-adjective-past rule fires on 面白いでした
+	h.vocab.seed("vocab-1", "取り組む")
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした。新しい仕事に取り組む。"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+
+	if len(h.vocab.productions) != 1 {
+		t.Fatalf("RecordProduction called %d times, want 1: %+v", len(h.vocab.productions), h.vocab.productions)
+	}
+	prod := h.vocab.productions[0]
+	if prod.ItemID != "vocab-1" || !prod.Successful {
+		t.Fatalf("production call = %+v, want {ItemID:vocab-1 Successful:true} (the correction never touched 取り組む)", prod)
+	}
+
+	var found bool
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeVocabularyProducedCorrectly {
+			found = true
+			if ev.Subject != "取り組む" {
+				t.Fatalf("event.Subject = %q, want 取り組む", ev.Subject)
+			}
+			if ev.SessionID == nil || *ev.SessionID != testSessionID {
+				t.Fatalf("event.SessionID = %v, want %q", ev.SessionID, testSessionID)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected a vocabulary.produced-correctly event, found none")
+	}
+}
+
+// TestRequestFeedbackVocabularyDetectionFailureIsNonFatal pins the
+// brief's explicit non-fatal contract: unlike every event.Record call
+// in RequestFeedback (hard-fail), a vocab.DetectProduction error must
+// never turn an otherwise-successful review into an error for the
+// caller — production detection is enrichment, not core review
+// history. Exercised by wiring a vocab service whose RecordProduction
+// always errors.
+func TestRequestFeedbackVocabularyDetectionFailureIsNonFatal(t *testing.T) {
+	h := newTestHarness()
+	h.vocab.seed("vocab-1", "取り組む")
+	h.vocab.recordErr = errors.New("boom: vocab repo unavailable")
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "新しい仕事に取り組む。"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	fb, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v, want nil (vocabulary detection failures must be non-fatal)", err)
+	}
+	// The review itself must have completed normally despite the
+	// downstream vocabulary failure.
+	if fb.ID == "" {
+		t.Fatal("Feedback ID was not assigned")
+	}
+	if len(h.repo.feedback) != 1 {
+		t.Fatalf("persisted feedback count = %d, want 1 (the review itself must still succeed)", len(h.repo.feedback))
 	}
 }

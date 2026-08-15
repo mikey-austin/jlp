@@ -9,11 +9,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/google/uuid"
 
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
+	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/diff"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
@@ -47,6 +49,7 @@ type Service struct {
 	repo       storage.FeedbackRepository
 	grammar    storage.GrammarRepository
 	priorities storage.PriorityRepository
+	vocab      *appvocabulary.Service
 	teacher    *teacher.Agent
 	rec        *learning.Recorder
 }
@@ -58,8 +61,10 @@ type Service struct {
 // off the request path: priorities are kept fresh by the learnermodel
 // Updater (see that package's SetPlanner) reacting to the PRECEDING
 // request's events, not recomputed synchronously on every review.
-func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, t *teacher.Agent, rec *learning.Recorder) *Service {
-	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, teacher: t, rec: rec}
+// vocab.DetectProduction runs at the very end of every RequestFeedback
+// call — see that method's closing comment for why it's non-fatal.
+func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, vocab *appvocabulary.Service, t *teacher.Agent, rec *learning.Recorder) *Service {
+	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, vocab: vocab, teacher: t, rec: rec}
 }
 
 // Request asks for AI feedback on a slice of a document. Start/End are
@@ -296,6 +301,34 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 			Status:     "presented",
 			Diff:       diff.Runes(c.Original, c.Replacement),
 		})
+	}
+
+	// Production detection runs LAST, after every hard-fail event above
+	// has already committed, and its error is deliberately swallowed
+	// (logged, not returned): unlike feedback.requested/
+	// correction.presented/grammar.concept.encountered — each of which
+	// IS this round's core review history, so a Recorder failure for
+	// any of them must surface as an error rather than silently drift
+	// the event log out of sync with the already-persisted
+	// FeedbackRecord (see this method's opening doc comment) — a
+	// vocabulary production is enrichment layered on TOP of that
+	// history, not part of it: whether or not 取り組む got noticed as
+	// "produced" this round has no bearing on whether the review
+	// itself succeeded, and failing (or partially failing) the whole
+	// request over it would make an unrelated subsystem's hiccup look
+	// like the Teacher agent itself failed. correctedSpans is every
+	// presented correction's Original — see
+	// appvocabulary.Service.DetectProduction's doc comment for exactly
+	// how those decide successful vs. not — and text is selectionText,
+	// what the learner actually wrote, not the corrected result.
+	if s.vocab != nil {
+		correctedSpans := make([]string, 0, len(result.Corrections))
+		for _, c := range result.Corrections {
+			correctedSpans = append(correctedSpans, c.Original)
+		}
+		if err := s.vocab.DetectProduction(ctx, req.Identity, req.SessionID, selectionText, correctedSpans); err != nil {
+			slog.Error("vocabulary detect production", "err", err)
+		}
 	}
 
 	return Feedback{

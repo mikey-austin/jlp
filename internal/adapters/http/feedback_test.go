@@ -16,6 +16,7 @@ import (
 	appfeedback "github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
@@ -160,7 +161,8 @@ func feedbackTestServer(t *testing.T, content string) (http.Handler, session.Ses
 	opts.Sessions = sessions.NewService(sessionRepo)
 	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
-	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teacher.New(fakeai.New()), rec)
+	vocabSvc := appvocabulary.NewService(newFakeVocabRepo(), rec)
+	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, vocabSvc, teacher.New(fakeai.New()), rec)
 
 	sess, err := opts.Sessions.Create(context.Background(), "dev", "日記", "Diary", session.Profile{
 		TeacherMode:         "teacher",

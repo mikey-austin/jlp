@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed rebuild-model deploy-local deploy deploy-logs
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -61,6 +61,16 @@ seed: ## Populate a dev-friendly identity, session, and document (idempotent)
 
 rebuild-model: ## Recompute every identity's learner_observations from learning_events (safe to rerun)
 	$(TOOLS) go run ./cmd/jlp rebuild-model
+
+demo-ingest: ## POST 3 sample vocabulary lookups (PRD §12) against the running dev app; safe to rerun (client_event_id makes it idempotent)
+	@set -a; [ -f .env ] && . ./.env; set +a; \
+	PORT=$${APP_HOST_PORT:-8080}; \
+	curl -sf -X POST "http://localhost:$$PORT/api/v1/vocabulary/events" -H "Content-Type: application/json" \
+		-d '{"type":"vocabulary.lookup","expression":"取り組む","reading":"とりくむ","definition":"to tackle, to work on","example":"新しい仕事に取り組みます。","source":{"type":"novel","title":"コンビニ人間"},"client_event_id":"demo-torikumu"}' && echo; \
+	curl -sf -X POST "http://localhost:$$PORT/api/v1/vocabulary/events" -H "Content-Type: application/json" \
+		-d '{"type":"vocabulary.lookup","expression":"それはそれとして","reading":"","definition":"be that as it may; setting that aside","example":"それはそれとして、明日の会議の準備をしましょう。","source":{"type":"novel","title":"コンビニ人間"},"client_event_id":"demo-sorehasoretoshite"}' && echo; \
+	curl -sf -X POST "http://localhost:$$PORT/api/v1/vocabulary/events" -H "Content-Type: application/json" \
+		-d '{"type":"vocabulary.lookup","expression":"気配","reading":"けはい","definition":"sign, indication, hint of presence","example":"誰かがいる気配がした。","source":{"type":"novel","title":"コンビニ人間"},"client_event_id":"demo-kehai"}' && echo
 
 migrate-new: ## Create a migration (n=short_name)
 	@test -n "$(n)" || (echo "usage: make migrate-new n=add_table"; exit 1)

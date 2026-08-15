@@ -141,3 +141,29 @@ type Session struct {
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
 }
+
+type VocabularyEvent struct {
+	ID            pgtype.UUID
+	IdentityID    string
+	ItemID        pgtype.UUID
+	Type          string
+	Payload       []byte
+	ClientEventID pgtype.Text
+	OccurredAt    pgtype.Timestamptz
+}
+
+type VocabularyItem struct {
+	ID                    pgtype.UUID
+	IdentityID            string
+	Expression            string
+	Reading               string
+	Meaning               string
+	Kind                  string
+	JlptLevel             int32
+	Source                string
+	Lookups               int32
+	Productions           int32
+	SuccessfulProductions int32
+	FirstSeen             pgtype.Timestamptz
+	LastEvent             pgtype.Timestamptz
+}

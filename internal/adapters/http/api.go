@@ -26,7 +26,9 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -449,4 +451,63 @@ func (s *Server) apiRatingsCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// vocabularyItemDTO mirrors vocabulary.Item's learner-facing fields in
+// snake_case, the same shape every other DTO in this file uses.
+type vocabularyItemDTO struct {
+	ID                    string `json:"id"`
+	Expression            string `json:"expression"`
+	Reading               string `json:"reading"`
+	Meaning               string `json:"meaning"`
+	Kind                  string `json:"kind"`
+	JLPTLevel             int    `json:"jlpt_level"`
+	Source                string `json:"source"`
+	Lookups               int    `json:"lookups"`
+	Productions           int    `json:"productions"`
+	SuccessfulProductions int    `json:"successful_productions"`
+}
+
+func toVocabularyItemDTO(item vocabulary.Item) vocabularyItemDTO {
+	return vocabularyItemDTO{
+		ID:                    item.ID,
+		Expression:            item.Expression,
+		Reading:               item.Reading,
+		Meaning:               item.Meaning,
+		Kind:                  string(item.Kind),
+		JLPTLevel:             item.JLPTLevel,
+		Source:                item.Source,
+		Lookups:               item.Lookups,
+		Productions:           item.Productions,
+		SuccessfulProductions: item.SuccessfulProductions,
+	}
+}
+
+// apiVocabularyIngest handles POST /api/v1/vocabulary/events (PRD
+// §12) via appvocabulary.Service.Ingest — the same service the
+// /vocabulary page's List reads back from (Options.Vocabulary is one
+// instance shared by both routes). The request body IS
+// appvocabulary.IngestEvent directly (its json tags ARE the wire
+// contract PRD §12 pins), unlike every other POST handler in this
+// file, which decodes into a local *Request DTO before translating
+// into application-layer types — there is no translation step here to
+// keep separate.
+func (s *Server) apiVocabularyIngest(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	var ev appvocabulary.IngestEvent
+	if err := decodeJSON(w, r, &ev); err != nil {
+		writeAPIError(w, http.StatusBadRequest, "malformed request body")
+		return
+	}
+
+	item, err := s.opts.Vocabulary.Ingest(r.Context(), ident.ID, ev)
+	if err != nil {
+		if errors.Is(err, appvocabulary.ErrUnsupportedType) || errors.Is(err, appvocabulary.ErrEmptyExpression) {
+			writeAPIError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeAPIError(w, http.StatusInternalServerError, "could not ingest vocabulary event")
+		return
+	}
+	writeJSON(w, http.StatusCreated, toVocabularyItemDTO(item))
 }
