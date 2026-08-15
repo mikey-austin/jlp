@@ -11,6 +11,66 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getCorrection = `-- name: GetCorrection :one
+SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
+       c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+       c.status, c.attempts, c.confidence, c.revealed, f.session_id
+FROM corrections c
+JOIN feedback_requests f ON c.feedback_request_id = f.id
+WHERE c.id = $1 AND f.identity_id = $2
+`
+
+type GetCorrectionParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+}
+
+type GetCorrectionRow struct {
+	ID                pgtype.UUID
+	FeedbackRequestID pgtype.UUID
+	Position          int32
+	Original          string
+	Replacement       string
+	Type              string
+	Severity          string
+	ExplanationJa     string
+	ExplanationEn     string
+	HintJa            string
+	HintEn            string
+	Status            string
+	Attempts          int32
+	Confidence        pgtype.Int4
+	Revealed          bool
+	SessionID         pgtype.UUID
+}
+
+// Identity-scoped read, same join as UpdateCorrectionStatus: a
+// correction that exists but belongs to another identity's feedback
+// misses exactly like one that doesn't exist at all.
+func (q *Queries) GetCorrection(ctx context.Context, arg GetCorrectionParams) (GetCorrectionRow, error) {
+	row := q.db.QueryRow(ctx, getCorrection, arg.ID, arg.IdentityID)
+	var i GetCorrectionRow
+	err := row.Scan(
+		&i.ID,
+		&i.FeedbackRequestID,
+		&i.Position,
+		&i.Original,
+		&i.Replacement,
+		&i.Type,
+		&i.Severity,
+		&i.ExplanationJa,
+		&i.ExplanationEn,
+		&i.HintJa,
+		&i.HintEn,
+		&i.Status,
+		&i.Attempts,
+		&i.Confidence,
+		&i.Revealed,
+		&i.SessionID,
+	)
+	return i, err
+}
+
 const getCorrectionConcepts = `-- name: GetCorrectionConcepts :many
 SELECT concept_slug
 FROM correction_concepts

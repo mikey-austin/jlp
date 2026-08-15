@@ -7,14 +7,17 @@ import (
 	"os"
 	"time"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/ankiconnect"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
+	agentanki "github.com/mikeyaustin/jlp/internal/agent/anki"
 	"github.com/mikeyaustin/jlp/internal/agent/drill"
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
+	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
@@ -118,10 +121,17 @@ func main() {
 		vocabSvc := vocabulary.NewService(vocabRepo, recorder)
 
 		teacherAgent := teacher.New(aiGen)
+		// feedbackRepo is named (rather than inlined like the other
+		// one-off repository args above) because the Anki review queue
+		// below also needs it: GetCorrection reads a correction's
+		// original/replacement/explanation back for the Anki agent to
+		// write a card from — the same repository instance, not a second
+		// construction of it.
+		feedbackRepo := postgres.NewFeedbackRepository(pool)
 		feedbackSvc := feedback.NewService(
 			postgres.NewSessionRepository(pool),
 			postgres.NewDocumentRepository(pool),
-			postgres.NewFeedbackRepository(pool),
+			feedbackRepo,
 			grammarRepo,
 			prioRepo,
 			teachingPlanner,
@@ -142,6 +152,20 @@ func main() {
 		drillAgent := drill.New(aiGen)
 		practiceSvc := practice.NewService(postgres.NewExerciseRepository(pool), drillAgent, teachingPlanner, grammarRepo, recorder)
 
+		// The Anki review queue (Phase 3 Task 3, PRD §19): ankiAgent
+		// writes one flashcard per accepted correction through the same
+		// always-observed aiGen every other agent uses; ankiSvc reuses
+		// feedbackRepo (GetCorrection) to read a correction's context back
+		// without a second repository construction. PushToAnkiConnect
+		// stays dormant (SetConnector never called) unless
+		// cfg.Anki.ConnectURL is set — see config.Anki's doc comment.
+		ankiAgent := agentanki.New(aiGen)
+		ankiCardRepo := postgres.NewAnkiCardRepository(pool)
+		ankiSvc := appanki.NewService(ankiCardRepo, feedbackRepo, ankiAgent, recorder)
+		if cfg.Anki.ConnectURL != "" {
+			ankiSvc.SetConnector(ankiconnect.New(cfg.Anki.ConnectURL))
+		}
+
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
 		case "static":
@@ -157,23 +181,26 @@ func main() {
 			os.Exit(1)
 		}
 		srv := httpx.NewServer(httpx.Options{
-			Addr:         fmt.Sprintf(":%d", cfg.Server.Port),
-			Auth:         authn,
-			Identities:   identities,
-			Sessions:     sessionsSvc,
-			Writing:      writingSvc,
-			Events:       eventRepo,
-			Feedback:     feedbackSvc,
-			Analytics:    analyticsSvc,
-			AI:           aiGen,
-			AIRequests:   aiRequestRepo,
-			AIRatings:    aiRatingRepo,
-			AIQuality:    aiQualityRepo,
-			Grammar:      grammarRepo,
-			Priorities:   prioRepo,
-			Observations: obsRepo,
-			Vocabulary:   vocabSvc,
-			Practice:     practiceSvc,
+			Addr:               fmt.Sprintf(":%d", cfg.Server.Port),
+			Auth:               authn,
+			Identities:         identities,
+			Sessions:           sessionsSvc,
+			Writing:            writingSvc,
+			Events:             eventRepo,
+			Feedback:           feedbackSvc,
+			Analytics:          analyticsSvc,
+			AI:                 aiGen,
+			AIRequests:         aiRequestRepo,
+			AIRatings:          aiRatingRepo,
+			AIQuality:          aiQualityRepo,
+			Grammar:            grammarRepo,
+			Priorities:         prioRepo,
+			Observations:       obsRepo,
+			Vocabulary:         vocabSvc,
+			Practice:           practiceSvc,
+			Anki:               ankiSvc,
+			AnkiCards:          ankiCardRepo,
+			AnkiConnectEnabled: cfg.Anki.ConnectURL != "",
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

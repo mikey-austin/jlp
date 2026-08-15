@@ -30,6 +30,10 @@ services:
       APP_AI_OLLAMA_URL: ${APP_AI_OLLAMA_URL:-http://ollama:11434}
       APP_AI_OLLAMA_MODEL: ${APP_AI_OLLAMA_MODEL:-}
       APP_AI_ROUTES: ${APP_AI_ROUTES:-}
+      # Empty (the default) keeps the Anki review queue's AnkiConnect push
+      # dormant — see internal/config.Anki's doc comment. TSV export needs
+      # no configuration at all.
+      APP_ANKI_CONNECT_URL: ${APP_ANKI_CONNECT_URL:-}
     depends_on:
       postgres: { condition: service_healthy }
 

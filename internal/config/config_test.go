@@ -94,6 +94,35 @@ func TestCLIBinEnvOverrides(t *testing.T) {
 	}
 }
 
+// TestAnkiConnectURLDefaultsEmptyAndDoesNotRequireValidation pins the
+// "feature dormant by default" contract (PRD §19): with no
+// APP_ANKI_CONNECT_URL set, Config.Anki.ConnectURL is "" and Load still
+// succeeds — TSV export must work with zero Anki-specific configuration.
+func TestAnkiConnectURLDefaultsEmptyAndDoesNotRequireValidation(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Anki.ConnectURL != "" {
+		t.Fatalf("Anki.ConnectURL default = %q, want empty", cfg.Anki.ConnectURL)
+	}
+}
+
+// TestAnkiConnectURLEnvOverride pins the exact operator-facing env var
+// name APP_ANKI_CONNECT_URL (not the auto-derived APP_ANKI_CONNECTURL).
+func TestAnkiConnectURLEnvOverride(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_ANKI_CONNECT_URL", "http://localhost:8765")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Anki.ConnectURL != "http://localhost:8765" {
+		t.Fatalf("Anki.ConnectURL = %q, want override applied", cfg.Anki.ConnectURL)
+	}
+}
+
 func TestEmptyEnvVarDoesNotClobberDefault(t *testing.T) {
 	t.Setenv("APP_DATABASE_URL", "postgres://x")
 	// docker-compose.yml passes APP_AI_ANTHROPIC_MODEL/BASEURL through as

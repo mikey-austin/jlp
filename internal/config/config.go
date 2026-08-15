@@ -13,6 +13,7 @@ type Config struct {
 	Database Database
 	Auth     Auth
 	AI       AI
+	Anki     Anki
 }
 
 type Server struct {
@@ -86,6 +87,18 @@ type CodexCLI struct {
 	Bin string
 }
 
+// Anki configures the optional AnkiConnect push (PRD §19,
+// internal/adapters/ankiconnect). ConnectURL empty (the default) means
+// the feature is dormant: main.go never constructs an ankiconnect.Client,
+// application/anki.Service.PushToAnkiConnect always returns
+// ErrAnkiConnectNotConfigured, and the /anki page's 「Ankiへ送信」 button
+// is never rendered — validate below deliberately does NOT require this
+// field, since TSV export (the other export path) works with no
+// AnkiConnect configuration at all.
+type Anki struct {
+	ConnectURL string
+}
+
 func Load() (Config, error) {
 	v := viper.New()
 	v.SetDefault("server.port", 8080)
@@ -122,6 +135,14 @@ func Load() (Config, error) {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}
+	}
+	// anki.connecturl is bound to an explicit env var name (rather than
+	// the automatic ANKI_CONNECTURL the loop above's replacer would
+	// derive) so the operator-facing variable reads as
+	// APP_ANKI_CONNECT_URL — see .env.example and docker-compose.yml,
+	// which document/pass it through under that exact name.
+	if err := v.BindEnv("anki.connecturl", "APP_ANKI_CONNECT_URL"); err != nil {
+		return Config{}, err
 	}
 
 	var cfg Config

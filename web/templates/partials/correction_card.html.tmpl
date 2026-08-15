@@ -52,6 +52,10 @@
        @click="score = n; fetch('/corrections/{{.ID}}/confidence', {method:'POST',
           body: new URLSearchParams({confidence: n})})">★</button></template>
   </div>
+  <form hx-post="/corrections/{{.ID}}/anki" hx-target="#anki-toast-{{.ID}}" hx-swap="innerHTML">
+    <button type="submit" class="anki-create">Ankiカード作成</button>
+  </form>
+  <div id="anki-toast-{{.ID}}"></div>
   {{end}}
 </article>
 {{end}}

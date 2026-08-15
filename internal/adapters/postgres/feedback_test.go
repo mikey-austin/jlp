@@ -170,6 +170,104 @@ func TestFeedbackInsertAndUpdateCorrectionStatus(t *testing.T) {
 	}
 }
 
+// TestFeedbackGetCorrection pins the Phase 3 Task 3 addition:
+// GetCorrection reads a correction back identity-scoped, same join as
+// UpdateCorrectionStatus — application/anki.Service.GenerateFromCorrection
+// relies on this to fetch a correction's Original/Replacement/
+// Explanation for the Anki agent to write a card from.
+func TestFeedbackGetCorrection(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	identities := NewIdentityRepository(pool)
+	identityA := learner.Identity{ID: learner.IdentityID("test-getcorrection-a-" + uuid.NewString()), DisplayName: "A"}
+	identityB := learner.Identity{ID: learner.IdentityID("test-getcorrection-b-" + uuid.NewString()), DisplayName: "B"}
+	if err := identities.Upsert(ctx, identityA); err != nil {
+		t.Fatal(err)
+	}
+	if err := identities.Upsert(ctx, identityB); err != nil {
+		t.Fatal(err)
+	}
+
+	sessions := NewSessionRepository(pool)
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	sess := session.Session{
+		ID:         session.ID(uuid.New().String()),
+		IdentityID: identityA.ID,
+		Title:      "旅行について書く",
+		Purpose:    "Diary",
+		CreatedAt:  now,
+		UpdatedAt:  now,
+	}
+	if err := sessions.Create(ctx, sess); err != nil {
+		t.Fatal(err)
+	}
+
+	docs := NewDocumentRepository(pool)
+	doc, _, err := docs.GetOrCreateForSession(ctx, identityA.ID, sess.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	feedback := NewFeedbackRepository(pool)
+	feedbackID := uuid.New().String()
+	correctionID := uuid.New().String()
+	rec := storage.FeedbackRecord{
+		ID:             feedbackID,
+		IdentityID:     identityA.ID,
+		SessionID:      sess.ID,
+		DocumentID:     doc.ID,
+		SelectionStart: 0,
+		SelectionEnd:   9,
+		SelectionText:  "とても面白いでした",
+		CorrectedText:  "とても面白かったです",
+	}
+	corrections := []storage.CorrectionRecord{{
+		ID:            correctionID,
+		FeedbackID:    feedbackID,
+		Position:      0,
+		Original:      "面白いでした",
+		Replacement:   "面白かったです",
+		Type:          "conjugation",
+		Severity:      "incorrect",
+		ExplanationJA: "い形容詞の過去形は「〜かった」を使います。",
+		ExplanationEN: "い-adjectives form the past tense with 〜かった.",
+		Status:        "accepted",
+	}}
+	if err := feedback.InsertFeedback(ctx, rec, corrections, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := feedback.GetCorrection(ctx, identityA.ID, correctionID)
+	if err != nil {
+		t.Fatalf("GetCorrection: %v", err)
+	}
+	if got.Original != "面白いでした" || got.Replacement != "面白かったです" {
+		t.Fatalf("Original/Replacement = %q/%q, want 面白いでした/面白かったです", got.Original, got.Replacement)
+	}
+	if got.ExplanationJA == "" || got.ExplanationEN == "" {
+		t.Fatal("explanation fields were not returned")
+	}
+	if got.SessionID != sess.ID {
+		t.Fatalf("SessionID = %q, want %q", got.SessionID, sess.ID)
+	}
+
+	if _, err := feedback.GetCorrection(ctx, identityB.ID, correctionID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("cross-identity GetCorrection err = %v, want storage.ErrNotFound", err)
+	}
+	if _, err := feedback.GetCorrection(ctx, identityA.ID, uuid.NewString()); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("unknown correction id err = %v, want storage.ErrNotFound", err)
+	}
+}
+
 // TestFeedbackInsertFeedbackPersistsConceptsAtomicallyAndIdempotently
 // pins Phase 2 Task 2's concept-tagging persistence, now folded into
 // InsertFeedback's single transaction (fix round 3, Finding 2) rather

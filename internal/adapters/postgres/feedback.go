@@ -235,6 +235,26 @@ func (r *FeedbackRepository) GetCorrectionConcepts(ctx context.Context, correcti
 	return slugs, nil
 }
 
+// GetCorrection reads back one correction, identity-scoped via the same
+// join UpdateCorrectionStatus uses: a wrong identity or unknown
+// correction ID both miss with storage.ErrNotFound.
+func (r *FeedbackRepository) GetCorrection(ctx context.Context, identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, error) {
+	id, err := parseUUID(correctionID)
+	if err != nil {
+		return storage.CorrectionRecord{}, fmt.Errorf("correction id: %w", err)
+	}
+	row, err := r.q.GetCorrection(ctx, sqlcgen.GetCorrectionParams{ID: id, IdentityID: string(identity)})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storage.CorrectionRecord{}, storage.ErrNotFound
+		}
+		return storage.CorrectionRecord{}, err
+	}
+	return buildCorrectionRecord(row.ID, row.FeedbackRequestID, row.SessionID, row.Position,
+		row.Original, row.Replacement, row.Type, row.Severity, row.ExplanationJa, row.ExplanationEn,
+		row.HintJa, row.HintEn, row.Status, row.Attempts, row.Confidence, row.Revealed), nil
+}
+
 // toOptionalUUID converts an optional canonical UUID string (empty
 // means "not set") to the nullable pgtype sqlc generates for
 // feedback_requests.ai_request_id: empty maps to an invalid (SQL NULL)

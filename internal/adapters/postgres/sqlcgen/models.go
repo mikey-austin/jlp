@@ -34,6 +34,18 @@ type AiRequest struct {
 	CreatedAt     pgtype.Timestamptz
 }
 
+type AnkiCard struct {
+	ID         pgtype.UUID
+	IdentityID string
+	SourceType string
+	SourceID   string
+	Front      string
+	Back       string
+	Notes      string
+	Status     string
+	CreatedAt  pgtype.Timestamptz
+}
+
 type Correction struct {
 	ID                pgtype.UUID
 	FeedbackRequestID pgtype.UUID

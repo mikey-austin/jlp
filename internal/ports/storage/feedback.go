@@ -129,4 +129,11 @@ type FeedbackRepository interface {
 	RetryCorrection(ctx context.Context, identity learner.IdentityID, correctionID, trimmedAttempt string) (CorrectionRecord, error)
 	RevealCorrection(ctx context.Context, identity learner.IdentityID, correctionID string) (CorrectionRecord, error)
 	RecordConfidence(ctx context.Context, identity learner.IdentityID, correctionID string, confidence int) (CorrectionRecord, error)
+	// GetCorrection reads back one correction (Phase 3 Task 3, PRD §19):
+	// application/anki.Service.GenerateFromCorrection needs the
+	// correction's Original/Replacement/Explanation to give the Anki
+	// agent something to write a card from. Identity-scoped via the same
+	// join to feedback_requests UpdateCorrectionStatus uses — a wrong
+	// identity or unknown correction ID both miss with ErrNotFound.
+	GetCorrection(ctx context.Context, identity learner.IdentityID, correctionID string) (CorrectionRecord, error)
 }

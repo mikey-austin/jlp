@@ -1,0 +1,20 @@
+{{define "content"}}<section class="anki">
+  <h1>Ankiカード</h1>
+
+  <div id="anki-drafts">
+    <h2>下書き</h2>
+    {{if .Drafts}}{{range .Drafts}}{{template "anki_card" .}}{{end}}
+    {{else}}<p class="empty">下書きのカードはありません。校正カードの「Ankiカード作成」から作成できます。</p>{{end}}
+  </div>
+
+  <div id="anki-approved">
+    <h2>承認済み</h2>
+    {{if .Approved}}{{range .Approved}}{{template "anki_card" .}}{{end}}
+    {{else}}<p class="empty">承認済みのカードはありません。</p>{{end}}
+    <div class="anki-export-actions">
+      <a href="/anki/export.tsv" class="btn">TSVエクスポート</a>
+      {{if .AnkiConnectEnabled}}<button hx-post="/anki/push" hx-target="#anki-push-result" hx-swap="innerHTML">Ankiへ送信</button>{{end}}
+    </div>
+    <div id="anki-push-result"></div>
+  </div>
+</section>{{end}}

@@ -189,6 +189,21 @@ func (f *fakeFeedbackRepo) RecordConfidence(_ context.Context, identity learner.
 	return c, nil
 }
 
+// GetCorrection mirrors the real query's identity-scoped join, same
+// "not yours"/"not found" collapse as UpdateCorrectionStatus.
+func (f *fakeFeedbackRepo) GetCorrection(_ context.Context, identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, error) {
+	c, ok := f.corrections[correctionID]
+	if !ok {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	fb, ok := f.feedback[c.FeedbackID]
+	if !ok || fb.IdentityID != identity {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	c.SessionID = fb.SessionID
+	return c, nil
+}
+
 // GetCorrectionConcepts mirrors the real query's "resolved only,
 // slug-ascending" contract.
 func (f *fakeFeedbackRepo) GetCorrectionConcepts(_ context.Context, correctionID string) ([]string, error) {

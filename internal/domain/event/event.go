@@ -62,6 +62,20 @@ const (
 	TypeQuizStarted   Type = "quiz.started"
 	TypeQuizAnswered  Type = "quiz.answered"
 	TypeQuizCompleted Type = "quiz.completed"
+
+	// The two Phase 3 Task 3 Anki events (PRD §19): TypeAnkiCardCreated
+	// fires once per generated draft (application/anki.Service.
+	// GenerateFromCorrection); TypeAnkiCardExported fires once per card
+	// actually marked exported, from either ExportTSV or
+	// PushToAnkiConnect. There is deliberately no
+	// anki.card.approved/rejected event type — SetStatus's transition is
+	// visible in the card's own Status column (like a correction's own
+	// accept/reject), not duplicated into the event log the way
+	// correction.accepted/correction.rejected are, since nothing
+	// downstream reacts to an Anki card's review decision the way the
+	// learner model reacts to a correction's.
+	TypeAnkiCardCreated  Type = "anki.card.created"
+	TypeAnkiCardExported Type = "anki.card.exported"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

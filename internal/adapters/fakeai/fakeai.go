@@ -43,6 +43,11 @@ const (
 	schemaExerciseV1     = "exercise.v1"
 	schemaExerciseEvalV1 = "exercise_eval.v1"
 
+	// schemaAnkiCardV1 backs internal/agent/anki (Phase 3 Task 3, PRD
+	// §19): same "one fixed canned shape, keyed purely on SchemaName, no
+	// prompt pattern-matching" treatment as the exercise schemas above.
+	schemaAnkiCardV1 = "anki_card.v1"
+
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
@@ -72,6 +77,7 @@ var supportedSchemas = map[string]bool{
 	schemaV2:             true,
 	schemaExerciseV1:     true,
 	schemaExerciseEvalV1: true,
+	schemaAnkiCardV1:     true,
 }
 
 type explanation struct {
@@ -141,6 +147,23 @@ var iAdjectivePastExercise = cannedExercise{
 	Concept: "i-adjective-past",
 }
 
+// cannedAnkiCard mirrors schemas/defs/anki_card.v1.json field-for-field.
+type cannedAnkiCard struct {
+	Front string `json:"front"`
+	Back  string `json:"back"`
+	Notes string `json:"notes,omitempty"`
+}
+
+// iAdjectivePastAnkiCard is the fake provider's one canned Anki card
+// (Phase 3 Task 3's Step 1 pin): the task brief's exact pinned wording,
+// matching the same 面白い/面白かったです i-adjective-past mistake every
+// other fake-provider fixture in this file uses.
+var iAdjectivePastAnkiCard = cannedAnkiCard{
+	Front: "「とても面白いでした」— 何が不自然？",
+	Back:  "「とても面白かったです」\n\n理由: い形容詞の過去形は〜かったを使います。",
+	Notes: "i-adjective-past",
+}
+
 // freeProductionEval is the fake provider's one canned drill evaluation.
 var freeProductionEval = cannedExerciseEval{
 	Correct: true,
@@ -194,18 +217,21 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 
 	if req.SchemaName != "" && !supportedSchemas[req.SchemaName] {
 		return ai.StructuredResponse{Provider: provider, Model: model},
-			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1)
+			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1, schemaAnkiCardV1)
 	}
 
-	// exercise.v1/exercise_eval.v1 (internal/agent/drill) are unrelated
-	// to the correction-result shape below: always the same canned
-	// response, keyed purely on SchemaName — see schemaExerciseV1's doc
-	// comment for why there's no prompt pattern-matching here.
+	// exercise.v1/exercise_eval.v1 (internal/agent/drill) and
+	// anki_card.v1 (internal/agent/anki) are unrelated to the
+	// correction-result shape below: always the same canned response,
+	// keyed purely on SchemaName — see schemaExerciseV1's doc comment
+	// for why there's no prompt pattern-matching here.
 	switch req.SchemaName {
 	case schemaExerciseV1:
 		return g.respond(start, req, iAdjectivePastExercise)
 	case schemaExerciseEvalV1:
 		return g.respond(start, req, freeProductionEval)
+	case schemaAnkiCardV1:
+		return g.respond(start, req, iAdjectivePastAnkiCard)
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own

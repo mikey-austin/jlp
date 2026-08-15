@@ -9,7 +9,7 @@
   <meta name="theme-color" content="#b7282e">
 </head>
 <body>
-  <header class="topbar"><a href="/" class="brand">日本語 JLP</a><nav id="topnav"><a href="/sessions">セッション</a><a href="/grammar">文法</a><a href="/vocabulary">語彙</a><a href="/practice">練習</a><a href="/learner">学習</a><a href="/ai">AI</a>{{with .Identity}}<span class="who">{{.DisplayName}}</span>{{end}}</nav></header>
+  <header class="topbar"><a href="/" class="brand">日本語 JLP</a><nav id="topnav"><a href="/sessions">セッション</a><a href="/grammar">文法</a><a href="/vocabulary">語彙</a><a href="/practice">練習</a><a href="/anki">Anki</a><a href="/learner">学習</a><a href="/ai">AI</a>{{with .Identity}}<span class="who">{{.DisplayName}}</span>{{end}}</nav></header>
   <main>{{template "content" .}}</main>
   <script src="/static/js/htmx.min.js" defer></script>
   <script src="/static/js/alpine.min.js" defer></script>

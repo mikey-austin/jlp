@@ -56,6 +56,17 @@ RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
           c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
           c.status, c.attempts, c.confidence, c.revealed, f.session_id;
 
+-- name: GetCorrection :one
+-- Identity-scoped read, same join as UpdateCorrectionStatus: a
+-- correction that exists but belongs to another identity's feedback
+-- misses exactly like one that doesn't exist at all.
+SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
+       c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+       c.status, c.attempts, c.confidence, c.revealed, f.session_id
+FROM corrections c
+JOIN feedback_requests f ON c.feedback_request_id = f.id
+WHERE c.id = $1 AND f.identity_id = $2;
+
 -- name: RecordConfidence :one
 UPDATE corrections c SET confidence = $3
 FROM feedback_requests f

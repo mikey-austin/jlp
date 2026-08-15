@@ -1,0 +1,2 @@
+{{define "anki_push_result"}}{{if .Error}}<p class="error">Ankiへの送信に失敗しました：{{.Error}}</p>
+{{else}}<p class="toast">{{.Added}}枚のカードをAnkiに送信しました。</p>{{end}}{{end}}

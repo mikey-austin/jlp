@@ -234,6 +234,22 @@ func (f *fakeFeedbackRepo) RecordConfidence(_ context.Context, identity learner.
 	return c, nil
 }
 
+// GetCorrection mirrors the real query's identity-scoped join: a
+// correction ID that exists but belongs to another identity misses
+// with ErrNotFound exactly like UpdateCorrectionStatus.
+func (f *fakeFeedbackRepo) GetCorrection(_ context.Context, identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, error) {
+	c, ok := f.corrections[correctionID]
+	if !ok {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	fb, ok := f.feedback[c.FeedbackID]
+	if !ok || fb.IdentityID != identity {
+		return storage.CorrectionRecord{}, storage.ErrNotFound
+	}
+	c.SessionID = fb.SessionID
+	return c, nil
+}
+
 // conceptRow is one persisted (correction, slug, resolved) tuple,
 // letting tests assert exactly what InsertFeedback's concepts argument
 // contained.

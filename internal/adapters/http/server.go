@@ -9,6 +9,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
+	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
@@ -80,6 +81,22 @@ type Options struct {
 	// pipeline (planner-driven concept selection, exercise generation,
 	// deterministic-plus-AI evaluation, events).
 	Practice *practice.Service
+	// Anki drives the /anki review queue's mutations (Phase 3 Task 3,
+	// PRD §19): generating a draft from a correction, approve/reject,
+	// TSV export, and the optional AnkiConnect push.
+	Anki *appanki.Service
+	// AnkiCards backs the /anki page's own draft/approved listing —
+	// read-only, so it goes straight to the repository rather than
+	// through Anki above, the same "raw repository for a GET listing
+	// page, service for mutations" split Grammar/Priorities/Observations
+	// already use.
+	AnkiCards storage.AnkiCardRepository
+	// AnkiConnectEnabled gates the /anki page's 「Ankiへ送信」 button:
+	// true only when main.go configured APP_ANKI_CONNECT_URL and wired a
+	// connector into Anki via SetConnector. False (the default) keeps
+	// AnkiConnect fully dormant — the button is never rendered at all,
+	// not just disabled.
+	AnkiConnectEnabled bool
 }
 
 type Server struct {
@@ -166,6 +183,18 @@ func (s *Server) routes() http.Handler {
 		r.Get("/practice", s.practicePage)
 		r.Post("/practice/start", s.practiceStart)
 		r.Post("/practice/{id}/answer", s.practiceAnswer)
+
+		// Phase 3 Task 3: Anki card generation + review queue (PRD
+		// §19). /anki/export.tsv is a GET despite mutating (marks
+		// exported) — see ankiExportTSV's doc comment for why that's
+		// safe and deliberate; it's listed before /anki/{id}/status so
+		// its literal path always wins chi's routing over the wildcard
+		// {id} segment.
+		r.Get("/anki", s.ankiPage)
+		r.Get("/anki/export.tsv", s.ankiExportTSV)
+		r.Post("/anki/push", s.ankiPush)
+		r.Post("/anki/{id}/status", s.ankiStatus)
+		r.Post("/corrections/{id}/anki", s.correctionAnki)
 
 		// /api/v1: the versioned JSON API (Task 16). It shares the exact
 		// same application services as the HTML routes above — no new
