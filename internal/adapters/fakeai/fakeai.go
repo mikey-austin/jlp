@@ -304,7 +304,10 @@ func hintFor(socratic bool, hint explanation) *explanation {
 type generator struct{}
 
 // New returns the fake provider. It satisfies ai.StructuredGenerator.
-func New() ai.StructuredGenerator { return &generator{} }
+// New returns a value implementing BOTH ai.StructuredGenerator and
+// ai.ToolCaller — see CallWithTools below for the deterministic
+// two-turn script it plays for the latter.
+func New() *generator { return &generator{} }
 
 func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
 	start := time.Now()
@@ -425,3 +428,76 @@ func iAdjectivePastCorrection(adj, text string) (correction, bool) {
 }
 
 func runeCount(s string) int { return len([]rune(s)) }
+
+// toolCallToolName is the ONE tool fakeai's CallWithTools script ever
+// calls — get_learning_priorities, per the task brief's exact script:
+// "first turn invokes get_learning_priorities, second turn returns
+// prose mentioning the returned priority". This is a fixed, canned
+// scripted sequence (same "one fixed shape, not a simulation" treatment
+// every schema-keyed fixture above gets), not a general tool-calling
+// simulator — enough to drive a real two-turn agent-run loop offline
+// without a live model, for tests and dev.
+const toolCallToolName = "get_learning_priorities"
+
+// priorityView mirrors internal/tools.priorityView's "subject" field —
+// the only piece of a get_learning_priorities tool result CallWithTools
+// actually reads, to weave it into its second-turn prose.
+type priorityView struct {
+	Subject string `json:"subject"`
+}
+
+// CallWithTools implements ai.ToolCaller with a deterministic
+// two-turn script, keyed purely on whether the LAST message in
+// req.Messages is a "tool" turn (i.e. the caller already ran the
+// first turn's invocation and is feeding its result back):
+//
+//   - No trailing "tool" message yet: return a turn that calls
+//     get_learning_priorities with empty arguments and no prose — the
+//     model "deciding" to look up the learner's priorities before
+//     answering.
+//   - A trailing "tool" message: read its first ai.ToolResult.Content
+//     (the JSON array internal/tools.getLearningPrioritiesTool
+//     returns), extract the first entry's "subject", and answer in
+//     prose naming it, with no further Invocations — the model is
+//     done.
+//
+// This never inspects req.Tools or which tool the caller actually
+// registered under that name — like every other fixture in this file,
+// it is a fixed script, not a simulation of real tool-selection
+// reasoning.
+func (g *generator) CallWithTools(_ context.Context, req ai.ToolRequest) (ai.ToolResponse, error) {
+	start := time.Now()
+
+	if n := len(req.Messages); n > 0 && req.Messages[n-1].Role == "tool" {
+		subject := "your recent priorities"
+		results := req.Messages[n-1].Results
+		if len(results) > 0 {
+			var priorities []priorityView
+			if err := json.Unmarshal([]byte(results[0].Content), &priorities); err == nil && len(priorities) > 0 && priorities[0].Subject != "" {
+				subject = priorities[0].Subject
+			}
+		}
+		text := fmt.Sprintf("Based on your learning priorities, you should focus on %s next.", subject)
+		return ai.ToolResponse{
+			Turn:         ai.ToolTurn{Text: text},
+			Provider:     provider,
+			Model:        model,
+			InputTokens:  runeCount(req.System),
+			OutputTokens: runeCount(text),
+			Latency:      time.Since(start),
+		}, nil
+	}
+
+	return ai.ToolResponse{
+		Turn: ai.ToolTurn{
+			Invocations: []ai.ToolInvocation{
+				{ID: "fake-call-1", Name: toolCallToolName, Arguments: json.RawMessage(`{}`)},
+			},
+		},
+		Provider:     provider,
+		Model:        model,
+		InputTokens:  runeCount(req.System),
+		OutputTokens: 0,
+		Latency:      time.Since(start),
+	}, nil
+}

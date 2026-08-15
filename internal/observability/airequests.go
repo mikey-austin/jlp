@@ -83,3 +83,64 @@ func (o *observer) GenerateStructured(ctx context.Context, req ai.StructuredRequ
 func cost(p ModelPricing, inputTokens, outputTokens int) float64 {
 	return float64(inputTokens)/1_000_000*p.InPerMTok + float64(outputTokens)/1_000_000*p.OutPerMTok
 }
+
+// toolObserver wraps an ai.ToolCaller exactly the way observer above
+// wraps an ai.StructuredGenerator: every CallWithTools call, success or
+// failure, becomes its own ai_requests row. A multi-turn tool-calling
+// conversation therefore produces one row PER TURN (one CallWithTools
+// call == one model round trip == one turn), not one row for the whole
+// conversation — matching airouter's own "every attempt is its own
+// row" convention, just one level up: here every TURN is its own row.
+type toolObserver struct {
+	inner   ai.ToolCaller
+	repo    storage.AIRequestRepository
+	pricing map[string]ModelPricing
+}
+
+// NewToolObserver wraps inner so every CallWithTools turn is timed,
+// costed, and inserted into repo as an AIRequestRecord (Capability
+// "tool-calling", distinct from NewAIObserver's "structured-
+// generation" so the two capabilities' usage can be told apart in the
+// ai_requests audit log) — regardless of whether inner succeeds, same
+// never-lose-a-record contract as NewAIObserver.
+func NewToolObserver(inner ai.ToolCaller, repo storage.AIRequestRepository, pricing map[string]ModelPricing) ai.ToolCaller {
+	return &toolObserver{inner: inner, repo: repo, pricing: pricing}
+}
+
+func (o *toolObserver) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.ToolResponse, error) {
+	requestID := uuid.NewString()
+	start := time.Now()
+
+	resp, callErr := o.inner.CallWithTools(ctx, req)
+	latency := time.Since(start)
+
+	resp.RequestID = requestID
+	resp.Latency = latency
+
+	rec := storage.AIRequestRecord{
+		ID:            requestID,
+		Capability:    "tool-calling",
+		Provider:      resp.Provider,
+		Model:         resp.Model,
+		PromptName:    req.PromptName,
+		PromptVersion: req.PromptVersion,
+		IdentityID:    req.IdentityID,
+		SessionID:     req.SessionID,
+		LatencyMS:     int(latency.Milliseconds()),
+		InputTokens:   resp.InputTokens,
+		OutputTokens:  resp.OutputTokens,
+		CostUSD:       cost(o.pricing[resp.Model], resp.InputTokens, resp.OutputTokens),
+		Success:       callErr == nil,
+		CreatedAt:     start,
+		Agent:         req.Agent,
+	}
+	if callErr != nil {
+		rec.Error = callErr.Error()
+	}
+
+	if err := o.repo.Insert(ctx, rec); err != nil {
+		slog.Error("ai_requests: insert failed", "request_id", requestID, "err", err)
+	}
+
+	return resp, callErr
+}

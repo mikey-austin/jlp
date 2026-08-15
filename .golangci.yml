@@ -34,6 +34,16 @@ linters:
         # internal/application/practice/service_test.go. Any other file
         # under internal/agent/** or internal/application/** that imports
         # a real adapter is still flagged.
+        # agents-no-repos's third entry (Phase 4 Task 1) closes the same
+        # Rule 3 loophole for the new internal/tools registry: agents
+        # receive tool DEFINITIONS via the ports/ai types
+        # (ai.ToolDef/ai.ToolCaller) from whatever drives their
+        # agent-run loop — never the registry itself, which would let an
+        # agent invoke tools directly and bypass the per-agent
+        # allowlist internal/tools.Registry.Allow exists to enforce.
+        # Only the driver that owns a Registry (Task 2's agentic
+        # teacher, wired at the application/cmd layer) may import
+        # internal/tools.
         agents-no-repos:
           files: ["**/internal/agent/**"]
           deny:
@@ -41,6 +51,8 @@ linters:
               desc: "Rule 3: agents reach state only through tools/services"
             - pkg: github.com/mikeyaustin/jlp/internal/ports/storage
               desc: "Rule 3: agents must not touch repositories"
+            - pkg: github.com/mikeyaustin/jlp/internal/tools
+              desc: "Rule 3: agents receive tool defs via ports/ai, never the registry itself"
         application-no-adapters:
           files: ["**/internal/application/**"]
           deny:

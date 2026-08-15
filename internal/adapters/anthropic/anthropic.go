@@ -40,13 +40,18 @@ type generator struct {
 	model  string
 }
 
-// New returns an ai.StructuredGenerator backed by the real Anthropic
-// Messages API. cfg.BaseURL and cfg.APIKey are always passed
-// explicitly to the SDK client, so this generator never falls back to
-// ambient ANTHROPIC_* environment variables — the caller's config is
-// the only source of truth for where requests go and what
-// credentials they carry.
-func New(cfg config.Anthropic) ai.StructuredGenerator {
+// New returns a value implementing BOTH ai.StructuredGenerator (forced
+// tool use, single turn) and ai.ToolCaller (real multi-turn tool
+// calling) against the real Anthropic Messages API — the concrete
+// *generator return type (rather than either interface alone) is what
+// lets a single call site hand the same value to both a
+// StructuredGenerator chain and a ToolCaller chain (see
+// cmd/jlp/ai.go's buildAIGenerator/buildToolCaller). cfg.BaseURL and
+// cfg.APIKey are always passed explicitly to the SDK client, so this
+// generator never falls back to ambient ANTHROPIC_* environment
+// variables — the caller's config is the only source of truth for
+// where requests go and what credentials they carry.
+func New(cfg config.Anthropic) *generator {
 	return &generator{
 		client: anthropic.NewClient(
 			option.WithAPIKey(cfg.APIKey),
@@ -99,4 +104,103 @@ func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredReq
 
 	return ai.StructuredResponse{Provider: provider, Model: string(resp.Model)},
 		fmt.Errorf("anthropic: response contained no tool_use block for tool %q (stop_reason %q)", toolName, resp.StopReason)
+}
+
+// CallWithTools implements ai.ToolCaller against the same Messages API
+// GenerateStructured uses, but WITHOUT forcing tool_choice: req.Tools
+// are offered as real tools (Anthropic's tools + tool_use/tool_result
+// blocks), and the model decides, turn by turn, whether to call one,
+// several, or none — the multi-turn agentic shape ToolCaller exists
+// for, as opposed to StructuredGenerator's single forced call.
+func (g *generator) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.ToolResponse, error) {
+	start := time.Now()
+
+	maxTokens := req.MaxTokens
+	if maxTokens == 0 {
+		maxTokens = defaultMaxTokens
+	}
+
+	resp, err := g.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     anthropic.Model(g.model),
+		MaxTokens: int64(maxTokens),
+		System:    []anthropic.TextBlockParam{{Text: req.System}},
+		Messages:  toAnthropicMessages(req.Messages),
+		Tools:     toAnthropicTools(req.Tools),
+	})
+	if err != nil {
+		return ai.ToolResponse{Provider: provider, Model: g.model},
+			fmt.Errorf("anthropic: messages.new: %w", err)
+	}
+
+	turn := ai.ToolTurn{}
+	for _, block := range resp.Content {
+		switch block.Type {
+		case "text":
+			turn.Text += block.Text
+		case "tool_use":
+			turn.Invocations = append(turn.Invocations, ai.ToolInvocation{
+				ID:        block.ID,
+				Name:      block.Name,
+				Arguments: json.RawMessage(block.Input),
+			})
+		}
+	}
+
+	return ai.ToolResponse{
+		Turn:         turn,
+		Provider:     provider,
+		Model:        string(resp.Model),
+		InputTokens:  int(resp.Usage.InputTokens),
+		OutputTokens: int(resp.Usage.OutputTokens),
+		Latency:      time.Since(start),
+	}, nil
+}
+
+// toAnthropicTools translates every ai.ToolDef into an Anthropic
+// custom tool, its InputSchema carried byte-for-byte via
+// param.Override — the same raw-bytes pass-through
+// GenerateStructured's forced emit_result tool uses for req.Schema.
+func toAnthropicTools(defs []ai.ToolDef) []anthropic.ToolUnionParam {
+	tools := make([]anthropic.ToolUnionParam, 0, len(defs))
+	for _, d := range defs {
+		tools = append(tools, anthropic.ToolUnionParam{OfTool: &anthropic.ToolParam{
+			Name:        d.Name,
+			Description: anthropic.String(d.Description),
+			InputSchema: param.Override[anthropic.ToolInputSchemaParam](json.RawMessage(d.Schema)),
+		}})
+	}
+	return tools
+}
+
+// toAnthropicMessages replays a ToolRequest's conversation so far into
+// the Messages API's own turn shape: a "user" ToolMessage becomes a
+// plain text user turn; an "assistant" ToolMessage becomes an
+// assistant turn carrying its Text (if any) plus one tool_use block
+// per Invocation; a "tool" ToolMessage becomes a user turn carrying
+// one tool_result block per Result — Anthropic's wire contract puts
+// tool results in a user-role message, never their own role.
+func toAnthropicMessages(msgs []ai.ToolMessage) []anthropic.MessageParam {
+	out := make([]anthropic.MessageParam, 0, len(msgs))
+	for _, m := range msgs {
+		switch m.Role {
+		case "assistant":
+			blocks := make([]anthropic.ContentBlockParamUnion, 0, 1+len(m.Invocations))
+			if m.Text != "" {
+				blocks = append(blocks, anthropic.NewTextBlock(m.Text))
+			}
+			for _, inv := range m.Invocations {
+				blocks = append(blocks, anthropic.NewToolUseBlock(inv.ID, json.RawMessage(inv.Arguments), inv.Name))
+			}
+			out = append(out, anthropic.NewAssistantMessage(blocks...))
+		case "tool":
+			blocks := make([]anthropic.ContentBlockParamUnion, 0, len(m.Results))
+			for _, r := range m.Results {
+				blocks = append(blocks, anthropic.NewToolResultBlock(r.ID, r.Content, r.IsError))
+			}
+			out = append(out, anthropic.NewUserMessage(blocks...))
+		default: // "user"
+			out = append(out, anthropic.NewUserMessage(anthropic.NewTextBlock(m.Text)))
+		}
+	}
+	return out
 }

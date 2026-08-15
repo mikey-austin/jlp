@@ -211,6 +211,71 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 	return airouter.New(resolvedRoutes, []ai.StructuredGenerator{defaultGen}), nil
 }
 
+// buildToolCaller turns cfg.AI into the single ai.ToolCaller Phase 4's
+// agentic capabilities call (Task 2 onward) — the ToolCaller
+// counterpart of buildAIGenerator above, an airouter.NewToolCaller on
+// top of a per-provider-name map of observability.NewToolObserver-
+// wrapped adapters. It shares buildAIGenerator's route parsing and
+// pricing table, but its provider set is narrower: only
+// adapters/fakeai, adapters/anthropic, and adapters/ollama implement
+// ai.ToolCaller today — adapters/clicmd's claudecli/codexcli adapters
+// (their non-interactive JSON CLI output has no tool-calling protocol
+// of its own to drive) do not, so a route or APP_AI_PROVIDER naming
+// either for TOOL calling is a boot error here, the same "operator
+// asked for a chain link that doesn't exist" treatment
+// buildAIGenerator gives an unconstructible provider.
+//
+// Not yet called from main() — nothing in Task 1 consumes an
+// ai.ToolCaller (no HTTP handler drives an agent-run loop yet); Task 2
+// wires this into cmd/jlp/main.go once the agentic teacher exists to
+// call it.
+func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepository) (ai.ToolCaller, error) {
+	routes, err := config.ParseRoutes(cfg.AI.Routes)
+	if err != nil {
+		return nil, err
+	}
+
+	pricing := aiPricing()
+	raw := map[string]ai.ToolCaller{
+		"fake": fakeai.New(),
+	}
+	if cfg.AI.Anthropic.APIKey != "" {
+		raw["anthropic"] = anthropic.New(cfg.AI.Anthropic)
+	}
+	needed := map[string]bool{cfg.AI.Provider: true}
+	for _, chain := range routes {
+		for _, name := range chain {
+			needed[name] = true
+		}
+	}
+	if needed["ollama"] && cfg.AI.Ollama.Model != "" {
+		raw["ollama"] = ollama.New(cfg.AI.Ollama)
+	}
+
+	providers := make(map[string]ai.ToolCaller, len(raw))
+	for name, gen := range raw {
+		providers[name] = observability.NewToolObserver(gen, aiRequestRepo, pricing)
+	}
+
+	resolvedRoutes := make(map[string][]ai.ToolCaller, len(routes))
+	for promptName, chain := range routes {
+		for _, name := range chain {
+			gen, ok := providers[name]
+			if !ok {
+				return nil, fmt.Errorf("ai: tool-calling route %q names provider %q, which doesn't implement ai.ToolCaller (only fake, anthropic, and ollama do)", promptName, name)
+			}
+			resolvedRoutes[promptName] = append(resolvedRoutes[promptName], gen)
+		}
+	}
+
+	defaultGen, ok := providers[cfg.AI.Provider]
+	if !ok {
+		return nil, fmt.Errorf("ai: APP_AI_PROVIDER %q doesn't implement ai.ToolCaller (only fake, anthropic, and ollama do)", cfg.AI.Provider)
+	}
+
+	return airouter.NewToolCaller(resolvedRoutes, []ai.ToolCaller{defaultGen}), nil
+}
+
 // warnIfUnpriced logs a startup warning when provider's model has no
 // aiPricing() entry — the call still succeeds either way (an absent
 // entry already costs $0, see aiPricing's doc comment), but an

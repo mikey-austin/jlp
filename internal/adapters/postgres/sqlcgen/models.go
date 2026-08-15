@@ -8,6 +8,20 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AgentRun struct {
+	ID            pgtype.UUID
+	IdentityID    string
+	SessionID     pgtype.UUID
+	Agent         string
+	PromptName    string
+	PromptVersion string
+	Status        string
+	Turns         int32
+	StartedAt     pgtype.Timestamptz
+	EndedAt       pgtype.Timestamptz
+	Error         string
+}
+
 type AiRating struct {
 	ID          pgtype.UUID
 	AiRequestID pgtype.UUID
@@ -197,6 +211,17 @@ type Session struct {
 	Profile    []byte
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
+}
+
+type ToolCall struct {
+	ID         pgtype.UUID
+	AgentRunID pgtype.UUID
+	ToolName   string
+	Arguments  string
+	Result     string
+	IsError    bool
+	DurationMs int32
+	CreatedAt  pgtype.Timestamptz
 }
 
 type VocabularyEvent struct {
