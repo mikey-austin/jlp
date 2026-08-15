@@ -11,6 +11,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
+	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
@@ -97,6 +98,14 @@ type Options struct {
 	// AnkiConnect fully dormant — the button is never rendered at all,
 	// not just disabled.
 	AnkiConnectEnabled bool
+	// Lessons drives the /lessons pipeline's mutations (Phase 3 Task 4,
+	// PRD §18/§60): generating a tutor lesson guide and recording a
+	// human tutor's post-lesson observation.
+	Lessons *applessons.Service
+	// LessonsRepo backs the /lessons list/detail pages' own read-only
+	// GET queries — the same "raw repository for a listing page,
+	// service for mutations" split AnkiCards/Anki above use.
+	LessonsRepo storage.LessonRepository
 }
 
 type Server struct {
@@ -195,6 +204,13 @@ func (s *Server) routes() http.Handler {
 		r.Post("/anki/push", s.ankiPush)
 		r.Post("/anki/{id}/status", s.ankiStatus)
 		r.Post("/corrections/{id}/anki", s.correctionAnki)
+
+		// Phase 3 Task 4: tutor lesson guides + post-lesson observations
+		// (PRD §18, §60).
+		r.Get("/lessons", s.lessonsList)
+		r.Post("/lessons", s.lessonsGenerate)
+		r.Get("/lessons/{id}", s.lessonsDetail)
+		r.Post("/lessons/{id}/complete", s.lessonsComplete)
 
 		// /api/v1: the versioned JSON API (Task 16). It shares the exact
 		// same application services as the HTML routes above — no new

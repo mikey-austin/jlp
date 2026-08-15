@@ -122,6 +122,10 @@ func (f *fakeFeedbackRepo) GetCorrection(_ context.Context, identity learner.Ide
 	return rec, nil
 }
 
+func (f *fakeFeedbackRepo) RecentCorrections(context.Context, learner.IdentityID, int) ([]storage.CorrectionRecord, error) {
+	panic("not used by anki service tests")
+}
+
 func (f *fakeFeedbackRepo) InsertFeedback(context.Context, storage.FeedbackRecord, []storage.CorrectionRecord, map[string][]storage.ConceptTag) error {
 	panic("not used by anki service tests")
 }

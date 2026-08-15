@@ -87,6 +87,18 @@ const (
 	// expressions]}. See application/vocabulary.Service.IngestWords for
 	// exactly how Subject/Evidence are built.
 	TypeVocabularyImported Type = "vocabulary.imported"
+
+	// The two Phase 3 Task 4 tutor lesson guide events (PRD §18, §60):
+	// TypeTutorLessonCreated fires once per generated guide
+	// (application/lessons.Service.Generate); TypeTutorLessonCompleted
+	// fires once the human tutor's post-lesson observation has been
+	// recorded (application/lessons.Service.Complete), Evidence carrying
+	// the observation's subjects. The learner model does NOT yet consume
+	// either — see Service.Complete's own doc comment — they exist to
+	// enrich the activity feed and a future learnermodel rebuild's
+	// fidelity.
+	TypeTutorLessonCreated   Type = "tutor.lesson.created"
+	TypeTutorLessonCompleted Type = "tutor.lesson.completed"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

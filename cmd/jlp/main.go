@@ -15,12 +15,14 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
 	agentanki "github.com/mikeyaustin/jlp/internal/agent/anki"
 	"github.com/mikeyaustin/jlp/internal/agent/drill"
+	agentlesson "github.com/mikeyaustin/jlp/internal/agent/lesson"
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
+	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
@@ -166,6 +168,18 @@ func main() {
 			ankiSvc.SetConnector(ankiconnect.New(cfg.Anki.ConnectURL))
 		}
 
+		// Tutor lesson guides + post-lesson observations (Phase 3 Task 4,
+		// PRD §18/§60): lessonAgent writes one lesson_plan.v1 guide per
+		// call through the same always-observed aiGen every other agent
+		// uses; lessonSvc reuses feedbackRepo (RecentCorrections),
+		// teachingPlanner (ActivationCandidates), prioRepo (Top), and
+		// obsRepo (List) — the same shared instances feedbackSvc's/
+		// practiceSvc's construction above already established, not a
+		// second construction of any of them.
+		lessonAgent := agentlesson.New(aiGen)
+		lessonRepo := postgres.NewLessonRepository(pool)
+		lessonSvc := applessons.NewService(lessonRepo, prioRepo, teachingPlanner, feedbackRepo, obsRepo, lessonAgent, recorder)
+
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
 		case "static":
@@ -201,6 +215,8 @@ func main() {
 			Anki:               ankiSvc,
 			AnkiCards:          ankiCardRepo,
 			AnkiConnectEnabled: cfg.Anki.ConnectURL != "",
+			Lessons:            lessonSvc,
+			LessonsRepo:        lessonRepo,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

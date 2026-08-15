@@ -170,6 +170,24 @@ type LearningEvent struct {
 	OccurredAt pgtype.Timestamptz
 }
 
+type Lesson struct {
+	ID          pgtype.UUID
+	IdentityID  string
+	Plan        []byte
+	Status      string
+	CreatedAt   pgtype.Timestamptz
+	CompletedAt pgtype.Timestamptz
+}
+
+type LessonObservation struct {
+	ID        pgtype.UUID
+	LessonID  pgtype.UUID
+	Author    string
+	Notes     string
+	Subjects  []byte
+	CreatedAt pgtype.Timestamptz
+}
+
 type Session struct {
 	ID         pgtype.UUID
 	IdentityID string

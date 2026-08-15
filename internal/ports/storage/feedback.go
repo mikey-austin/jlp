@@ -136,4 +136,14 @@ type FeedbackRepository interface {
 	// join to feedback_requests UpdateCorrectionStatus uses — a wrong
 	// identity or unknown correction ID both miss with ErrNotFound.
 	GetCorrection(ctx context.Context, identity learner.IdentityID, correctionID string) (CorrectionRecord, error)
+	// RecentCorrections reads back identity's most recent corrections
+	// across every session, newest first, at most limit (Phase 3 Task 4,
+	// PRD §18): application/lessons.Service.Generate uses this to give
+	// the lesson agent recent, concrete examples of the learner's own
+	// mistakes to reference — the same identity-scoped join
+	// GetCorrection uses (via feedback_requests), but unfiltered by
+	// status: a lesson guide benefits from seeing what was corrected
+	// regardless of whether the learner has since accepted, rejected, or
+	// not yet responded to it.
+	RecentCorrections(ctx context.Context, identity learner.IdentityID, limit int) ([]CorrectionRecord, error)
 }

@@ -1045,3 +1045,51 @@ func TestFeedbackCorrectionsConfidenceCheckConstraint(t *testing.T) {
 		t.Fatalf("confidence=NULL: unexpected error: %v", err)
 	}
 }
+
+// TestFeedbackRecentCorrections pins the Phase 3 Task 4 RecentCorrections
+// contract: identity-scoped (identityB sees nothing), unfiltered by
+// status, and respects limit.
+func TestFeedbackRecentCorrections(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	got, err := fx.repo.RecentCorrections(ctx, fx.identityA.ID, 10)
+	if err != nil {
+		t.Fatalf("RecentCorrections: %v", err)
+	}
+	if len(got) != 1 || got[0].ID != fx.correctionID {
+		t.Fatalf("RecentCorrections(identityA) = %+v, want exactly [%s]", got, fx.correctionID)
+	}
+	if got[0].Original != "面白いでした" || got[0].Replacement != fx.replacement {
+		t.Fatalf("got[0] = %+v, want Original/Replacement matching the fixture", got[0])
+	}
+
+	// identityB never sees identityA's correction.
+	gotB, err := fx.repo.RecentCorrections(ctx, fx.identityB.ID, 10)
+	if err != nil {
+		t.Fatalf("RecentCorrections(identityB): %v", err)
+	}
+	if len(gotB) != 0 {
+		t.Fatalf("RecentCorrections(identityB) = %+v, want empty", gotB)
+	}
+
+	// limit=0 returns nothing (SQL LIMIT 0), not "unlimited" — matching
+	// the plain LIMIT $2 the query issues.
+	gotLimited, err := fx.repo.RecentCorrections(ctx, fx.identityA.ID, 0)
+	if err != nil {
+		t.Fatalf("RecentCorrections(limit=0): %v", err)
+	}
+	if len(gotLimited) != 0 {
+		t.Fatalf("RecentCorrections(limit=0) = %+v, want empty", gotLimited)
+	}
+}

@@ -452,3 +452,63 @@ p.empty {
   color: var(--fg-muted);
   margin: 0;
 }
+
+/* ============================== Lesson guides =========================== */
+
+.lesson-guide h2 {
+  margin-top: 22px;
+}
+.lesson-guide h2:first-child {
+  margin-top: 0;
+}
+.lesson-guide,
+.observation {
+  padding: 22px 26px;
+}
+.observation {
+  margin: 0 0 14px;
+}
+.observation-meta {
+  color: var(--fg-muted);
+  font-size: 12.5px;
+  margin: 0 0 6px;
+}
+
+/* ============================== Print (lesson guides) =================== */
+/* A lesson guide (PRD §18/§60) is meant to be printed or exported as a
+ * PDF for a human tutor to read before a session. `.no-print` marks
+ * anything that only makes sense on-screen — the topbar/nav and any
+ * button/form that mutates state (the completion form, the 「レッスン
+ * ガイド作成」 button) — so those disappear entirely when printed,
+ * rather than merely being disabled; everything else gets simplified,
+ * high-contrast typography instead of the on-screen dark/light theme
+ * chrome. */
+@media print {
+  .no-print {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+  main {
+    max-width: none;
+    padding: 0;
+  }
+  a {
+    color: #000;
+    text-decoration: underline;
+  }
+  .card,
+  .table-card {
+    border: 1px solid #000;
+    box-shadow: none;
+    break-inside: avoid;
+  }
+  .badge,
+  .chip {
+    border: 1px solid #000;
+    background: none;
+    color: #000;
+  }
+}

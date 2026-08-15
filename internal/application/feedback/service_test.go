@@ -250,6 +250,10 @@ func (f *fakeFeedbackRepo) GetCorrection(_ context.Context, identity learner.Ide
 	return c, nil
 }
 
+func (f *fakeFeedbackRepo) RecentCorrections(context.Context, learner.IdentityID, int) ([]storage.CorrectionRecord, error) {
+	panic("not used by feedback service tests")
+}
+
 // conceptRow is one persisted (correction, slug, resolved) tuple,
 // letting tests assert exactly what InsertFeedback's concepts argument
 // contained.

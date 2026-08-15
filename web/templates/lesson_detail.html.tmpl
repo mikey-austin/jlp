@@ -1,0 +1,61 @@
+{{define "content"}}<section class="lesson-detail">
+  <h1>レッスンガイド <span class="badge">{{.Lesson.Status}}</span></h1>
+  <p class="description">作成日: {{.Lesson.CreatedAt.Format "2006-01-02 15:04"}}{{if not .Lesson.CompletedAt.IsZero}} ・ 完了日: {{.Lesson.CompletedAt.Format "2006-01-02 15:04"}}{{end}}</p>
+
+  <div class="card lesson-guide">
+    <h2>レベル概要</h2>
+    <p>{{.Plan.LevelSummary}}</p>
+
+    <h2>強み</h2>
+    <ul>{{range .Plan.Strengths}}<li>{{.}}</li>{{end}}</ul>
+
+    <h2>弱み</h2>
+    <ul>{{range .Plan.Weaknesses}}<li>{{.}}</li>{{end}}</ul>
+
+    <h2>重点分野</h2>
+    <ul>{{range .Plan.Focus}}<li>{{.}}</li>{{end}}</ul>
+
+    <h2>語彙</h2>
+    <ul>{{range .Plan.Vocabulary}}<li>{{.}}</li>{{end}}</ul>
+
+    <h2>文法項目</h2>
+    <ul>{{range .Plan.GrammarConcepts}}<li>{{.}}</li>{{end}}</ul>
+
+    <h2>会話プロンプト</h2>
+    <ul>{{range .Plan.ConversationPrompts}}<li>{{.}}</li>{{end}}</ul>
+
+    <h2>練習問題</h2>
+    <ul>{{range .Plan.Exercises}}<li>{{.}}</li>{{end}}</ul>
+
+    <h2>最近の例</h2>
+    <ul>{{range .Plan.RecentExamples}}<li>{{.}}</li>{{end}}</ul>
+
+    <h2>講師への質問</h2>
+    <ul>{{range .Plan.QuestionsForTutor}}<li>{{.}}</li>{{end}}</ul>
+  </div>
+
+  {{if eq .Lesson.Status "completed"}}
+  <h2>レッスン後の記録</h2>
+  {{range .Observations}}<div class="card observation">
+    <p class="observation-meta">{{.Author}} — {{.CreatedAt.Format "2006-01-02 15:04"}}</p>
+    <p>{{.Notes}}</p>
+    {{if .Subjects}}<p class="concepts">{{range .Subjects}}<span class="chip">{{.}}</span>{{end}}</p>{{end}}
+  </div>{{else}}<p class="empty">記録がありません</p>{{end}}
+  {{else}}
+  <div class="card no-print">
+    <h2>レッスン完了の記録</h2>
+    <form method="post" action="/lessons/{{.Lesson.ID}}/complete" class="session-form">
+      <label class="field">講師名
+        <input class="input" type="text" name="author" required>
+      </label>
+      <label class="field">メモ
+        <textarea class="textarea" name="notes" rows="4" required></textarea>
+      </label>
+      <label class="field">対象（カンマ区切り）
+        <input class="input" type="text" name="subjects" placeholder="i-adjective-past, particle-ni-direction">
+      </label>
+      <button type="submit" class="btn">完了として記録</button>
+    </form>
+  </div>
+  {{end}}
+</section>{{end}}

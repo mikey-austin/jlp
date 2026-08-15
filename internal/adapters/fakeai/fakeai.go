@@ -48,6 +48,12 @@ const (
 	// prompt pattern-matching" treatment as the exercise schemas above.
 	schemaAnkiCardV1 = "anki_card.v1"
 
+	// schemaLessonPlanV1 backs internal/agent/lesson (Phase 3 Task 4, PRD
+	// §18): same "one fixed canned shape, keyed purely on SchemaName, no
+	// prompt pattern-matching" treatment as the exercise/anki schemas
+	// above.
+	schemaLessonPlanV1 = "lesson_plan.v1"
+
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
@@ -78,6 +84,7 @@ var supportedSchemas = map[string]bool{
 	schemaExerciseV1:     true,
 	schemaExerciseEvalV1: true,
 	schemaAnkiCardV1:     true,
+	schemaLessonPlanV1:   true,
 }
 
 type explanation struct {
@@ -164,6 +171,47 @@ var iAdjectivePastAnkiCard = cannedAnkiCard{
 	Notes: "i-adjective-past",
 }
 
+// cannedLessonPlan mirrors schemas/defs/lesson_plan.v1.json field-for-
+// field. It is the fake provider's one canned tutor lesson guide
+// (Phase 3 Task 4's Step 1 pin): every section references the same
+// i-adjective-past mistake and それはそれとして expression every other
+// fake-provider fixture in this file uses, so the pin is checkable
+// without inventing a second learner history.
+type cannedLessonPlan struct {
+	LevelSummary        string   `json:"level_summary"`
+	Strengths           []string `json:"strengths"`
+	Weaknesses          []string `json:"weaknesses"`
+	Focus               []string `json:"focus"`
+	Vocabulary          []string `json:"vocabulary"`
+	GrammarConcepts     []string `json:"grammar_concepts"`
+	ConversationPrompts []string `json:"conversation_prompts"`
+	Exercises           []string `json:"exercises"`
+	RecentExamples      []string `json:"recent_examples"`
+	QuestionsForTutor   []string `json:"questions_for_tutor"`
+}
+
+var iAdjectivePastLessonPlan = cannedLessonPlan{
+	LevelSummary: "中級前半。日常的な話題は書けるが、過去形の活用に一貫しない誤りが残る。",
+	Strengths:    []string{"語彙は幅広く、自然な言い回しを選ぼうとする姿勢がある。"},
+	Weaknesses:   []string{"い形容詞の過去形（i-adjective-past）を「〜いでした」と誤る傾向が続いている。"},
+	Focus:        []string{"い形容詞の過去形の活用ルールを反復練習する。"},
+	Vocabulary:   []string{"それはそれとして — 話題を切り替える際に使える表現。まだ定着していないため活性化を促す。"},
+	GrammarConcepts: []string{
+		"i-adjective-past: 「〜かったです」の形を徹底する。",
+	},
+	ConversationPrompts: []string{
+		"昨日の映画はどうでしたか？（過去形の形容詞を引き出す）",
+		"それはそれとして、最近何か新しいことを始めましたか？",
+	},
+	Exercises: []string{"い形容詞の過去形の穴埋め練習を3問。"},
+	RecentExamples: []string{
+		"「とても面白いでした」→「とても面白かったです」の誤りが直近の作文で見られた。",
+	},
+	QuestionsForTutor: []string{
+		"い形容詞の過去形の誤りは口頭でも同様に見られるか、確認してほしい。",
+	},
+}
+
 // freeProductionEval is the fake provider's one canned drill evaluation.
 var freeProductionEval = cannedExerciseEval{
 	Correct: true,
@@ -217,7 +265,7 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 
 	if req.SchemaName != "" && !supportedSchemas[req.SchemaName] {
 		return ai.StructuredResponse{Provider: provider, Model: model},
-			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1, schemaAnkiCardV1)
+			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1, schemaAnkiCardV1, schemaLessonPlanV1)
 	}
 
 	// exercise.v1/exercise_eval.v1 (internal/agent/drill) and
@@ -232,6 +280,8 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 		return g.respond(start, req, freeProductionEval)
 	case schemaAnkiCardV1:
 		return g.respond(start, req, iAdjectivePastAnkiCard)
+	case schemaLessonPlanV1:
+		return g.respond(start, req, iAdjectivePastLessonPlan)
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own

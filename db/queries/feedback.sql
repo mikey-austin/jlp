@@ -67,6 +67,21 @@ FROM corrections c
 JOIN feedback_requests f ON c.feedback_request_id = f.id
 WHERE c.id = $1 AND f.identity_id = $2;
 
+-- name: RecentCorrections :many
+-- Identity-scoped, unfiltered by status (Phase 3 Task 4, PRD §18): a
+-- lesson guide benefits from seeing what was corrected regardless of
+-- whether the learner has since accepted, rejected, or not yet
+-- responded — same join UpdateCorrectionStatus/GetCorrection use, newest
+-- first via c.created_at.
+SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
+       c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+       c.status, c.attempts, c.confidence, c.revealed, f.session_id
+FROM corrections c
+JOIN feedback_requests f ON c.feedback_request_id = f.id
+WHERE f.identity_id = $1
+ORDER BY c.created_at DESC
+LIMIT $2;
+
 -- name: RecordConfidence :one
 UPDATE corrections c SET confidence = $3
 FROM feedback_requests f

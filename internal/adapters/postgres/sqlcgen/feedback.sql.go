@@ -196,6 +196,83 @@ func (q *Queries) InsertFeedbackRequest(ctx context.Context, arg InsertFeedbackR
 	return err
 }
 
+const recentCorrections = `-- name: RecentCorrections :many
+SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
+       c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+       c.status, c.attempts, c.confidence, c.revealed, f.session_id
+FROM corrections c
+JOIN feedback_requests f ON c.feedback_request_id = f.id
+WHERE f.identity_id = $1
+ORDER BY c.created_at DESC
+LIMIT $2
+`
+
+type RecentCorrectionsParams struct {
+	IdentityID string
+	Limit      int32
+}
+
+type RecentCorrectionsRow struct {
+	ID                pgtype.UUID
+	FeedbackRequestID pgtype.UUID
+	Position          int32
+	Original          string
+	Replacement       string
+	Type              string
+	Severity          string
+	ExplanationJa     string
+	ExplanationEn     string
+	HintJa            string
+	HintEn            string
+	Status            string
+	Attempts          int32
+	Confidence        pgtype.Int4
+	Revealed          bool
+	SessionID         pgtype.UUID
+}
+
+// Identity-scoped, unfiltered by status (Phase 3 Task 4, PRD §18): a
+// lesson guide benefits from seeing what was corrected regardless of
+// whether the learner has since accepted, rejected, or not yet
+// responded — same join UpdateCorrectionStatus/GetCorrection use, newest
+// first via c.created_at.
+func (q *Queries) RecentCorrections(ctx context.Context, arg RecentCorrectionsParams) ([]RecentCorrectionsRow, error) {
+	rows, err := q.db.Query(ctx, recentCorrections, arg.IdentityID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RecentCorrectionsRow
+	for rows.Next() {
+		var i RecentCorrectionsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FeedbackRequestID,
+			&i.Position,
+			&i.Original,
+			&i.Replacement,
+			&i.Type,
+			&i.Severity,
+			&i.ExplanationJa,
+			&i.ExplanationEn,
+			&i.HintJa,
+			&i.HintEn,
+			&i.Status,
+			&i.Attempts,
+			&i.Confidence,
+			&i.Revealed,
+			&i.SessionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const recordConfidence = `-- name: RecordConfidence :one
 UPDATE corrections c SET confidence = $3
 FROM feedback_requests f

@@ -255,6 +255,26 @@ func (r *FeedbackRepository) GetCorrection(ctx context.Context, identity learner
 		row.HintJa, row.HintEn, row.Status, row.Attempts, row.Confidence, row.Revealed), nil
 }
 
+// RecentCorrections reads back identity's most recent corrections
+// across every session, newest first, at most limit — see
+// storage.FeedbackRepository's doc comment.
+func (r *FeedbackRepository) RecentCorrections(ctx context.Context, identity learner.IdentityID, limit int) ([]storage.CorrectionRecord, error) {
+	rows, err := r.q.RecentCorrections(ctx, sqlcgen.RecentCorrectionsParams{
+		IdentityID: string(identity),
+		Limit:      int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]storage.CorrectionRecord, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, buildCorrectionRecord(row.ID, row.FeedbackRequestID, row.SessionID, row.Position,
+			row.Original, row.Replacement, row.Type, row.Severity, row.ExplanationJa, row.ExplanationEn,
+			row.HintJa, row.HintEn, row.Status, row.Attempts, row.Confidence, row.Revealed))
+	}
+	return out, nil
+}
+
 // toOptionalUUID converts an optional canonical UUID string (empty
 // means "not set") to the nullable pgtype sqlc generates for
 // feedback_requests.ai_request_id: empty maps to an invalid (SQL NULL)

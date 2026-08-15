@@ -204,6 +204,26 @@ func (f *fakeFeedbackRepo) GetCorrection(_ context.Context, identity learner.Ide
 	return c, nil
 }
 
+// RecentCorrections returns identity's corrections (order is whatever
+// map iteration gives — the lesson HTTP tests this backs only ever seed
+// one correction per identity, so ordering doesn't matter there),
+// capped at limit.
+func (f *fakeFeedbackRepo) RecentCorrections(_ context.Context, identity learner.IdentityID, limit int) ([]storage.CorrectionRecord, error) {
+	var out []storage.CorrectionRecord
+	for _, c := range f.corrections {
+		fb, ok := f.feedback[c.FeedbackID]
+		if !ok || fb.IdentityID != identity {
+			continue
+		}
+		c.SessionID = fb.SessionID
+		out = append(out, c)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
+}
+
 // GetCorrectionConcepts mirrors the real query's "resolved only,
 // slug-ascending" contract.
 func (f *fakeFeedbackRepo) GetCorrectionConcepts(_ context.Context, correctionID string) ([]string, error) {

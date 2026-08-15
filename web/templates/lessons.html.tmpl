@@ -1,0 +1,19 @@
+{{define "content"}}<section class="lessons">
+  <h1>レッスン</h1>
+  <form method="post" action="/lessons">
+    <button type="submit" class="btn">レッスンガイド作成</button>
+  </form>
+
+  <div class="table-card">
+    <table>
+      <thead><tr><th>作成日</th><th>状態</th><th></th></tr></thead>
+      <tbody>
+        {{range .Lessons}}<tr>
+          <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
+          <td><span class="badge">{{.Status}}</span></td>
+          <td><a href="/lessons/{{.ID}}" class="chip">開く</a></td>
+        </tr>{{else}}<tr><td colspan="3">レッスンガイドがありません。上のボタンから作成できます。</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+</section>{{end}}
