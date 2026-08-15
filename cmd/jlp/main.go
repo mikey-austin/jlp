@@ -95,11 +95,12 @@ func main() {
 		// remembering to wrap a specific adapter. The same repository
 		// instance is read back by the /ai page (Task 15) below.
 		// buildAIGenerator (cmd/jlp/ai.go) does the rest: it builds one
-		// observed instance per configured provider (fake, plus anthropic/
-		// ollama when actually configured), then wraps them in an
-		// airouter.New — so APP_AI_ROUTES-directed requests, and the
-		// APP_AI_PROVIDER fallback, are both just different chains of
-		// already-observed generators (Task 11, PRD §23/§24).
+		// observed instance per configured provider (fake/claudecli/
+		// codexcli always, plus anthropic/ollama when actually
+		// configured), then wraps them in an airouter.New — so
+		// APP_AI_ROUTES-directed requests, and the APP_AI_PROVIDER
+		// fallback, are both just different chains of already-observed
+		// generators (Task 11/12, PRD §23/§24).
 		aiRequestRepo := postgres.NewAIRequestRepository(pool)
 		aiGen, err := buildAIGenerator(cfg, aiRequestRepo)
 		if err != nil {

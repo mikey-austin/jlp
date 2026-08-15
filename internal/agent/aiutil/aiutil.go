@@ -17,7 +17,6 @@ package aiutil
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
@@ -26,7 +25,7 @@ import (
 
 // ValidateWithRepairAndRetry implements Rule 4: schema validation with
 // bounded self-healing. It tries, in order: resp as given; one
-// constrained repair (extractBalancedObject re-validated against
+// constrained repair (ExtractJSONObject re-validated against
 // schemaName); one full retry call to gen using req. If none validates,
 // it returns a wrapped error rather than looping further — an AI
 // response that still won't validate after both is a hard failure, not
@@ -36,7 +35,7 @@ func ValidateWithRepairAndRetry(ctx context.Context, gen ai.StructuredGenerator,
 		return resp, nil
 	}
 
-	if repaired, ok := extractBalancedObject(resp.JSON); ok {
+	if repaired, ok := ExtractJSONObject(string(resp.JSON)); ok {
 		if err := schemas.Validate(schemaName, repaired); err == nil {
 			resp.JSON = repaired
 			return resp, nil
@@ -53,13 +52,21 @@ func ValidateWithRepairAndRetry(ctx context.Context, gen ai.StructuredGenerator,
 	return retried, nil
 }
 
-// extractBalancedObject finds the first '{' in raw and returns the
-// substring through its matching '}', tracking brace depth and JSON
-// string literals (so braces inside quoted strings don't throw off the
-// count). It reports ok=false if raw contains no balanced {...} block —
+// ExtractJSONObject finds the first '{' in s and returns the substring
+// through its matching '}', tracking brace depth and JSON string
+// literals (so braces inside quoted strings don't throw off the
+// count). It reports ok=false if s contains no balanced {...} block —
 // e.g. a refusal message with no JSON in it at all, which repair can't
 // fix and the caller must fall back to a retry for.
-func extractBalancedObject(raw []byte) (json.RawMessage, bool) {
+//
+// Exported (Task 12) so internal/adapters/clicmd can reuse the exact
+// same balanced-brace extraction to pull the structured JSON payload
+// out of Claude/Codex CLI stdout text — the same "strip surrounding
+// prose or a markdown fence" problem this package already solved for
+// ValidateWithRepairAndRetry's repair step, not something the CLI
+// adapters should reimplement.
+func ExtractJSONObject(s string) ([]byte, bool) {
+	raw := []byte(s)
 	start := bytes.IndexByte(raw, '{')
 	if start == -1 {
 		return nil, false
@@ -89,7 +96,7 @@ func extractBalancedObject(raw []byte) (json.RawMessage, bool) {
 		case '}':
 			depth--
 			if depth == 0 {
-				return json.RawMessage(raw[start : i+1]), true
+				return raw[start : i+1], true
 			}
 		}
 	}

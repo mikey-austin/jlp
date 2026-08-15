@@ -26,6 +26,12 @@ func TestDefaults(t *testing.T) {
 	if cfg.AI.Routes != "" {
 		t.Fatalf("AI.Routes default = %q, want empty", cfg.AI.Routes)
 	}
+	if cfg.AI.ClaudeCLI.Bin != "claude" {
+		t.Fatalf("AI.ClaudeCLI.Bin default = %q, want claude", cfg.AI.ClaudeCLI.Bin)
+	}
+	if cfg.AI.CodexCLI.Bin != "codex" {
+		t.Fatalf("AI.CodexCLI.Bin default = %q, want codex", cfg.AI.CodexCLI.Bin)
+	}
 	// Regression: the default must be the loopback address only. A
 	// broad default like 172.16.0.0/12 would trust every private-network
 	// peer, re-opening the hairpin-NAT spoofing hole a non-compose
@@ -72,6 +78,22 @@ func TestOllamaAndRoutesEnvOverrides(t *testing.T) {
 	}
 }
 
+func TestCLIBinEnvOverrides(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_AI_CLAUDECLI_BIN", "/usr/local/bin/claude")
+	t.Setenv("APP_AI_CODEXCLI_BIN", "/usr/local/bin/codex")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AI.ClaudeCLI.Bin != "/usr/local/bin/claude" {
+		t.Fatalf("AI.ClaudeCLI.Bin = %q, want override applied", cfg.AI.ClaudeCLI.Bin)
+	}
+	if cfg.AI.CodexCLI.Bin != "/usr/local/bin/codex" {
+		t.Fatalf("AI.CodexCLI.Bin = %q, want override applied", cfg.AI.CodexCLI.Bin)
+	}
+}
+
 func TestEmptyEnvVarDoesNotClobberDefault(t *testing.T) {
 	t.Setenv("APP_DATABASE_URL", "postgres://x")
 	// docker-compose.yml passes APP_AI_ANTHROPIC_MODEL/BASEURL through as
@@ -90,6 +112,33 @@ func TestEmptyEnvVarDoesNotClobberDefault(t *testing.T) {
 	}
 	if cfg.AI.Anthropic.BaseURL != "https://api.anthropic.com" {
 		t.Fatalf("BaseURL = %q, want default https://api.anthropic.com (empty env var should not override)", cfg.AI.Anthropic.BaseURL)
+	}
+}
+
+// TestCLIBinEmptyEnvVarDoesNotClobberDefault is
+// TestEmptyEnvVarDoesNotClobberDefault's twin for the two Task 12
+// fields: .env.example and README both document "defaults to
+// claude/codex when unset/empty" for APP_AI_CLAUDECLI_BIN/
+// APP_AI_CODEXCLI_BIN, the identical claim already pinned for
+// Anthropic's Model/BaseURL above — this closes the matching coverage
+// gap for the new keys (docker-compose.yml doesn't currently wire
+// these two through as ${VAR:-}, unlike the Anthropic ones, but the
+// documented "empty also falls back to default" contract holds
+// independent of that, and should stay pinned in case compose ever
+// does start passing them through the same way).
+func TestCLIBinEmptyEnvVarDoesNotClobberDefault(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_AI_CLAUDECLI_BIN", "")
+	t.Setenv("APP_AI_CODEXCLI_BIN", "")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AI.ClaudeCLI.Bin != "claude" {
+		t.Fatalf("AI.ClaudeCLI.Bin = %q, want default claude (empty env var should not override)", cfg.AI.ClaudeCLI.Bin)
+	}
+	if cfg.AI.CodexCLI.Bin != "codex" {
+		t.Fatalf("AI.CodexCLI.Bin = %q, want default codex (empty env var should not override)", cfg.AI.CodexCLI.Bin)
 	}
 }
 
@@ -174,12 +223,13 @@ func TestParseRoutesEmptyStringIsNoRoutes(t *testing.T) {
 	}
 }
 
-// TestParseRoutesAcceptsCLIProviderNamesNotYetConstructible pins the
-// brief's split: ParseRoutes only validates the provider NAME is one
-// of the five known names. claudecli/codexcli become constructible in
-// Task 12 — until then, cmd/jlp/main.go's own provider map is what
-// turns a route naming one of them into a boot error, not ParseRoutes.
-func TestParseRoutesAcceptsCLIProviderNamesNotYetConstructible(t *testing.T) {
+// TestParseRoutesAcceptsCLIProviderNames pins the brief's split:
+// ParseRoutes only validates the provider NAME is one of the five
+// known names — whether cmd/jlp/ai.go's buildAIGenerator can actually
+// construct an instance for it (claudecli/codexcli always can, as of
+// Task 12; see internal/adapters/clicmd) is a separate, later check,
+// not ParseRoutes's job.
+func TestParseRoutesAcceptsCLIProviderNames(t *testing.T) {
 	got, err := ParseRoutes("teacher.feedback=claudecli,codexcli")
 	if err != nil {
 		t.Fatalf("ParseRoutes: %v", err)

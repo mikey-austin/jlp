@@ -134,22 +134,31 @@ func TestBuildAIGeneratorErrorsWhenRouteNamesOllamaWithoutModel(t *testing.T) {
 	}
 }
 
-// TestBuildAIGeneratorErrorsWhenRouteNamesCLIProviderNotYetConstructible
+// TestBuildAIGeneratorRoutesNamedPromptToCLIProvidersConstructWithoutError
 // covers the Task 12 seam explicitly: config.ParseRoutes accepts
-// claudecli/codexcli as spellable names (see config_test.go), but
-// buildAIGenerator has no way to construct one yet — that gap must
-// surface as a boot error naming the route, not a panic or a silent
-// no-op provider.
-func TestBuildAIGeneratorErrorsWhenRouteNamesCLIProviderNotYetConstructible(t *testing.T) {
+// claudecli/codexcli as spellable names (see config_test.go), and as
+// of this task buildAIGenerator can now construct both unconditionally
+// (internal/adapters/clicmd.NewClaude/NewCodex never error at
+// construction — see that package's doc comment) — routing to either
+// must succeed at boot even with no Bin configured (cfg.AI.ClaudeCLI/
+// CodexCLI left zero-value here). A per-call failure is still expected
+// (and asserted below) since Bin="" can never resolve to a real
+// executable, but that must surface from GenerateStructured, not
+// buildAIGenerator.
+func TestBuildAIGeneratorRoutesNamedPromptToCLIProvidersConstructWithoutError(t *testing.T) {
 	cfg := baseCfg()
-	cfg.AI.Routes = "teacher.feedback=claudecli"
+	cfg.AI.Routes = "teacher.feedback=claudecli;drill.exercise=codexcli"
 
-	_, err := buildAIGenerator(cfg, &memRepo{})
-	if err == nil {
-		t.Fatal("expected a boot error, got nil")
+	gen, err := buildAIGenerator(cfg, &memRepo{})
+	if err != nil {
+		t.Fatalf("buildAIGenerator: %v (claudecli/codexcli must be constructible without a binary configured, Task 12)", err)
 	}
-	if !strings.Contains(err.Error(), "claudecli") || !strings.Contains(err.Error(), "teacher.feedback") {
-		t.Errorf("error = %q, want it to name both the route (teacher.feedback) and the unconstructible provider (claudecli)", err.Error())
+
+	for _, promptName := range []string{"teacher.feedback", "drill.exercise"} {
+		_, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: promptName})
+		if err == nil {
+			t.Errorf("GenerateStructured(%q): expected a per-call error with no CLI binary configured, got nil", promptName)
+		}
 	}
 }
 

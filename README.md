@@ -125,6 +125,35 @@ the `/ai` page).
   live key or a running Ollama server is never required to run the
   test suite.
 
+- **`claudecli` / `codexcli`** — host-mode fallbacks that shell out to
+  a locally-installed AI CLI (the Claude Code CLI or the OpenAI Codex
+  CLI) instead of calling an API directly (PRD §23: "CLI adapters are
+  legitimate first-class adapters"). **Host mode only:** neither binary is
+  installed inside the app's container image, so these providers only
+  do anything useful when the app itself is running directly on a host
+  that has `claude`/`codex` on its `PATH` (`go run ./cmd/jlp` outside
+  `docker compose`), or via a future bridge that proxies into one —
+  under a plain `make up`/`make up-auth`, wiring a prompt to either is
+  safe (see below) but every call to it fails with a per-call
+  `exec: ... executable file not found in $PATH` error, by design.
+
+  Neither is a valid `APP_AI_PROVIDER` value on its own (only
+  `fake`/`anthropic`/`ollama` are) — reach them only through
+  `APP_AI_ROUTES`, typically as a fallback link after a real provider:
+
+  ```
+  APP_AI_ROUTES=teacher.feedback=anthropic,claudecli
+  APP_AI_CLAUDECLI_BIN=        # optional override; defaults to "claude"
+  APP_AI_CODEXCLI_BIN=         # optional override; defaults to "codex"
+  ```
+
+  Both send the prompt (system + user text, plus a trailing instruction
+  naming the JSON schema to answer with) on the CLI's stdin —
+  `claude -p --output-format json` / `codex exec --json` — under a
+  120s timeout, and report `Model: "cli"` with 0 tokens (neither CLI's
+  non-interactive JSON output exposes a real token count, and there's
+  no per-token cost to track for a locally-installed tool anyway).
+
 ### Per-prompt routing (`APP_AI_ROUTES`)
 
 `APP_AI_PROVIDER` picks the default, but individual prompts can be
@@ -213,9 +242,9 @@ domain  ←  application  ←  ports  ←  adapters
   (`Authenticator`), `events` (`EventBus`).
 - **`internal/adapters`** — concrete implementations: `postgres`
   (pgx + sqlc), `http` (chi server, HTML + JSON API), `staticauth` /
-  `authelia`, `inprocbus`, `fakeai` / `anthropic` / `ollama` (AI
-  providers) and `airouter` (routes among them, see AI providers
-  above).
+  `authelia`, `inprocbus`, `fakeai` / `anthropic` / `ollama` / `clicmd`
+  (AI providers — `clicmd` is the host-mode Claude/Codex CLI fallback,
+  see AI providers above) and `airouter` (routes among them).
 - **`internal/agent/teacher`** — the AI agent that reviews writing; it
   reaches the AI port and domain types only, never a repository.
 
@@ -250,7 +279,7 @@ internal/config/             viper -> typed Config, validation
 internal/domain/             learner, session, writing, correction, diff, event
 internal/application/        sessions, writing, feedback, learning, analytics
 internal/ports/               auth, ai, events, storage interfaces
-internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, airouter
+internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, clicmd, airouter
 internal/agent/teacher/      the Teacher AI agent (ReviewWriting)
 internal/observability/      AI request/cost/latency recording decorator
 internal/prompts/            embedded, versioned prompt templates

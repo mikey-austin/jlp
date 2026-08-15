@@ -39,6 +39,8 @@ type AI struct {
 	Provider  string
 	Anthropic Anthropic
 	Ollama    Ollama
+	ClaudeCLI ClaudeCLI
+	CodexCLI  CodexCLI
 	// Routes is the raw APP_AI_ROUTES string — "prompt.name=prov1,prov2;
 	// other.name=prov" — parsed by ParseRoutes. Kept as a string here
 	// (validate below only checks it parses, fail-fast, same as every
@@ -65,6 +67,25 @@ type Ollama struct {
 	Model string
 }
 
+// ClaudeCLI configures internal/adapters/clicmd.NewClaude, the
+// host-mode Claude Code CLI fallback (Task 12, PRD §23). Bin defaults
+// to "claude" (see Load's viper default) — the bare command name,
+// resolved via the process's PATH at call time, not construction
+// time: NewClaude never errors just because the binary isn't
+// installed (see the clicmd package doc comment), so this struct
+// carries no other fields to validate.
+type ClaudeCLI struct {
+	Bin string
+}
+
+// CodexCLI configures internal/adapters/clicmd.NewCodex, the host-mode
+// OpenAI Codex CLI fallback (Task 12, PRD §23). Bin defaults to
+// "codex" (see Load's viper default); same construction-never-fails
+// contract as ClaudeCLI above.
+type CodexCLI struct {
+	Bin string
+}
+
 func Load() (Config, error) {
 	v := viper.New()
 	v.SetDefault("server.port", 8080)
@@ -86,6 +107,8 @@ func Load() (Config, error) {
 	// ai.ollama.model has no default (see the Ollama struct's doc
 	// comment) — it's zero-value "" unless the operator sets it.
 	v.SetDefault("ai.ollama.url", "http://ollama:11434")
+	v.SetDefault("ai.claudecli.bin", "claude")
+	v.SetDefault("ai.codexcli.bin", "codex")
 	v.SetDefault("database.url", "")
 
 	v.SetEnvPrefix("APP")
@@ -95,7 +118,7 @@ func Load() (Config, error) {
 	for _, key := range []string{"server.port", "server.baseurl", "database.url",
 		"auth.mode", "auth.static.id", "auth.static.displayname",
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
-		"ai.ollama.url", "ai.ollama.model", "ai.routes"} {
+		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}
