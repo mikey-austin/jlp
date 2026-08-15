@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "WeeklySummaryV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "subject",
+    "accomplishments",
+    "improvements",
+    "persistent_weaknesses",
+    "new_expressions",
+    "recommended_focus"
+  ],
+  "properties": {
+    "subject": { "type": "string", "minLength": 1 },
+    "accomplishments": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "improvements": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "persistent_weaknesses": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "new_expressions": {
+      "type": "array",
+      "minItems": 0,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "recommended_focus": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 8,
+      "items": { "type": "string", "minLength": 1 }
+    },
+    "challenge": { "type": "string" }
+  }
+}

@@ -54,6 +54,12 @@ const (
 	// above.
 	schemaLessonPlanV1 = "lesson_plan.v1"
 
+	// schemaWeeklySummaryV1 backs internal/agent/summary (Phase 3 Task 5,
+	// PRD §21): same "one fixed canned shape, keyed purely on SchemaName,
+	// no prompt pattern-matching" treatment as the exercise/anki/lesson
+	// schemas above.
+	schemaWeeklySummaryV1 = "weekly_summary.v1"
+
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
@@ -79,12 +85,13 @@ const (
 // GenerateStructured's guard reads as one membership test rather than
 // an OR chain that grows every time a schema is added.
 var supportedSchemas = map[string]bool{
-	schemaV1:             true,
-	schemaV2:             true,
-	schemaExerciseV1:     true,
-	schemaExerciseEvalV1: true,
-	schemaAnkiCardV1:     true,
-	schemaLessonPlanV1:   true,
+	schemaV1:              true,
+	schemaV2:              true,
+	schemaExerciseV1:      true,
+	schemaExerciseEvalV1:  true,
+	schemaAnkiCardV1:      true,
+	schemaLessonPlanV1:    true,
+	schemaWeeklySummaryV1: true,
 }
 
 type explanation struct {
@@ -212,6 +219,45 @@ var iAdjectivePastLessonPlan = cannedLessonPlan{
 	},
 }
 
+// cannedWeeklySummary mirrors schemas/defs/weekly_summary.v1.json
+// field-for-field. It is the fake provider's one canned weekly summary
+// email (Phase 3 Task 5's Step 1 pin): mentions both 面白かったです (the
+// corrected i-adjective-past form every other fake-provider fixture in
+// this file's mistake resolves to) and それはそれとして (the same
+// activation-candidate expression iAdjectivePastLessonPlan's vocabulary
+// section names), so the canned content is checkable without inventing
+// a third learner history.
+type cannedWeeklySummary struct {
+	Subject              string   `json:"subject"`
+	Accomplishments      []string `json:"accomplishments"`
+	Improvements         []string `json:"improvements"`
+	PersistentWeaknesses []string `json:"persistent_weaknesses"`
+	NewExpressions       []string `json:"new_expressions"`
+	RecommendedFocus     []string `json:"recommended_focus"`
+	Challenge            string   `json:"challenge,omitempty"`
+}
+
+var weeklySummaryFixture = cannedWeeklySummary{
+	Subject: "今週の学習まとめ — 順調に前進しています！",
+	Accomplishments: []string{
+		"今週も作文セッションに取り組み、書く習慣を続けました。",
+		"「面白かったです」のような表現を使う場面が増えてきました。",
+	},
+	Improvements: []string{
+		"い形容詞の過去形の誤りが少しずつ減ってきています。「面白かったです」を自分から使えた場面もありました。",
+	},
+	PersistentWeaknesses: []string{
+		"い形容詞の過去形（〜いでした→〜かったです）は、まだ時々誤ることがあります。焦らず続けましょう。",
+	},
+	NewExpressions: []string{
+		"それはそれとして — 話題を切り替える際に使える便利な表現です。今週の作文でも使ってみましょう。",
+	},
+	RecommendedFocus: []string{
+		"い形容詞の過去形の活用を、短い文で繰り返し練習してみましょう。",
+	},
+	Challenge: "次の作文で「それはそれとして」を一度使ってみましょう。",
+}
+
 // freeProductionEval is the fake provider's one canned drill evaluation.
 var freeProductionEval = cannedExerciseEval{
 	Correct: true,
@@ -265,7 +311,7 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 
 	if req.SchemaName != "" && !supportedSchemas[req.SchemaName] {
 		return ai.StructuredResponse{Provider: provider, Model: model},
-			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1, schemaAnkiCardV1, schemaLessonPlanV1)
+			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1, schemaAnkiCardV1, schemaLessonPlanV1, schemaWeeklySummaryV1)
 	}
 
 	// exercise.v1/exercise_eval.v1 (internal/agent/drill) and
@@ -282,6 +328,8 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 		return g.respond(start, req, iAdjectivePastAnkiCard)
 	case schemaLessonPlanV1:
 		return g.respond(start, req, iAdjectivePastLessonPlan)
+	case schemaWeeklySummaryV1:
+		return g.respond(start, req, weeklySummaryFixture)
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own

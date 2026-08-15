@@ -186,13 +186,16 @@ func TestTrustedProxiesEnvOverride(t *testing.T) {
 
 func TestValidation(t *testing.T) {
 	cases := map[string]map[string]string{
-		"missing db url":         {"APP_DATABASE_URL": ""},
-		"bad auth mode":          {"APP_DATABASE_URL": "postgres://x", "APP_AUTH_MODE": "oauth"},
-		"anthropic without key":  {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "anthropic"},
-		"unknown ai provider":    {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "hal9000"},
-		"ollama without model":   {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "ollama"},
-		"malformed ai routes":    {"APP_DATABASE_URL": "postgres://x", "APP_AI_ROUTES": "teacher.feedback"},
-		"ai routes bad provider": {"APP_DATABASE_URL": "postgres://x", "APP_AI_ROUTES": "teacher.feedback=hal9000"},
+		"missing db url":                    {"APP_DATABASE_URL": ""},
+		"bad auth mode":                     {"APP_DATABASE_URL": "postgres://x", "APP_AUTH_MODE": "oauth"},
+		"anthropic without key":             {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "anthropic"},
+		"unknown ai provider":               {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "hal9000"},
+		"ollama without model":              {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "ollama"},
+		"malformed ai routes":               {"APP_DATABASE_URL": "postgres://x", "APP_AI_ROUTES": "teacher.feedback"},
+		"ai routes bad provider":            {"APP_DATABASE_URL": "postgres://x", "APP_AI_ROUTES": "teacher.feedback=hal9000"},
+		"summary enabled without recipient": {"APP_DATABASE_URL": "postgres://x", "APP_SUMMARY_ENABLED": "true"},
+		"summary enabled with bad cron": {"APP_DATABASE_URL": "postgres://x", "APP_SUMMARY_ENABLED": "true",
+			"APP_SUMMARY_TO": "learner@jlp.local", "APP_SUMMARY_CRON": "not a cron spec"},
 	}
 	for name, env := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -216,6 +219,95 @@ func TestValidation(t *testing.T) {
 // depth against any other path that could construct a Config with an
 // empty list (a future default change, a non-env config source, etc.),
 // and this test proves that guard fires.
+// TestSummaryDefaults pins the weekly-summary scheduler's "dormant by
+// default" contract (PRD §21, §65): with no APP_SUMMARY_*/APP_SMTP_*
+// set, Load still succeeds, Enabled is false, Cron carries the brief's
+// exact Sunday-18:00 default, and To/From are empty — mirrors
+// TestAnkiConnectURLDefaultsEmptyAndDoesNotRequireValidation above.
+func TestSummaryDefaults(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Summary.Enabled {
+		t.Fatal("Summary.Enabled default = true, want false (dormant by default)")
+	}
+	if cfg.Summary.Cron != "0 18 * * 0" {
+		t.Fatalf("Summary.Cron default = %q, want \"0 18 * * 0\"", cfg.Summary.Cron)
+	}
+	if cfg.Summary.To != "" || cfg.Summary.From != "" {
+		t.Fatalf("Summary.To/From defaults = %q/%q, want both empty", cfg.Summary.To, cfg.Summary.From)
+	}
+	if cfg.SMTP.Addr != "mailpit:1025" {
+		t.Fatalf("SMTP.Addr default = %q, want mailpit:1025", cfg.SMTP.Addr)
+	}
+}
+
+// TestSummaryEnvOverrides pins every APP_SUMMARY_*/APP_SMTP_* env var
+// name exactly as documented (.env.example, README).
+func TestSummaryEnvOverrides(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_SUMMARY_ENABLED", "true")
+	t.Setenv("APP_SUMMARY_CRON", "0 9 * * 1")
+	t.Setenv("APP_SUMMARY_TO", "learner@jlp.local")
+	t.Setenv("APP_SUMMARY_FROM", "jlp@example.com")
+	t.Setenv("APP_SMTP_ADDR", "smtp.example.com:587")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Summary.Enabled {
+		t.Fatal("Summary.Enabled = false, want true")
+	}
+	if cfg.Summary.Cron != "0 9 * * 1" {
+		t.Fatalf("Summary.Cron = %q, want override applied", cfg.Summary.Cron)
+	}
+	if cfg.Summary.To != "learner@jlp.local" {
+		t.Fatalf("Summary.To = %q, want override applied", cfg.Summary.To)
+	}
+	if cfg.Summary.From != "jlp@example.com" {
+		t.Fatalf("Summary.From = %q, want override applied", cfg.Summary.From)
+	}
+	if cfg.SMTP.Addr != "smtp.example.com:587" {
+		t.Fatalf("SMTP.Addr = %q, want override applied", cfg.SMTP.Addr)
+	}
+}
+
+// TestSummaryEnabledRequiresRecipientAndValidCron exercises
+// Config.validate directly (same reasoning as
+// TestValidationAutheliaRequiresNonEmptyTrustedProxies above): once
+// Summary.Enabled is true, an empty To or an unparseable Cron must both
+// fail validation — a live scheduler with nowhere to send, or a spec
+// robfig/cron can't parse, would otherwise only fail much later (or
+// never, for an inert cron.AddFunc) instead of at boot.
+func TestSummaryEnabledRequiresRecipientAndValidCron(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	noTo := base
+	noTo.Summary = Summary{Enabled: true, Cron: "0 18 * * 0"}
+	if err := noTo.validate(); err == nil {
+		t.Fatal("expected validation error for Summary.Enabled with empty To")
+	}
+
+	badCron := base
+	badCron.Summary = Summary{Enabled: true, Cron: "not a cron spec", To: "learner@jlp.local"}
+	if err := badCron.validate(); err == nil {
+		t.Fatal("expected validation error for Summary.Enabled with an invalid Cron")
+	}
+
+	ok := base
+	ok.Summary = Summary{Enabled: true, Cron: "0 18 * * 0", To: "learner@jlp.local"}
+	if err := ok.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil for a well-formed enabled Summary", err)
+	}
+}
+
 func TestValidationAutheliaRequiresNonEmptyTrustedProxies(t *testing.T) {
 	cfg := Config{
 		Server:   Server{Port: 8080},

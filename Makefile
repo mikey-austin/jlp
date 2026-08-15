@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build
+.PHONY: help init build up up-auth up-mail down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -21,6 +21,9 @@ up: ## Start the dev stack (app + postgres)
 
 up-auth: ## Start dev stack including Caddy + Authelia (https://jlp.localhost:8443)
 	APP_AUTH_MODE=authelia $(COMPOSE) --profile auth up -d
+
+up-mail: ## Start the dev stack plus Mailpit (SMTP capture UI at http://localhost:8025) for the weekly summary
+	$(COMPOSE) --profile mail up -d
 
 ollama-pull: ## Pull a local model into the ollama service (m=qwen3:4b), starting it if needed
 	@test -n "$(m)" || (echo "usage: make ollama-pull m=qwen3:4b"; exit 1)
@@ -112,6 +115,9 @@ vendor-fonts: ## Vendor pinned Instrument Sans + JetBrains Mono woff2 into web/s
 
 ext-build: ## Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
 	$(TOOLS) sh -c "mkdir -p dist && rm -f dist/jlp-extension.zip && cd chrome-extension && zip -r ../dist/jlp-extension.zip . -x 'shim/*' -x 'README.md'"
+
+send-summary: up-mail ## Trigger one weekly summary send immediately (needs APP_SUMMARY_TO set; brings up Mailpit + postgres first)
+	$(TOOLS) go run ./cmd/jlp send-summary
 
 deploy-local: ## Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
 	$(PROD_COMPOSE) build

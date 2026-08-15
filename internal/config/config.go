@@ -5,6 +5,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
 )
 
@@ -14,6 +15,8 @@ type Config struct {
 	Auth     Auth
 	AI       AI
 	Anki     Anki
+	Summary  Summary
+	SMTP     SMTP
 }
 
 type Server struct {
@@ -99,6 +102,46 @@ type Anki struct {
 	ConnectURL string
 }
 
+// Summary configures the weekly email summary (Phase 3 Task 5, PRD
+// §21, §65). Enabled false — the default — keeps the feature entirely
+// dormant: main.go never constructs a robfig/cron scheduler and no
+// outbound email is ever possible, matching Anki.ConnectURL's own
+// "dormant by default" contract above. This is JLP's one piece of
+// automatic external communication, so it is opt-in, explicitly, per
+// PRD §65 — an operator must set APP_SUMMARY_ENABLED=true themselves.
+//
+// The manual `jlp send-summary` CLI command (cmd/jlp/summary.go)
+// bypasses Enabled on purpose: a human running that command IS the
+// opt-in act, the same way clicking a "send now" button would be — it
+// only requires To to be set (validate below does not require it; see
+// runSendSummary's own fail-fast check).
+//
+// From is the sender identity to report for outbound summary emails
+// (logged at scheduler/CLI start). internal/adapters/smtp — the
+// deliberately minimal, no-auth, LAN/Mailpit-oriented adapter this
+// task ships — sends with a fixed envelope sender, since
+// notifications.Notification (the port every Notifier implements)
+// carries no From field by design: a future channel (Slack, SMS) has
+// no use for an email-shaped sender address, so it isn't part of the
+// transport-agnostic port. From is reserved here for wiring into a
+// configurable-sender transport later.
+type Summary struct {
+	Enabled bool
+	Cron    string
+	To      string
+	From    string
+}
+
+// SMTP configures the outbound-email adapter (internal/adapters/smtp).
+// Addr is host:port — "mailpit:1025" by default, the docker-compose
+// "mail" profile's in-network address (see docker-compose.yml and
+// `make up-mail`); a production deployment would point this at a real
+// relay. Not validated as required below: Summary.Enabled false means
+// this is never dialed at all, exactly like Anki.ConnectURL.
+type SMTP struct {
+	Addr string
+}
+
 func Load() (Config, error) {
 	v := viper.New()
 	v.SetDefault("server.port", 8080)
@@ -123,6 +166,14 @@ func Load() (Config, error) {
 	v.SetDefault("ai.claudecli.bin", "claude")
 	v.SetDefault("ai.codexcli.bin", "codex")
 	v.SetDefault("database.url", "")
+	// summary.enabled has no explicit default (Go's bool zero value,
+	// false, IS the "dormant by default" contract — see Summary's doc
+	// comment); summary.to/summary.from have no default either (empty
+	// unless the operator sets them, same as ai.ollama.model above).
+	// summary.cron's default is the brief's exact Sunday 18:00 weekly
+	// cadence.
+	v.SetDefault("summary.cron", "0 18 * * 0")
+	v.SetDefault("smtp.addr", "mailpit:1025")
 
 	v.SetEnvPrefix("APP")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
@@ -131,7 +182,8 @@ func Load() (Config, error) {
 	for _, key := range []string{"server.port", "server.baseurl", "database.url",
 		"auth.mode", "auth.static.id", "auth.static.displayname",
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
-		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes"} {
+		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes",
+		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}
@@ -182,6 +234,22 @@ func (c Config) validate() error {
 	}
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("config: invalid port %d", c.Server.Port)
+	}
+	// Summary.To/SMTP.Addr are validated ONLY when the scheduler is
+	// actually turned on — mirrors validate's own authelia/trustedproxies
+	// guard just above: a feature's config only needs to make sense once
+	// the feature is live. Enabled=false (the default) skips this
+	// entirely, so an operator who never touches APP_SUMMARY_* still
+	// boots clean — see Summary's doc comment and
+	// TestSummaryDefaults/TestSummaryEnabledRequiresRecipientAndValidCron
+	// in config_test.go.
+	if c.Summary.Enabled {
+		if c.Summary.To == "" {
+			return fmt.Errorf("config: APP_SUMMARY_TO is required when APP_SUMMARY_ENABLED=true")
+		}
+		if _, err := cron.ParseStandard(c.Summary.Cron); err != nil {
+			return fmt.Errorf("config: invalid APP_SUMMARY_CRON %q: %w", c.Summary.Cron, err)
+		}
 	}
 	return nil
 }

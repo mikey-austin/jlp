@@ -34,6 +34,16 @@ services:
       # dormant — see internal/config.Anki's doc comment. TSV export needs
       # no configuration at all.
       APP_ANKI_CONNECT_URL: ${APP_ANKI_CONNECT_URL:-}
+      # Weekly email summary (Phase 3 Task 5, PRD §21/§65): Enabled false
+      # (the default) keeps the cron scheduler entirely unconstructed —
+      # see internal/config.Summary's doc comment. SMTP_ADDR's default
+      # (mailpit:1025) is the "mail" profile's in-network address below;
+      # it's only ever dialed once Enabled=true.
+      APP_SUMMARY_ENABLED: ${APP_SUMMARY_ENABLED:-false}
+      APP_SUMMARY_CRON: ${APP_SUMMARY_CRON:-}
+      APP_SUMMARY_TO: ${APP_SUMMARY_TO:-}
+      APP_SUMMARY_FROM: ${APP_SUMMARY_FROM:-}
+      APP_SMTP_ADDR: ${APP_SMTP_ADDR:-}
     depends_on:
       postgres: { condition: service_healthy }
 
@@ -69,6 +79,13 @@ services:
     environment:
       GOFLAGS: -buildvcs=false # see app service note
       APP_DATABASE_URL: postgres://jlp:jlp@postgres:5432/jlp?sslmode=disable
+      # `make send-summary` runs `jlp send-summary` in THIS container
+      # (see the Makefile), so it needs the same weekly-summary env
+      # passthrough the app service gets above — APP_SUMMARY_TO in
+      # particular, since runSendSummary fails fast without a recipient.
+      APP_SUMMARY_TO: ${APP_SUMMARY_TO:-}
+      APP_SUMMARY_FROM: ${APP_SUMMARY_FROM:-}
+      APP_SMTP_ADDR: ${APP_SMTP_ADDR:-}
 
   caddy:
     image: caddy:2
@@ -83,6 +100,18 @@ services:
         # Fixed address so the app's trusted-proxy CIDR (above) can name
         # Caddy specifically, distinct from the bridge gateway.
         ipv4_address: 172.28.5.9
+
+  mailpit:
+    # SMTP capture inbox for local dev (Phase 3 Task 5, PRD §21/§65):
+    # the weekly summary's actual delivery target when APP_SMTP_ADDR is
+    # left at its default (mailpit:1025, in-network only — no host port
+    # for SMTP). The UI (8025) IS published so a browser can inspect
+    # what got sent. Not started by a plain `make up`; join it
+    # explicitly with `make up-mail` (mirrors `make ollama-pull`'s own
+    # "--profile ollama" join for the ollama service above).
+    image: axllent/mailpit
+    profiles: ["mail"]
+    ports: ["8025:8025"]
 
   authelia:
     # Pinned to the same 4.39 minor as deploy/compose.prod.yml (parity

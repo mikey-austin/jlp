@@ -31,6 +31,7 @@ init               One-time setup: create .env from example, generate Authelia d
 build              Build all images
 up                 Start the dev stack (app + postgres)
 up-auth            Start dev stack including Caddy + Authelia (https://jlp.localhost:8443)
+up-mail            Start the dev stack plus Mailpit (SMTP capture UI at http://localhost:8025) for the weekly summary
 ollama-pull        Pull a local model into the ollama service (m=qwen3:4b), starting it if needed
 down               Stop the stack (including profile-gated services like Caddy/Authelia)
 restart            Restart the app service
@@ -53,6 +54,7 @@ test-integration   Adapter tests against compose services
 vendor-js          Vendor pinned htmx + alpine into web/static/js
 vendor-fonts       Vendor pinned Instrument Sans + JetBrains Mono woff2 into web/static/fonts (design system, PRD §39/§45: no CDN fonts at runtime)
 ext-build          Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
+send-summary       Trigger one weekly summary send immediately (needs APP_SUMMARY_TO set; brings up Mailpit + postgres first)
 deploy-local       Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
 deploy             Deploy to $(DEPLOY_HOST) over SSH (set in .env)
 deploy-logs        Tail remote app logs
@@ -294,6 +296,42 @@ endpoint has no separate service-token scheme — see that doc's
 Authentication section before relying on it from a non-LAN
 deployment).
 
+## Weekly email summary (PRD §21, §65)
+
+JLP can send one learner an encouraging weekly digest email —
+accomplishments, biggest improvements, persistent weaknesses, useful new
+expressions, recommended focus, and an optional low-pressure challenge
+for next week — composed from `internal/application/analytics.Service`
+statistics, the heuristic planner's top priorities, and recently active
+vocabulary. This is JLP's only piece of *automatic* outbound external
+communication, so it is opt-in, explicitly (PRD §65): the cron scheduler
+is never constructed at all unless `APP_SUMMARY_ENABLED=true`. Leaving
+it unset (the default) means the app boots with zero email-sending
+capability, full stop.
+
+```sh
+make up-mail                          # starts postgres + app + Mailpit (SMTP capture UI)
+# set APP_SUMMARY_TO=you@example.com in .env, then either:
+make send-summary                     # trigger one send immediately, right now
+# or, for the automatic weekly schedule, also set in .env:
+#   APP_SUMMARY_ENABLED=true
+#   APP_SUMMARY_CRON="0 18 * * 0"     # optional; this is already the default (Sunday 18:00)
+```
+
+Open **http://localhost:8025** to see delivered mail — Mailpit is a
+local SMTP capture inbox, nothing leaves your machine. `APP_SMTP_ADDR`
+defaults to `mailpit:1025` (the `up-mail` profile's in-network
+address); point it at a real relay for anything beyond local dev.
+
+`jlp send-summary` (what `make send-summary` runs) always sends
+immediately regardless of `APP_SUMMARY_ENABLED` — running it IS the
+opt-in act, the same as clicking a "send now" button would be. Enabled
+only gates the **automatic** cron scheduler that `make up`'s app
+container would otherwise start on `APP_SUMMARY_CRON`'s schedule. Both
+paths target the single static identity (`APP_AUTH_STATIC_ID`) —
+per-learner scheduling across multiple real accounts is a Phase 4
+concern.
+
 ## Deploying
 
 The production stack (`deploy/compose.prod.yml`) is a separate compose
@@ -383,8 +421,8 @@ cmd/jlp/                     entrypoint: serve | migrate | seed
 internal/config/             viper -> typed Config, validation
 internal/domain/             learner, session, writing, correction, diff, event
 internal/application/        sessions, writing, feedback, learning, analytics
-internal/ports/               auth, ai, events, storage interfaces
-internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, clicmd, airouter
+internal/ports/               auth, ai, events, storage, notifications interfaces
+internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, clicmd, airouter, smtp
 internal/agent/teacher/      the Teacher AI agent (ReviewWriting)
 internal/observability/      AI request/cost/latency recording decorator
 internal/prompts/            embedded, versioned prompt templates

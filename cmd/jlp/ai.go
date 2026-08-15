@@ -69,6 +69,7 @@ var knownPromptNames = []string{
 	"teacher.feedback",
 	"drill.generate",
 	"drill.evaluate",
+	"summary.generate",
 }
 
 // unknownPromptNames returns every key of routes absent from

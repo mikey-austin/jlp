@@ -12,10 +12,12 @@ import (
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
+	smtpadapter "github.com/mikeyaustin/jlp/internal/adapters/smtp"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
 	agentanki "github.com/mikeyaustin/jlp/internal/agent/anki"
 	"github.com/mikeyaustin/jlp/internal/agent/drill"
 	agentlesson "github.com/mikeyaustin/jlp/internal/agent/lesson"
+	agentsummary "github.com/mikeyaustin/jlp/internal/agent/summary"
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
@@ -26,6 +28,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appsummary "github.com/mikeyaustin/jlp/internal/application/summary"
 	"github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
@@ -180,6 +183,22 @@ func main() {
 		lessonRepo := postgres.NewLessonRepository(pool)
 		lessonSvc := applessons.NewService(lessonRepo, prioRepo, teachingPlanner, feedbackRepo, obsRepo, lessonAgent, recorder)
 
+		// Weekly email summary (Phase 3 Task 5, PRD §21/§65): summarySvc
+		// is always constructed (cheap — no network call happens until
+		// SendWeekly is actually invoked, matching smtpadapter.New's
+		// never-fails-at-construction contract), but the cron scheduler
+		// that could actually TRIGGER a send is only started when
+		// cfg.Summary.Enabled is true — see maybeStartSummaryScheduler's
+		// own doc comment for the full PRD §65 opt-in reasoning. An
+		// operator who never sets APP_SUMMARY_ENABLED gets a nil
+		// scheduler and this line logs nothing.
+		summaryAgent := agentsummary.New(aiGen)
+		summarySvc := appsummary.NewService(analyticsSvc, prioRepo, vocabRepo, summaryAgent, smtpadapter.New(cfg.SMTP), recorder)
+		if _, err := maybeStartSummaryScheduler(cfg, summarySvc); err != nil {
+			slog.Error("summary", "err", err)
+			os.Exit(1)
+		}
+
 		var authn auth.Authenticator
 		switch cfg.Auth.Mode {
 		case "static":
@@ -267,6 +286,16 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("eval complete")
+	case "send-summary":
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		if err := runSendSummary(context.Background(), cfg); err != nil {
+			slog.Error("send-summary", "err", err)
+			os.Exit(1)
+		}
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)
