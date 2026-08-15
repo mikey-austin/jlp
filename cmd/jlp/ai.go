@@ -72,6 +72,25 @@ var knownPromptNames = []string{
 	"summary.generate",
 }
 
+// knownToolPromptNames is every prompt name a route can name for TOOL
+// CALLING specifically (buildToolCaller below) — a much narrower list
+// than knownPromptNames above, which is buildAIGenerator's (structured
+// generation only ever goes through a handful of Rule-4 schema-backed
+// prompts; tool-calling conversations are rarer still, today just the
+// agentic teacher's investigation step). buildToolCaller only
+// validates/resolves APP_AI_ROUTES entries whose promptName appears
+// here — see that function's own doc comment for why: APP_AI_ROUTES
+// is one shared config value for BOTH buildAIGenerator and
+// buildToolCaller, so an entry like "teacher.feedback=claudecli"
+// (perfectly valid for the structured-generation path
+// buildAIGenerator already resolved) must not also be interpreted as
+// a tool-calling route just because it's present in the same string —
+// claudecli doesn't implement ai.ToolCaller, and "teacher.feedback"
+// was never a tool-calling prompt name to begin with.
+var knownToolPromptNames = []string{
+	"teacher.agentic",
+}
+
 // unknownPromptNames returns every key of routes absent from
 // knownPromptNames. Split out from warnForUnknownPromptNames so a test
 // can assert on exactly what would be warned about without swapping
@@ -220,15 +239,24 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 // adapters/fakeai, adapters/anthropic, and adapters/ollama implement
 // ai.ToolCaller today — adapters/clicmd's claudecli/codexcli adapters
 // (their non-interactive JSON CLI output has no tool-calling protocol
-// of its own to drive) do not, so a route or APP_AI_PROVIDER naming
-// either for TOOL calling is a boot error here, the same "operator
-// asked for a chain link that doesn't exist" treatment
-// buildAIGenerator gives an unconstructible provider.
+// of its own to drive) do not, so APP_AI_PROVIDER naming either for
+// TOOL calling is a boot error here, the same "operator asked for a
+// chain link that doesn't exist" treatment buildAIGenerator gives an
+// unconstructible provider.
 //
-// Not yet called from main() — nothing in Task 1 consumes an
-// ai.ToolCaller (no HTTP handler drives an agent-run loop yet); Task 2
-// wires this into cmd/jlp/main.go once the agentic teacher exists to
-// call it.
+// Route validation is deliberately narrower than buildAIGenerator's,
+// too: APP_AI_ROUTES is ONE shared config string covering both
+// capabilities, so this function only validates/resolves entries whose
+// promptName is in knownToolPromptNames — an entry like
+// "teacher.feedback=claudecli" is a perfectly valid structured-
+// generation route (buildAIGenerator already resolved it) that simply
+// isn't relevant here, and must not fail boot just because claudecli
+// doesn't implement ai.ToolCaller. Called unconditionally from
+// main() (cheap — no network call happens at construction, same as
+// buildAIGenerator): the agentic teacher is opt-in per request
+// (APP_AI_AGENTICTEACHER), but the ToolCaller itself is built once at
+// boot regardless, so turning the flag on later never needs a restart
+// bug hunt.
 func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepository) (ai.ToolCaller, error) {
 	routes, err := config.ParseRoutes(cfg.AI.Routes)
 	if err != nil {
@@ -257,8 +285,22 @@ func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepositor
 		providers[name] = observability.NewToolObserver(gen, aiRequestRepo, pricing)
 	}
 
+	toolPromptNames := make(map[string]bool, len(knownToolPromptNames))
+	for _, name := range knownToolPromptNames {
+		toolPromptNames[name] = true
+	}
+
 	resolvedRoutes := make(map[string][]ai.ToolCaller, len(routes))
 	for promptName, chain := range routes {
+		// Skip routes for prompt names this function doesn't own — see
+		// the doc comment above. An unrelated route naming claudecli/
+		// codexcli for a StructuredGenerator-only prompt (e.g.
+		// "teacher.feedback=claudecli") is buildAIGenerator's concern,
+		// already resolved there; it must not also fail HERE just
+		// because claudecli isn't an ai.ToolCaller.
+		if !toolPromptNames[promptName] {
+			continue
+		}
 		for _, name := range chain {
 			gen, ok := providers[name]
 			if !ok {

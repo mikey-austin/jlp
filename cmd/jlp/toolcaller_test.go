@@ -72,6 +72,41 @@ func TestBuildToolCallerErrorsWhenRouteNamesNonToolCallingProvider(t *testing.T)
 	}
 }
 
+// TestBuildToolCallerIgnoresRoutesForNonToolCallingPromptNames pins a
+// regression found in review: APP_AI_ROUTES is ONE shared config
+// string covering both buildAIGenerator (structured generation) and
+// buildToolCaller (tool calling) routes. A route naming claudecli/
+// codexcli for a prompt buildToolCaller has no business validating
+// (e.g. "teacher.feedback", never a tool-calling prompt name) must NOT
+// fail boot just because claudecli doesn't implement ai.ToolCaller —
+// that route is buildAIGenerator's concern, already resolved there.
+// Before this fix, ANY deployment routing ANY prompt to claudecli/
+// codexcli (a documented, supported Task 12 configuration) would fail
+// to boot the moment main.go started calling buildToolCaller
+// unconditionally (Task 2), even with the agentic teacher disabled.
+func TestBuildToolCallerIgnoresRoutesForNonToolCallingPromptNames(t *testing.T) {
+	cfg := baseCfg()
+	cfg.AI.Routes = "teacher.feedback=claudecli"
+
+	caller, err := buildToolCaller(cfg, &memRepo{})
+	if err != nil {
+		t.Fatalf("buildToolCaller() err = %v, want nil — \"teacher.feedback\" is not a tool-calling prompt name, this route is irrelevant here", err)
+	}
+
+	// The unrelated route must not have displaced the default fake
+	// provider for an actual tool-calling prompt name.
+	resp, err := caller.CallWithTools(context.Background(), ai.ToolRequest{
+		PromptName: "teacher.agentic",
+		Messages:   []ai.ToolMessage{{Role: "user", Text: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("CallWithTools: %v", err)
+	}
+	if resp.Provider != "fake" {
+		t.Errorf("Provider = %q, want fake (falls through to APP_AI_PROVIDER default, unaffected by the unrelated teacher.feedback route)", resp.Provider)
+	}
+}
+
 func TestBuildToolCallerErrorsWhenDefaultProviderNotToolCalling(t *testing.T) {
 	cfg := baseCfg()
 	cfg.AI.Provider = "codexcli"
