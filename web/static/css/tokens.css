@@ -108,6 +108,68 @@
   --on-solid-mix: black;
 }
 
+/* ===================== Typography & spacing scales =====================
+ *
+ * Added alongside (never in place of) the normative colour tokens above.
+ * Before these existed every size in app.css/components.css was an ad-hoc
+ * literal and had drifted to 11.5/12/12.5/13/13.5/14/15/16/17/18/19/20/
+ * 24/26/32px, which put most body and secondary copy at 12–13px — the
+ * "font size is too small" complaint. The scale below sets the floor:
+ * 16px for body copy, 14px for secondary copy, and 12px reserved for
+ * badges/chips/table column headers only — never for prose.
+ *
+ * --text-4xl exists so the one pre-existing 32px value (the stat-tile
+ * numeral) keeps its size: this pass is only ever allowed to make text
+ * bigger, so nothing is mapped onto a smaller token.
+ *
+ * These are theme-independent by construction, so they live on a bare
+ * :root rather than being duplicated under each [data-theme].
+ */
+:root {
+  --text-xs: 12px; /* badges, chips, table column headers ONLY */
+  --text-sm: 14px; /* secondary / supporting copy */
+  --text-base: 16px; /* body default */
+  --text-lg: 18px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 30px;
+  --text-4xl: 32px;
+
+  --leading-tight: 1.3;
+  --leading-normal: 1.55;
+  --leading-relaxed: 1.9; /* Japanese text blocks (editor/textarea) */
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-7: 32px;
+  --space-8: 40px;
+
+  /* The single horizontal gutter shared by header.topbar and main, so
+   * the topbar's content edge and the page content edge line up at
+   * every breakpoint (they used to be 28px and 24px — 4px apart on
+   * every page). It shrinks with the viewport. */
+  --gutter: var(--space-6); /* 24px, desktop */
+
+  /* Minimum comfortable touch target on coarse/small screens. */
+  --tap: 44px;
+}
+
+@media (max-width: 1024px) {
+  :root {
+    --gutter: var(--space-5); /* 20px, tablet */
+  }
+}
+
+@media (max-width: 640px) {
+  :root {
+    --gutter: var(--space-4); /* 16px, phone */
+  }
+}
+
 @keyframes jlpPulse {
   0%,
   100% {

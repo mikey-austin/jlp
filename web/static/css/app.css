@@ -16,11 +16,13 @@ body {
   background: var(--bg);
   color: var(--fg);
   font-family: "Instrument Sans", "Noto Sans JP", "Hiragino Sans", "Yu Gothic", system-ui, sans-serif;
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
   -webkit-font-smoothing: antialiased;
 }
 
 main {
-  padding: 1.5rem;
+  padding: var(--gutter);
   max-width: 1400px;
   margin: 0 auto;
 }
@@ -30,20 +32,23 @@ main {
  * than each page inventing its own; kept here since it's generic
  * layout, not a named component. */
 main h1 {
-  margin: 0 0 20px;
-  font-size: 26px;
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-3xl);
+  line-height: var(--leading-tight);
   font-weight: 700;
   letter-spacing: -0.02em;
 }
 main h2 {
-  margin: 28px 0 14px;
-  font-size: 17px;
+  margin: var(--space-7) 0 var(--space-4);
+  font-size: var(--text-lg);
+  line-height: var(--leading-tight);
   font-weight: 600;
   letter-spacing: -0.01em;
 }
 main h3 {
-  margin: 18px 0 10px;
-  font-size: 15px;
+  margin: var(--space-5) 0 var(--space-3);
+  font-size: var(--text-base);
+  line-height: var(--leading-tight);
   font-weight: 600;
 }
 main p.description {
@@ -84,14 +89,14 @@ main p.description {
 
 .filter-tabs {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
   margin: 0 0 20px;
 }
 .filter-tabs a {
-  padding: 7px 14px;
+  padding: var(--space-2) var(--space-4);
   border-radius: 999px;
-  font-size: 13px;
+  font-size: var(--text-sm);
   font-weight: 500;
   color: var(--fg-muted);
   text-decoration: none;
@@ -114,18 +119,18 @@ main p.description {
 
 .workspace {
   display: grid;
-  grid-template-columns: 1fr 300px;
-  gap: 18px;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: var(--space-5);
   align-items: start;
 }
 .workspace__main {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: var(--space-4);
   min-width: 0;
 }
 #editor-pane {
-  padding: 20px;
+  padding: var(--space-5);
 }
 #editor {
   width: 100%;
@@ -136,8 +141,8 @@ main p.description {
   padding: 0;
   font: inherit;
   font-family: "Noto Sans JP", "Instrument Sans", sans-serif;
-  font-size: 16px;
-  line-height: 2;
+  font-size: var(--text-lg);
+  line-height: var(--leading-relaxed);
   resize: vertical;
 }
 #editor:focus-visible {
@@ -151,7 +156,7 @@ main p.description {
   padding-top: 12px;
   border-top: 1px solid var(--border);
   color: var(--fg-muted);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
 }
 #save-state[data-state="dirty"] {
   color: var(--warning);
@@ -170,7 +175,7 @@ main p.description {
 }
 
 #feedback-pane {
-  padding: 18px;
+  padding: var(--space-5);
 }
 .feedback-trigger {
   display: flex;
@@ -180,7 +185,7 @@ main p.description {
 }
 .feedback-trigger .hint {
   color: var(--fg-subtle);
-  font-size: 12px;
+  font-size: var(--text-sm);
 }
 #feedback-results:empty {
   margin: 0;
@@ -190,20 +195,19 @@ main p.description {
 }
 
 #context-pane {
-  padding: 18px;
+  padding: var(--space-5);
   height: fit-content;
 }
 #context-pane h2 {
-  margin: 0 0 14px;
-  font-size: 16px;
+  margin: 0 0 var(--space-4);
 }
 .context-fields {
   display: grid;
   grid-template-columns: auto 1fr;
   row-gap: 10px;
   column-gap: 14px;
-  margin: 0 0 18px;
-  font-size: 13px;
+  margin: 0 0 var(--space-5);
+  font-size: var(--text-sm);
 }
 .context-fields dt {
   color: var(--fg-subtle);
@@ -216,14 +220,14 @@ main p.description {
 }
 
 .inline-diff {
-  line-height: 1.9;
+  line-height: var(--leading-relaxed);
 }
 .all-good {
   color: var(--fg-muted);
 }
 .diff-block {
-  padding: 16px 18px;
-  margin: 0 0 16px;
+  padding: var(--space-5);
+  margin: 0 0 var(--space-4);
 }
 .diff-block h3 {
   margin: 0 0 8px;
@@ -245,9 +249,9 @@ main p.description {
 .dashboard-columns {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 24px;
+  gap: var(--space-6);
 }
-@media (max-width: 720px) {
+@media (max-width: 1024px) {
   .dashboard-columns {
     grid-template-columns: 1fr;
   }
@@ -279,7 +283,7 @@ main p.description {
 .error-types .error-count {
   color: var(--fg-muted);
   font-family: "JetBrains Mono", monospace;
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .recent-sessions a {
   color: var(--primary);
@@ -312,17 +316,17 @@ main p.description {
 }
 .funnel__value {
   font-family: "JetBrains Mono", monospace;
-  font-size: 24px;
+  font-size: var(--text-2xl);
   font-weight: 700;
   color: var(--primary);
 }
 .funnel__label {
-  margin-top: 4px;
-  font-size: 12px;
+  margin-top: var(--space-1);
+  font-size: var(--text-sm);
   color: var(--fg-muted);
 }
 .funnel__arrow {
-  font-size: 20px;
+  font-size: var(--text-xl);
   color: var(--fg-subtle);
 }
 
@@ -375,14 +379,14 @@ main p.description {
   display: flex;
   gap: 0.4rem;
   align-items: center;
-  font-size: 13.5px;
+  font-size: var(--text-sm);
   color: var(--fg-muted);
 }
 .rating .star,
 .confidence .star {
   border: none;
   background: none;
-  font-size: 1.4rem;
+  font-size: var(--text-2xl);
   line-height: 1;
   padding: 0;
   cursor: pointer;
@@ -396,23 +400,23 @@ main p.description {
 /* ============================== Practice / exercises ===================== */
 
 .practice-intro-card {
-  padding: 20px;
+  padding: var(--space-5);
 }
 .practice-intro {
   color: var(--fg-muted);
   margin: 0 0 14px;
 }
 .exercise {
-  padding: 20px;
+  padding: var(--space-5);
 }
 .exercise .instructions.en,
 .exercise-result .feedback.en {
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
 }
 .exercise .prompt {
-  font-size: 17px;
-  margin: 10px 0 16px;
+  font-size: var(--text-lg);
+  margin: var(--space-3) 0 var(--space-4);
 }
 .choices {
   display: flex;
@@ -428,7 +432,7 @@ main p.description {
   border: 1px solid var(--border);
   border-radius: 10px;
   cursor: pointer;
-  font-size: 14px;
+  font-size: var(--text-base);
 }
 .choice:hover {
   border-color: var(--primary);
@@ -440,11 +444,11 @@ main p.description {
   margin-top: 4px;
 }
 .exercise-result {
-  padding: 20px;
+  padding: var(--space-5);
 }
 .result-banner {
   font-weight: 700;
-  font-size: 16px;
+  font-size: var(--text-lg);
   margin: 0 0 10px;
 }
 .result-banner.correct {
@@ -460,10 +464,10 @@ main p.description {
 /* ============================== Anki ====================================== */
 
 .anki-card {
-  padding: 18px;
+  padding: var(--space-5);
 }
 .anki-card .front {
-  font-size: 16px;
+  font-size: var(--text-lg);
   margin: 0 0 8px;
 }
 .anki-card .back {
@@ -471,7 +475,7 @@ main p.description {
   margin: 0 0 8px;
 }
 .anki-card .notes {
-  font-size: 13px;
+  font-size: var(--text-sm);
   color: var(--fg-subtle);
   margin: 0 0 10px;
 }
@@ -481,7 +485,7 @@ main p.description {
 }
 .anki-card footer.resolved {
   color: var(--fg-muted);
-  font-size: 13px;
+  font-size: var(--text-sm);
   text-transform: capitalize;
 }
 .anki-export-actions {
@@ -493,17 +497,17 @@ main p.description {
 .toast {
   background: var(--success-soft);
   color: var(--success);
-  padding: 10px 14px;
+  padding: var(--space-3) var(--space-4);
   border-radius: 10px;
-  font-size: 13.5px;
+  font-size: var(--text-sm);
   margin-top: 0.75rem;
 }
 .error {
   background: var(--danger-soft);
   color: var(--danger);
-  padding: 10px 14px;
+  padding: var(--space-3) var(--space-4);
   border-radius: 10px;
-  font-size: 13.5px;
+  font-size: var(--text-sm);
   margin-top: 0.75rem;
 }
 p.empty {
@@ -518,7 +522,7 @@ p.empty {
   padding-top: 10vh;
 }
 .offline-card {
-  padding: 32px;
+  padding: var(--space-7);
   max-width: 32rem;
   text-align: center;
 }
@@ -540,14 +544,14 @@ p.empty {
 }
 .lesson-guide,
 .observation {
-  padding: 22px 26px;
+  padding: var(--space-6);
 }
 .observation {
   margin: 0 0 14px;
 }
 .observation-meta {
   color: var(--fg-muted);
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   margin: 0 0 6px;
 }
 
@@ -558,8 +562,8 @@ p.empty {
  * comment) — so they're rendered inside <pre> and just need
  * monospace/wrap styling, no design-system component of their own. */
 .agent-run-label {
-  margin: 14px 0 4px;
-  font-size: 12.5px;
+  margin: var(--space-4) 0 var(--space-1);
+  font-size: var(--text-sm);
   font-weight: 600;
   color: var(--fg-muted);
 }
@@ -570,7 +574,7 @@ p.empty {
   border: 1px solid var(--border);
   border-radius: 8px;
   font-family: "JetBrains Mono", monospace;
-  font-size: 12.5px;
+  font-size: var(--text-sm);
   white-space: pre-wrap;
   word-break: break-word;
   max-height: 280px;
@@ -582,6 +586,52 @@ p.empty {
  * spacing between an otherwise unstyled .card is all this needs. */
 .agent-run-event {
   margin-bottom: 12px;
+}
+
+/* ============================== Responsive ============================== */
+/* Two breakpoints, matching the --gutter steps in tokens.css: 1024px
+ * (tablet) and 640px (phone). Before this pass the only breakpoint in
+ * the codebase was a 720px rule that re-flowed .dashboard-columns and
+ * nothing else, so a tablet got the full desktop grid — .workspace kept
+ * its 1fr/300px split (a ~400px editor beside a 300px context pane) and
+ * .stat-grid produced 153px columns at phone widths. */
+
+@media (max-width: 1024px) {
+  /* The 300px context pane is unusable next to a tablet-width editor;
+   * stack it under the editor instead, where it gets the full width. */
+  .workspace {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  #context-pane {
+    height: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  /* Touch targets: nav links and .btn are handled in components.css;
+   * these are the page-level interactive controls. */
+  .filter-tabs a,
+  .rating .star,
+  .confidence .star,
+  .correction .reveal {
+    min-height: var(--tap);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .choice {
+    min-height: var(--tap);
+  }
+  /* Wide fixed-size decoration shouldn't force a scrollbar. */
+  .sparkline {
+    width: 88px;
+  }
+  .weakness-trends li {
+    gap: var(--space-3);
+  }
+  .funnel {
+    gap: var(--space-2);
+  }
 }
 
 /* ============================== Print (lesson guides) =================== */
