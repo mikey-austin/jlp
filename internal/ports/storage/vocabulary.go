@@ -24,8 +24,11 @@ type VocabularyRepository interface {
 	// response it never saw) is a no-op: the existing item is returned
 	// unchanged, with the bool return true, and Lookups is NOT
 	// incremented again. An empty clientEventID skips that dedup check
-	// entirely (every call counts).
-	UpsertOnLookup(ctx context.Context, identity learner.IdentityID, expression, reading, meaning, source string, kind vocabulary.Kind, clientEventID string, at time.Time) (item vocabulary.Item, duplicate bool, err error)
+	// entirely (every call counts). example is the ingest event's
+	// example sentence — it has no column on Item, but is persisted
+	// into the appended vocabulary_events row's payload alongside
+	// reading/meaning/source, for audit.
+	UpsertOnLookup(ctx context.Context, identity learner.IdentityID, expression, reading, meaning, source, example string, kind vocabulary.Kind, clientEventID string, at time.Time) (item vocabulary.Item, duplicate bool, err error)
 	// RecordProduction increments itemID's Productions (and, when
 	// successful, SuccessfulProductions) and refreshes LastEvent.
 	RecordProduction(ctx context.Context, identity learner.IdentityID, itemID string, successful bool, at time.Time) error

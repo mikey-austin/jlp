@@ -295,7 +295,7 @@ func (f *fakeVocabRepo) seed(id, expression string) {
 	f.items[expression] = &vocabulary.Item{ID: id, Expression: expression}
 }
 
-func (f *fakeVocabRepo) UpsertOnLookup(context.Context, learner.IdentityID, string, string, string, string, vocabulary.Kind, string, time.Time) (vocabulary.Item, bool, error) {
+func (f *fakeVocabRepo) UpsertOnLookup(context.Context, learner.IdentityID, string, string, string, string, string, vocabulary.Kind, string, time.Time) (vocabulary.Item, bool, error) {
 	panic("not used by feedback service tests")
 }
 

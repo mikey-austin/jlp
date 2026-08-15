@@ -39,7 +39,7 @@ func NewVocabularyRepository(pool *pgxpool.Pool) *VocabularyRepository {
 // touching vocabulary_items or inserting a second event. Otherwise it
 // upserts the item (create, or increment Lookups on a repeat lookup of
 // the same expression) and appends the vocabulary_events row.
-func (r *VocabularyRepository) UpsertOnLookup(ctx context.Context, identity learner.IdentityID, expression, reading, meaning, source string, kind vocabulary.Kind, clientEventID string, at time.Time) (vocabulary.Item, bool, error) {
+func (r *VocabularyRepository) UpsertOnLookup(ctx context.Context, identity learner.IdentityID, expression, reading, meaning, source, example string, kind vocabulary.Kind, clientEventID string, at time.Time) (vocabulary.Item, bool, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return vocabulary.Item{}, false, err
@@ -94,6 +94,7 @@ func (r *VocabularyRepository) UpsertOnLookup(ctx context.Context, identity lear
 		"reading": reading,
 		"meaning": meaning,
 		"source":  source,
+		"example": example,
 	})
 	if err != nil {
 		return vocabulary.Item{}, false, fmt.Errorf("vocabulary: marshal event payload: %w", err)

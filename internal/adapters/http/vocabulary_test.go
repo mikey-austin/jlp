@@ -39,7 +39,7 @@ func vocabKey(identity learner.IdentityID, expression string) string {
 	return string(identity) + "/" + expression
 }
 
-func (f *fakeVocabRepo) UpsertOnLookup(_ context.Context, identity learner.IdentityID, expression, reading, meaning, source string, kind vocabulary.Kind, clientEventID string, at time.Time) (vocabulary.Item, bool, error) {
+func (f *fakeVocabRepo) UpsertOnLookup(_ context.Context, identity learner.IdentityID, expression, reading, meaning, source, _ string, kind vocabulary.Kind, clientEventID string, at time.Time) (vocabulary.Item, bool, error) {
 	if clientEventID != "" {
 		if itemID, ok := f.clientEvents[string(identity)+"/"+clientEventID]; ok {
 			return *f.byID[itemID], true, nil

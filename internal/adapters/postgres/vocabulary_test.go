@@ -4,6 +4,7 @@ package postgres
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -42,13 +43,18 @@ func vocabTestSetup(t *testing.T) (*VocabularyRepository, learner.IdentityID) {
 // brief's Step 2 contract: a first lookup creates the item with
 // Lookups=1, and a second lookup of the SAME expression (no
 // client_event_id) increments Lookups rather than creating a second
-// row.
+// row. It also pins the code-review fix that made IngestEvent's doc
+// comment true: the example sentence passed in must actually reach the
+// appended vocabulary_events row's payload, not just Reading/Meaning/
+// Source (Item itself has no Example column — see
+// storage.VocabularyRepository.UpsertOnLookup's doc comment).
 func TestVocabularyUpsertOnLookupCreatesThenIncrementsCounts(t *testing.T) {
 	repo, identity := vocabTestSetup(t)
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
+	const example = "新しい仕事に取り組む。"
 
-	item, duplicate, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "とりくむ", "to tackle", "novel: コンビニ人間", vocabulary.KindWord, "", now)
+	item, duplicate, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "とりくむ", "to tackle", "novel: コンビニ人間", example, vocabulary.KindWord, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -65,7 +71,27 @@ func TestVocabularyUpsertOnLookupCreatesThenIncrementsCounts(t *testing.T) {
 		t.Fatalf("item = %+v, want FirstSeen/LastEvent set", item)
 	}
 
-	second, duplicate, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "", "", "", vocabulary.KindWord, "", now.Add(time.Minute))
+	var rawPayload []byte
+	if err := repo.pool.QueryRow(ctx, "SELECT payload FROM vocabulary_events WHERE identity_id = $1 AND item_id = $2", string(identity), item.ID).Scan(&rawPayload); err != nil {
+		t.Fatal(err)
+	}
+	var payload struct {
+		Reading string `json:"reading"`
+		Meaning string `json:"meaning"`
+		Source  string `json:"source"`
+		Example string `json:"example"`
+	}
+	if err := json.Unmarshal(rawPayload, &payload); err != nil {
+		t.Fatalf("could not decode vocabulary_events.payload %s: %v", rawPayload, err)
+	}
+	if payload.Example != example {
+		t.Fatalf("persisted payload.example = %q, want %q (payload = %s)", payload.Example, example, rawPayload)
+	}
+	if payload.Reading != "とりくむ" || payload.Meaning != "to tackle" || payload.Source != "novel: コンビニ人間" {
+		t.Fatalf("persisted payload = %+v, want reading/meaning/source to also match the lookup", payload)
+	}
+
+	second, duplicate, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "", "", "", "", vocabulary.KindWord, "", now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +121,7 @@ func TestVocabularyUpsertOnLookupClientEventIDIsIdempotent(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	first, duplicate, err := repo.UpsertOnLookup(ctx, identity, "気配", "けはい", "sign, indication", "", vocabulary.KindWord, "client-evt-1", now)
+	first, duplicate, err := repo.UpsertOnLookup(ctx, identity, "気配", "けはい", "sign, indication", "", "", vocabulary.KindWord, "client-evt-1", now)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,7 +132,7 @@ func TestVocabularyUpsertOnLookupClientEventIDIsIdempotent(t *testing.T) {
 		t.Fatalf("first.Lookups = %d, want 1", first.Lookups)
 	}
 
-	second, duplicate, err := repo.UpsertOnLookup(ctx, identity, "気配", "けはい", "sign, indication", "", vocabulary.KindWord, "client-evt-1", now.Add(time.Minute))
+	second, duplicate, err := repo.UpsertOnLookup(ctx, identity, "気配", "けはい", "sign, indication", "", "", vocabulary.KindWord, "client-evt-1", now.Add(time.Minute))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +165,7 @@ func TestVocabularyCrossIdentityIsolation(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	if _, _, err := repoA.UpsertOnLookup(ctx, identityA, "気配", "けはい", "sign", "", vocabulary.KindWord, "", now); err != nil {
+	if _, _, err := repoA.UpsertOnLookup(ctx, identityA, "気配", "けはい", "sign", "", "", vocabulary.KindWord, "", now); err != nil {
 		t.Fatal(err)
 	}
 
@@ -176,11 +202,11 @@ func TestVocabularyRecordProductionIncrementsCounts(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	produced, _, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "", "", "", vocabulary.KindWord, "", now)
+	produced, _, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "", "", "", "", vocabulary.KindWord, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := repo.UpsertOnLookup(ctx, identity, "気配", "", "", "", vocabulary.KindWord, "", now); err != nil {
+	if _, _, err := repo.UpsertOnLookup(ctx, identity, "気配", "", "", "", "", vocabulary.KindWord, "", now); err != nil {
 		t.Fatal(err) // a second item, never produced — must be excluded by the "produced" filter below
 	}
 
@@ -232,7 +258,7 @@ func TestVocabularyAllExpressionsMapsExpressionToItemID(t *testing.T) {
 	ctx := context.Background()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 
-	item, _, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "", "", "", vocabulary.KindWord, "", now)
+	item, _, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "", "", "", "", vocabulary.KindWord, "", now)
 	if err != nil {
 		t.Fatal(err)
 	}

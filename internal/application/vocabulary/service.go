@@ -88,7 +88,7 @@ func (s *Service) Ingest(ctx context.Context, identity learner.IdentityID, ev In
 	}
 
 	source := formatSource(ev.Source.Type, ev.Source.Title)
-	item, duplicate, err := s.repo.UpsertOnLookup(ctx, identity, ev.Expression, ev.Reading, ev.Meaning, source, vocabulary.KindWord, ev.ClientEventID, time.Now().UTC())
+	item, duplicate, err := s.repo.UpsertOnLookup(ctx, identity, ev.Expression, ev.Reading, ev.Meaning, source, ev.Example, vocabulary.KindWord, ev.ClientEventID, time.Now().UTC())
 	if err != nil {
 		return vocabulary.Item{}, fmt.Errorf("vocabulary: upsert on lookup: %w", err)
 	}
