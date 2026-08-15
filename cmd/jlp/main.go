@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"runtime/debug"
 	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
@@ -276,6 +277,19 @@ func main() {
 		if cfg.Slack.AppToken != "" && cfg.Slack.BotToken != "" {
 			slackAdapter := slackadapter.New(cfg.Slack.AppToken, cfg.Slack.BotToken)
 			go func() {
+				// Belt-and-suspenders alongside slack.Adapter's own
+				// handleEvent/dispatch recovers: Start itself blocks on
+				// the underlying transport, so a panic here would be a
+				// genuinely unexpected setup-path failure, not a
+				// per-message one — but per this same "a channel failure
+				// must never take the app down" rule, even that must not
+				// reach this goroutine's top unrecovered (see
+				// cmd/jlp/summary.go's summaryJob for the same pattern).
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("slack: adapter goroutine panicked", "panic", r, "stack", string(debug.Stack()))
+					}
+				}()
 				if err := slackAdapter.Start(context.Background(), channelSvc.Handle); err != nil {
 					slog.Error("slack: adapter stopped", "err", err)
 				}

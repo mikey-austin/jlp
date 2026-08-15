@@ -498,6 +498,15 @@ func (c Config) validate() error {
 // empty string parses to an empty (non-nil) map — PRD §20.1's
 // default-deny: no channel sender is allowed until an operator
 // explicitly lists them.
+//
+// A "<channel>:<external id>" key listed more than once is a fail-fast
+// error, even when every occurrence names the same identity: this is
+// the untrusted edge of the system (see Channels.AllowFrom's doc
+// comment), so an ambiguous mapping — independent review, Minor 1 —
+// must never resolve silently (previously: last-wins), which could bind
+// a sender to the wrong learner's identity with no boot-time signal at
+// all. Every other malformed shape in this function already fails fast
+// the same way; this closes the one case that didn't.
 func ParseAllowFrom(s string) (map[string]string, error) {
 	out := map[string]string{}
 	s = strings.TrimSpace(s)
@@ -521,7 +530,11 @@ func ParseAllowFrom(s string) (map[string]string, error) {
 		if !ok || channel == "" || externalID == "" {
 			return nil, fmt.Errorf("config: invalid APP_CHANNELS_ALLOWFROM entry %q, want <channel>:<external id>=<identity>", entry)
 		}
-		out[channel+":"+externalID] = identity
+		mapKey := channel + ":" + externalID
+		if _, dup := out[mapKey]; dup {
+			return nil, fmt.Errorf("config: APP_CHANNELS_ALLOWFROM lists %q more than once — an ambiguous identity mapping is not allowed", mapKey)
+		}
+		out[mapKey] = identity
 	}
 	return out, nil
 }

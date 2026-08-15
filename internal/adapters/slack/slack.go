@@ -30,6 +30,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"runtime/debug"
 	"strings"
 
 	goslack "github.com/slack-go/slack"
@@ -112,7 +113,18 @@ func (a *Adapter) Start(ctx context.Context, handle func(ctx context.Context, in
 	return a.transport.Run(ctx)
 }
 
+// dispatch's own recover is belt-and-suspenders on top of handleEvent's
+// (below): dispatch itself does little beyond read-select-spawn, but a
+// panic anywhere in this loop — today or after a future change — must
+// not take the process down any more than one in handleEvent may,
+// mirroring cmd/jlp/summary.go's summaryJob (its own per-job recover
+// alongside newSummaryCron's outer cron.Recover chain).
 func (a *Adapter) dispatch(ctx context.Context, handle func(ctx context.Context, in channels.Inbound) (channels.Outbound, error)) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("slack: dispatch loop panicked", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -136,7 +148,26 @@ func (a *Adapter) dispatch(ctx context.Context, handle func(ctx context.Context,
 // Every failure past this point — handle itself erroring, or the
 // eventual Send failing — is logged and dropped, never propagated: one
 // bad message must never end dispatch's loop, let alone Start's.
+//
+// handle fans out into application/channel.Service, which in turn
+// reaches the feedback/practice services, the teacher/drill agents, and
+// the live AI adapter — a panic anywhere along that path would, with no
+// recover, unwind this goroutine and crash the ENTIRE process (Go
+// terminates the whole program on an unrecovered goroutine panic, not
+// just the offending goroutine), taking the web UI down with it. The
+// HTTP surface already contains exactly this class of panic via
+// internal/adapters/http/server.go's recover middleware; this mirrors
+// that same containment for the channel adapter — and,
+// belt-and-suspenders, the same defer/recover shape
+// cmd/jlp/summary.go's summaryJob and internal/tools/registry.go's
+// Invoke already use elsewhere in this codebase for the identical
+// reason.
 func (a *Adapter) handleEvent(ctx context.Context, ev Event, handle func(ctx context.Context, in channels.Inbound) (channels.Outbound, error)) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("slack: handling an inbound event panicked", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	if ev.ack != nil {
 		ev.ack()
 	}
@@ -303,7 +334,20 @@ func (t *socketModeTransport) handleEventsAPI(evt socketmode.Event) {
 		// reach application/channel.Service as if a learner had sent
 		// them — acked (so Slack doesn't keep re-delivering it) but
 		// otherwise dropped.
-		if inner.BotID != "" || inner.SubType != "" {
+		//
+		// A SubType drop is logged (unlike the BotID case, which is the
+		// routine "don't talk to yourself" path and would just be noise
+		// on every one of this bot's own replies): SubType also covers
+		// file_share/thread_broadcast/me_message — a learner attaching a
+		// photo to their Japanese text, say — where silently producing no
+		// reply at all would otherwise leave no trail to diagnose why
+		// (independent review, Minor 7).
+		if inner.SubType != "" {
+			slog.Warn("slack: dropping message with a subtype, no reply will be sent", "subtype", inner.SubType, "channel", inner.Channel)
+			ack()
+			return
+		}
+		if inner.BotID != "" {
 			ack()
 			return
 		}

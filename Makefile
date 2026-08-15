@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth up-mail up-mqtt down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke
+.PHONY: help init build up up-auth up-mail up-mqtt down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -54,6 +54,9 @@ ps: ## Show stack status
 
 test: ## Run unit + application tests (no services needed)
 	$(TOOLS) go test ./...
+
+test-race: ## Run unit + application tests with the race detector (no services needed; catches goroutine data races `make test` alone misses)
+	$(TOOLS) sh -c "CGO_ENABLED=1 go test -race ./..."
 
 lint: ## Run all linters (govet, staticcheck, errcheck, ineffassign, unused, depguard)
 	$(TOOLS) golangci-lint run ./...

@@ -3,7 +3,10 @@ package slack
 import (
 	"context"
 	"errors"
+	"log/slog"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -12,6 +15,37 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/ports/channels"
 )
+
+// capturingHandler is a minimal slog.Handler that records every log
+// message, letting a test assert something WAS logged (a panic, a
+// dropped-message subtype) without depending on stdout/stderr capture.
+type capturingHandler struct {
+	mu       sync.Mutex
+	messages []string
+}
+
+func (h *capturingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h *capturingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.messages = append(h.messages, r.Message)
+	return nil
+}
+
+func (h *capturingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *capturingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *capturingHandler) hasMessageContaining(substr string) bool {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	for _, m := range h.messages {
+		if strings.Contains(m, substr) {
+			return true
+		}
+	}
+	return false
+}
 
 // fakeTransport is transport's test double — no network, no real Slack
 // connection. Run blocks (like the real transport.Run does) until ctx
@@ -95,11 +129,11 @@ func TestStartDispatchesEventToHandleAndSendsReply(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- a.Start(ctx, handle) }()
 
-	acked := false
+	var acked atomic.Bool
 	ft.events <- Event{
 		UserID: "U123", ChannelID: "C1", ThreadTS: "",
 		Text: "とても面白いでした",
-		ack:  func() { acked = true },
+		ack:  func() { acked.Store(true) },
 	}
 
 	waitFor(t, func() bool { return len(ft.Posts()) == 1 })
@@ -114,7 +148,7 @@ func TestStartDispatchesEventToHandleAndSendsReply(t *testing.T) {
 	if in.Channel != "slack" || in.ExternalID != "U123" || in.Text != "とても面白いでした" || in.ThreadID != "C1" {
 		t.Fatalf("handle received Inbound = %+v, want Channel=slack ExternalID=U123 ThreadID=C1", in)
 	}
-	if !acked {
+	if !acked.Load() {
 		t.Fatal("event was not acked")
 	}
 
@@ -152,9 +186,9 @@ func TestStartThreadsReplyUnderExistingThreadTS(t *testing.T) {
 func TestStartSkipsBlankText(t *testing.T) {
 	ft := newFakeTransport()
 	a := newAdapter(ft)
-	handleCalled := false
+	var handleCalled atomic.Bool
 	handle := func(_ context.Context, in channels.Inbound) (channels.Outbound, error) {
-		handleCalled = true
+		handleCalled.Store(true)
 		return channels.Outbound{}, nil
 	}
 
@@ -162,12 +196,12 @@ func TestStartSkipsBlankText(t *testing.T) {
 	defer cancel()
 	go func() { _ = a.Start(ctx, handle) }()
 
-	acked := false
-	ft.events <- Event{UserID: "U1", ChannelID: "C1", Text: "   ", ack: func() { acked = true }}
+	var acked atomic.Bool
+	ft.events <- Event{UserID: "U1", ChannelID: "C1", Text: "   ", ack: func() { acked.Store(true) }}
 
-	waitFor(t, func() bool { return acked })
+	waitFor(t, func() bool { return acked.Load() })
 	time.Sleep(20 * time.Millisecond) // give a wrongly-dispatched handle call a chance to happen
-	if handleCalled {
+	if handleCalled.Load() {
 		t.Fatal("handle was called for a blank-text event")
 	}
 	if len(ft.Posts()) != 0 {
@@ -204,6 +238,52 @@ func TestStartLogsHandleErrorAndKeepsDispatching(t *testing.T) {
 	select {
 	case err := <-done:
 		t.Fatalf("Start returned early (%v) after a handle error, want it to keep running", err)
+	default:
+	}
+	cancel()
+	<-done
+}
+
+// TestStartRecoversPanicInHandleAndKeepsDispatching pins the brief's "a
+// channel failure must never take the app down" all the way through a
+// PANIC, not just an error return: an unrecovered panic in a spawned
+// goroutine crashes the entire process (Go's own semantics — there is
+// no test that can survive that and report a failure, it just kills the
+// test binary), so passing this test at all is part of the proof that
+// handleEvent's own recover works. The stronger, in-process assertions
+// below additionally confirm dispatch survives and logs, rather than
+// merely not crashing by accident.
+func TestStartRecoversPanicInHandleAndKeepsDispatching(t *testing.T) {
+	handler := &capturingHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(prev)
+
+	ft := newFakeTransport()
+	a := newAdapter(ft)
+	handle := func(_ context.Context, in channels.Inbound) (channels.Outbound, error) {
+		if in.Text == "panic" {
+			panic("boom: handler exploded")
+		}
+		return channels.Outbound{ThreadID: in.ThreadID, Text: "ok"}, nil
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- a.Start(ctx, handle) }()
+
+	ft.events <- Event{UserID: "U1", ChannelID: "C1", Text: "panic"}
+	ft.events <- Event{UserID: "U1", ChannelID: "C1", Text: "fine"}
+
+	waitFor(t, func() bool { return len(ft.Posts()) == 1 })
+	if got := ft.Posts()[0].text; got != "ok" {
+		t.Fatalf("reply text = %q, want \"ok\" (the second event, after the first panicked)", got)
+	}
+	waitFor(t, func() bool { return handler.hasMessageContaining("panic") })
+
+	select {
+	case err := <-done:
+		t.Fatalf("Start returned early (%v) after a handle panic, want it to keep running", err)
 	default:
 	}
 	cancel()
@@ -302,6 +382,33 @@ func TestHandleEventsAPIFiltersBotAndSubtypedMessages(t *testing.T) {
 			t.Fatalf("expected %+v to be filtered, got forwarded as %+v", msg, ev)
 		default:
 		}
+	}
+}
+
+// TestHandleEventsAPILogsDroppedSubtype pins Minor 7 from the
+// independent review: dropping a SubType-carrying message (e.g.
+// file_share — a learner attaching a photo to their Japanese text, not
+// a bot loop) must still leave a diagnostic trail; silent, total
+// silence was the reviewer's exact complaint.
+func TestHandleEventsAPILogsDroppedSubtype(t *testing.T) {
+	handler := &capturingHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(prev)
+
+	tr := newSocketModeTransport("xapp-test", "xoxb-test")
+	evt := socketmode.Event{
+		Type: socketmode.EventTypeEventsAPI,
+		Data: slackevents.EventsAPIEvent{
+			InnerEvent: slackevents.EventsAPIInnerEvent{
+				Data: &slackevents.MessageEvent{User: "U1", Channel: "C1", Text: "写真です", SubType: "file_share"},
+			},
+		},
+	}
+	tr.handleEventsAPI(evt)
+
+	if !handler.hasMessageContaining("subtype") {
+		t.Fatalf("expected a log message mentioning the dropped subtype, got messages: %v", handler.messages)
 	}
 }
 

@@ -39,6 +39,7 @@ restart            Restart the app service
 logs               Follow logs (s=<service>, default app)
 ps                 Show stack status
 test               Run unit + application tests (no services needed)
+test-race          Run unit + application tests with the race detector (no services needed; catches goroutine data races `make test` alone misses)
 lint               Run all linters (govet, staticcheck, errcheck, ineffassign, unused, depguard)
 fmt                gofmt the whole tree
 arch-check         Enforce PRD §75 dependency-direction rules only (depguard)
@@ -561,11 +562,16 @@ make test              # unit + application tests, fake AI provider, no services
 make test-integration  # adapter tests against a real postgres (docker compose)
 make lint              # govet, staticcheck, errcheck, ineffassign, unused, depguard
 make arch-check         # depguard only, PRD §75 dependency-direction rules
+make test-race          # go test -race ./... — same package set as `make test`, with the race detector on
 ```
 
-All four are expected to pass before every commit; `test-integration`
+All five are expected to pass before every commit; `test-integration`
 and `arch-check` are the ones easiest to forget locally since they need
-services running or a narrower lint pass, respectively.
+services running or a narrower lint pass, respectively. `test-race`
+exists because `make test` alone does not catch data races (Phase 4
+Task 4's own adapter tests shipped one that `make test` stayed green
+on) — every goroutine-spawning adapter (`slack`, `mqtt`, the channel
+port's dispatch loop) is exactly the code this gate is for.
 
 `internal/adapters/mqtt/mqtt_test.go`'s integration tests (build tag
 `integration`, same as every other adapter integration test) are

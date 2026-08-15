@@ -770,3 +770,23 @@ func TestParseAllowFrom(t *testing.T) {
 		}
 	}
 }
+
+// TestParseAllowFromRejectsDuplicateKey pins the independent review's
+// Minor 1: two entries mapping the SAME "<channel>:<external id>" to
+// different identities used to resolve silently (last-wins), which
+// could bind a sender to the wrong learner's identity with no boot-time
+// signal at all. This is the untrusted-edge allow-list — an ambiguous
+// mapping must be a fail-fast config error, the same posture every
+// other malformed shape here already gets, not a resolved-in-the-dark
+// last-wins pick. A duplicate key with the SAME identity repeated is
+// also rejected (simplest, most predictable rule: a key must appear at
+// most once, full stop) — an operator who genuinely wants to list a
+// mapping twice should just not.
+func TestParseAllowFromRejectsDuplicateKey(t *testing.T) {
+	if _, err := ParseAllowFrom("slack:U1=alice,slack:U1=bob"); err == nil {
+		t.Fatal("expected an error for a duplicate \"<channel>:<external id>\" key mapped to different identities")
+	}
+	if _, err := ParseAllowFrom("slack:U1=alice,slack:U1=alice"); err == nil {
+		t.Fatal("expected an error for a duplicate \"<channel>:<external id>\" key, even with the same identity repeated")
+	}
+}
