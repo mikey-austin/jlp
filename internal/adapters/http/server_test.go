@@ -218,7 +218,39 @@ func TestStaticServiceWorkerHasServiceWorkerAllowedHeader(t *testing.T) {
 	if got := rec.Header().Get("Service-Worker-Allowed"); got != "/" {
 		t.Fatalf("Service-Worker-Allowed = %q, want \"/\"", got)
 	}
-	if !strings.Contains(rec.Body.String(), "jlp-shell-v1") {
-		t.Fatalf("sw.js body missing cache name jlp-shell-v1: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "jlp-shell-v2") {
+		t.Fatalf("sw.js body missing cache name jlp-shell-v2: %s", rec.Body.String())
+	}
+}
+
+// TestStaticServesDesignSystemAssets covers Task 9: the design system's
+// stylesheets, vendored font, and theme script must resolve through the
+// running handler like any other /static/* asset (the fs.FileServer
+// route added no new routing — this just guards against a typo'd path
+// or a file that didn't get vendored/committed).
+func TestStaticServesDesignSystemAssets(t *testing.T) {
+	srv := NewServer(testOptions())
+
+	cases := []struct {
+		path            string
+		wantContentType string
+	}{
+		{"/static/css/tokens.css", "text/css"},
+		{"/static/css/components.css", "text/css"},
+		{"/static/js/theme.js", "javascript"},
+		{"/static/fonts/instrument-sans-latin-400-normal.woff2", "font/woff2"},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, tc.path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", tc.path, rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); !strings.Contains(ct, tc.wantContentType) {
+			t.Fatalf("%s Content-Type = %q, want to contain %q", tc.path, ct, tc.wantContentType)
+		}
+		if rec.Body.Len() == 0 {
+			t.Fatalf("%s body is empty", tc.path)
+		}
 	}
 }

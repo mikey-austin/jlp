@@ -3,16 +3,42 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Pre-paint theme resolution (no FOUC): localStorage("jlp-theme") ->
+       prefers-color-scheme -> light. Must run before any stylesheet
+       paints; theme.js (loaded later, deferred) only handles the
+       toggle from here on. Kept tiny and inline on purpose. -->
+  <script>(function(){try{var t=localStorage.getItem("jlp-theme");if(!t){t=(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","light");}})();</script>
   <title>{{.Title}} — JLP</title>
+  <link rel="stylesheet" href="/static/fonts/fonts.css">
+  <link rel="stylesheet" href="/static/css/tokens.css">
+  <link rel="stylesheet" href="/static/css/components.css">
   <link rel="stylesheet" href="/static/css/app.css">
   <link rel="manifest" href="/static/manifest.webmanifest">
-  <meta name="theme-color" content="#b7282e">
+  <meta name="theme-color" content="oklch(0.565 0.12 162)">
 </head>
 <body>
-  <header class="topbar"><a href="/" class="brand">日本語 JLP</a><nav id="topnav"><a href="/sessions">セッション</a><a href="/grammar">文法</a><a href="/vocabulary">語彙</a><a href="/practice">練習</a><a href="/anki">Anki</a><a href="/learner">学習</a><a href="/ai">AI</a>{{with .Identity}}<span class="who">{{.DisplayName}}</span>{{end}}</nav></header>
+  <header class="topbar">
+    <a href="/" class="brand"><span class="mark">日</span><strong>JLP</strong></a>
+    <nav class="nav" id="topnav">
+      <a href="/sessions">セッション</a>
+      <a href="/grammar">文法</a>
+      <a href="/vocabulary">語彙</a>
+      <a href="/practice">練習</a>
+      <a href="/anki">Anki</a>
+      <a href="/learner">学習</a>
+      <a href="/ai">AI</a>
+    </nav>
+    <div class="topbar__right">
+      {{with .Identity}}<span class="who">{{.DisplayName}}</span>{{end}}
+      <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">
+        <span aria-hidden="true">🌓</span> Toggle theme
+      </button>
+    </div>
+  </header>
   <main>{{template "content" .}}</main>
   <script src="/static/js/htmx.min.js" defer></script>
   <script src="/static/js/alpine.min.js" defer></script>
+  <script src="/static/js/theme.js" defer></script>
   <script src="/static/js/app.js" defer></script>
 </body>
 </html>{{end}}

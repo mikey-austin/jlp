@@ -1,0 +1,70 @@
+/* JLP design system — vendored fonts.
+ *
+ * Instrument Sans (400/500/600/700) and JetBrains Mono (400/500/700),
+ * self-hosted as woff2 (PRD §39/§45: no CDN fonts at runtime — offline
+ * PWA + privacy). Files come from the @fontsource npm packages
+ * (jsdelivr-pinned @5.3.0), which republish the same Google Fonts
+ * files for self-hosting; vendored via `make vendor-fonts`.
+ *
+ * Deliberate omission: the mockup's Noto Sans JP is NOT vendored here
+ * (it would add several MB per weight for full CJK coverage). It stays
+ * first in the fallback stack after Instrument Sans so a system-
+ * installed Noto Sans JP (or the platform's own JP font) renders
+ * Japanese glyphs — see the README's design-system section.
+ */
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/instrument-sans-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/instrument-sans-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+  src: url("/static/fonts/instrument-sans-latin-600-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Instrument Sans";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/static/fonts/instrument-sans-latin-700-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/static/fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+  src: url("/static/fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-style: normal;
+  font-weight: 700;
+  font-display: swap;
+  src: url("/static/fonts/jetbrains-mono-latin-700-normal.woff2") format("woff2");
+}

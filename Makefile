@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -98,6 +98,17 @@ test-integration: ## Adapter tests against compose services
 vendor-js: ## Vendor pinned htmx + alpine into web/static/js
 	$(TOOLS) sh -c "curl -fsSL https://unpkg.com/htmx.org@2.0.10/dist/htmx.min.js -o web/static/js/htmx.min.js && \
 	                curl -fsSL https://unpkg.com/alpinejs@3.16.1/dist/cdn.min.js -o web/static/js/alpine.min.js"
+
+vendor-fonts: ## Vendor pinned Instrument Sans + JetBrains Mono woff2 into web/static/fonts (design system, PRD §39/§45: no CDN fonts at runtime)
+	$(TOOLS) sh -c "mkdir -p web/static/fonts && \
+	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5.3.0/files/instrument-sans-latin-400-normal.woff2 -o web/static/fonts/instrument-sans-latin-400-normal.woff2 && \
+	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5.3.0/files/instrument-sans-latin-500-normal.woff2 -o web/static/fonts/instrument-sans-latin-500-normal.woff2 && \
+	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5.3.0/files/instrument-sans-latin-600-normal.woff2 -o web/static/fonts/instrument-sans-latin-600-normal.woff2 && \
+	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/instrument-sans@5.3.0/files/instrument-sans-latin-700-normal.woff2 -o web/static/fonts/instrument-sans-latin-700-normal.woff2 && \
+	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/files/jetbrains-mono-latin-400-normal.woff2 -o web/static/fonts/jetbrains-mono-latin-400-normal.woff2 && \
+	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/files/jetbrains-mono-latin-500-normal.woff2 -o web/static/fonts/jetbrains-mono-latin-500-normal.woff2 && \
+	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/files/jetbrains-mono-latin-700-normal.woff2 -o web/static/fonts/jetbrains-mono-latin-700-normal.woff2"
+	@echo "vendored $$(du -ch web/static/fonts/*.woff2 | tail -1 | cut -f1) of woff2 into web/static/fonts/ — fonts.css is committed by hand, not generated"
 
 ext-build: ## Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
 	$(TOOLS) sh -c "mkdir -p dist && rm -f dist/jlp-extension.zip && cd chrome-extension && zip -r ../dist/jlp-extension.zip . -x 'shim/*' -x 'README.md'"

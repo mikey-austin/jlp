@@ -51,6 +51,7 @@ sqlc               Regenerate sqlc query code
 db-shell           psql into the dev database
 test-integration   Adapter tests against compose services
 vendor-js          Vendor pinned htmx + alpine into web/static/js
+vendor-fonts       Vendor pinned Instrument Sans + JetBrains Mono woff2 into web/static/fonts (design system, PRD §39/§45: no CDN fonts at runtime)
 ext-build          Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
 deploy-local       Run the production stack locally (https://<JLP_DOMAIN>:8444, see deploy/.env.prod)
 deploy             Deploy to $(DEPLOY_HOST) over SSH (set in .env)
@@ -240,6 +241,39 @@ the manual `chrome://extensions` install checklist, the
 `GET /api/v1/sessions/{id}/document` endpoint yet), and the CORS-vs-
 extension-host-permissions distinction that governs how its API calls
 work (and how they're verified without a real install).
+
+## Design system
+
+`web/static/css/tokens.css` (colors, shadows, `--ring`), `components.css`
+(buttons, forms, badges, chips, stat tiles, cards/tables, the correction
+card, topbar/nav/theme-toggle) and `web/static/fonts/` implement the
+JLP Design System — an emerald `oklch()` light/dark palette, Instrument
+Sans + JetBrains Mono, exported from a Claude Design mockup as the
+project's design source of truth. `app.css` is page-layout only
+(workspace grid, editor sizing); load order in every template is
+`fonts.css` -> `tokens.css` -> `components.css` -> `app.css`.
+
+Theming: `data-theme` on `<html>` is set by a tiny inline script in
+`<head>` before first paint (no FOUC) — `localStorage("jlp-theme")` ->
+`prefers-color-scheme` -> `light` — then `web/static/js/theme.js` wires
+the topbar's toggle `<button>` (`window.jlp.toggleTheme()`,
+`aria-pressed` reflects state, persists the explicit choice back to
+`localStorage`).
+
+Fonts are vendored, not loaded from a CDN — PRD §39/§45 (offline PWA +
+privacy) forbid external assets at runtime:
+
+```sh
+make vendor-fonts   # -> web/static/fonts/*.woff2 + fonts.css (committed)
+```
+
+**Deliberate tradeoff:** Noto Sans JP (the mockup's Japanese font) is
+*not* vendored — full CJK coverage runs several MB per weight, which
+is a bad fit for an offline-first PWA. `font-family` keeps it first in
+the fallback stack after Instrument Sans, so a device that already has
+it (or another JP font) renders Japanese normally; the vendored files
+only cover Latin (UI chrome, numbers, code):
+`'Instrument Sans','Noto Sans JP','Hiragino Sans','Yu Gothic',system-ui,sans-serif`.
 
 ## External reader-app integration (`POST /api/v1/words`)
 

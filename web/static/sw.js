@@ -1,15 +1,26 @@
 // JLP PWA shell service worker.
 //
-// Cache name is versioned: jlp-shell-v1. Bump the suffix whenever the
+// Cache name is versioned: jlp-shell-v2. Bump the suffix whenever the
 // precached shell assets below change so the activate handler evicts
 // the stale cache on the next load (later tasks must respect this).
-const CACHE_NAME = "jlp-shell-v1";
+const CACHE_NAME = "jlp-shell-v2";
 
 const PRECACHE_URLS = [
   "/offline",
+  "/static/fonts/fonts.css",
+  "/static/fonts/instrument-sans-latin-400-normal.woff2",
+  "/static/fonts/instrument-sans-latin-500-normal.woff2",
+  "/static/fonts/instrument-sans-latin-600-normal.woff2",
+  "/static/fonts/instrument-sans-latin-700-normal.woff2",
+  "/static/fonts/jetbrains-mono-latin-400-normal.woff2",
+  "/static/fonts/jetbrains-mono-latin-500-normal.woff2",
+  "/static/fonts/jetbrains-mono-latin-700-normal.woff2",
+  "/static/css/tokens.css",
+  "/static/css/components.css",
   "/static/css/app.css",
   "/static/js/htmx.min.js",
   "/static/js/alpine.min.js",
+  "/static/js/theme.js",
   "/static/js/app.js",
   "/static/manifest.webmanifest",
   "/static/icons/icon.svg",
