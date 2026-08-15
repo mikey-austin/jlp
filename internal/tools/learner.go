@@ -94,13 +94,38 @@ func getLearnerProfileTool(identities storage.IdentityRepository, obs storage.Ob
 type correctionView struct {
 	ID            string `json:"id,omitempty"`
 	Original      string `json:"original"`
-	Replacement   string `json:"replacement"`
+	Replacement   string `json:"replacement,omitempty"`
 	Type          string `json:"type"`
 	Severity      string `json:"severity"`
 	ExplanationEN string `json:"explanation_en,omitempty"`
 	Status        string `json:"status,omitempty"`
 	Attempts      int    `json:"attempts,omitempty"`
 	Confidence    *int   `json:"confidence,omitempty"`
+}
+
+// redactIfGated blanks the fields that would hand a learner the answer
+// to a correction still under PRD §9/§53's socratic active-recall gate
+// — storage.CorrectionRecord.IsGated(), the SAME predicate the HTML
+// correction_card partial, the JSON API, application/lessons, and
+// application/anki all apply before showing a correction to a learner
+// (see CorrectionRecord.IsGated's doc comment: "none of them may
+// independently redefine 'hidden'"). storage.FeedbackRepository.
+// RecentCorrections — what both tools below delegate to — is
+// deliberately unfiltered by status (other callers need every
+// correction regardless of gate state), so this package is the one
+// responsible for withholding the answer here. This is also what the
+// MODEL itself sees, not just the learner reading the trace viewer
+// afterward: withholding it here is correct either way, since the
+// teacher's whole job is to elicit the answer, not hand it out via a
+// tool call. Replacement is the answer itself; ExplanationEN typically
+// restates the correct form directly ("...so X must be Y"), so it
+// leaks the same information and is redacted too.
+func redactIfGated(v correctionView, gated bool) correctionView {
+	if gated {
+		v.Replacement = ""
+		v.ExplanationEN = ""
+	}
+	return v
 }
 
 type recentErrorsArgs struct {
@@ -126,13 +151,13 @@ func getRecentErrorsTool(feedback storage.FeedbackRepository) Tool {
 			}
 			views := make([]correctionView, 0, len(corrections))
 			for _, c := range corrections {
-				views = append(views, correctionView{
+				views = append(views, redactIfGated(correctionView{
 					Original:      c.Original,
 					Replacement:   c.Replacement,
 					Type:          c.Type,
 					Severity:      c.Severity,
 					ExplanationEN: c.ExplanationEN,
-				})
+				}, c.IsGated()))
 			}
 			out, err := json.Marshal(views)
 			if err != nil {
@@ -166,7 +191,7 @@ func getCorrectionHistoryTool(feedback storage.FeedbackRepository) Tool {
 			}
 			views := make([]correctionView, 0, len(corrections))
 			for _, c := range corrections {
-				views = append(views, correctionView{
+				views = append(views, redactIfGated(correctionView{
 					ID:          c.ID,
 					Original:    c.Original,
 					Replacement: c.Replacement,
@@ -175,7 +200,7 @@ func getCorrectionHistoryTool(feedback storage.FeedbackRepository) Tool {
 					Status:      c.Status,
 					Attempts:    c.Attempts,
 					Confidence:  c.Confidence,
-				})
+				}, c.IsGated()))
 			}
 			out, err := json.Marshal(views)
 			if err != nil {
