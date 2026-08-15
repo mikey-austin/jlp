@@ -20,6 +20,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -257,6 +258,16 @@ type testHarness struct {
 }
 
 func newTestHarness() *testHarness {
+	return newTestHarnessWithGenerator(fakeai.New())
+}
+
+// newTestHarnessWithGenerator is newTestHarness with the lesson agent's
+// underlying ai.StructuredGenerator swappable — TestGenerateFilters
+// GatedCorrectionsFromLessonContext wires in a spyGen (below) so it can
+// inspect exactly what RecentCorrections text reached the prompt,
+// rather than relying on fakeai's fixed canned response (which doesn't
+// echo its input back).
+func newTestHarnessWithGenerator(gen ai.StructuredGenerator) *testHarness {
 	lessonRepo := newFakeLessonRepo()
 	prios := &fakePriorityRepo{}
 	obs := &fakeObservationRepo{}
@@ -265,9 +276,28 @@ func newTestHarness() *testHarness {
 	events := &fakeCapturingEventStore{}
 	rec := learning.NewRecorder(events, inprocbus.New())
 	plnr := planner.NewPlanner(obs, fakeEventRepo{}, fakeGrammarRepo{}, prios, vocab, time.Now)
-	agent := agentlesson.New(fakeai.New())
+	agent := agentlesson.New(gen)
 	svc := applessons.NewService(lessonRepo, prios, plnr, feedback, obs, agent, rec)
 	return &testHarness{svc: svc, lessons: lessonRepo, prios: prios, obs: obs, feedback: feedback, vocab: vocab, events: events}
+}
+
+// spyGen is a local ai.StructuredGenerator test double that records the
+// last ai.StructuredRequest it was called with and answers with a fixed,
+// schema-valid lesson_plan.v1 payload — mirrors
+// internal/agent/lesson/lesson_test.go's own spyGen.
+type spyGen struct {
+	req ai.StructuredRequest
+}
+
+func (s *spyGen) GenerateStructured(_ context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
+	s.req = req
+	return ai.StructuredResponse{
+		JSON: []byte(`{"level_summary":"s","strengths":["a"],"weaknesses":["b"],"focus":["c"],` +
+			`"vocabulary":["d"],"grammar_concepts":["e"],"conversation_prompts":["f"],` +
+			`"exercises":["g"],"recent_examples":["h"],"questions_for_tutor":["i"]}`),
+		Provider: "spy",
+		Model:    "spy-1",
+	}, nil
 }
 
 // --- Generate ---
@@ -371,6 +401,50 @@ func TestGenerateSurvivesEventRecordFailure(t *testing.T) {
 	}
 	if _, ok := h.lessons.byID[lesson.ID]; !ok {
 		t.Fatal("Generate did not persist the lesson despite the event-record failure")
+	}
+}
+
+// TestGenerateFiltersGatedCorrectionsFromLessonContext pins the
+// final-review fix (Finding 2): RecentCorrections is fed to the lesson
+// agent unfiltered before this fix, and formatCorrections' "original →
+// replacement" line spells out the answer to a still-gated socratic
+// correction — visible to the learner on the very next /lessons/{id}
+// guide. A tutor guide loses nothing by skipping a correction the
+// learner hasn't resolved or revealed yet, so Generate must drop any
+// storage.CorrectionRecord for which IsGated() is true (the exact PRD
+// §9/§53 predicate the HTML/JSON gate and application/anki's own fix
+// share) before formatting, leaving the ungated ones untouched.
+//
+// This asserts on the captured agent input (via spyGen's req.User, the
+// rendered prompt — the only place GenerateInput's formatted strings are
+// observable from outside internal/agent/lesson), not merely on the
+// persisted/rendered plan: fakeai's canned lesson_plan.v1 response
+// doesn't echo its input, so a rendered-page-only assertion couldn't
+// catch a regression here.
+func TestGenerateFiltersGatedCorrectionsFromLessonContext(t *testing.T) {
+	gen := &spyGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.feedback.recent = []storage.CorrectionRecord{
+		{
+			ID: "corr-gated", Original: "面白いでした", Replacement: "面白かったです", Type: "conjugation",
+			Status: "presented", HintJA: "ヒント：形容詞の活用を確認してください。", HintEN: "Hint: check the adjective conjugation.",
+			Revealed: false,
+		},
+		{
+			ID: "corr-ungated", Original: "食べる", Replacement: "食べます", Type: "conjugation",
+			Status: "accepted",
+		},
+	}
+
+	if _, err := h.svc.Generate(context.Background(), testIdentity); err != nil {
+		t.Fatalf("Generate returned error: %v", err)
+	}
+
+	if strings.Contains(gen.req.User, "面白いでした → 面白かったです") {
+		t.Fatalf("prompt leaked the gated correction's answer: %s", gen.req.User)
+	}
+	if !strings.Contains(gen.req.User, "食べる → 食べます") {
+		t.Fatalf("prompt missing the ungated correction: %s", gen.req.User)
 	}
 }
 

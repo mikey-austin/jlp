@@ -87,7 +87,7 @@ func (s *Service) Generate(ctx context.Context, identity learner.IdentityID) (st
 		Identity:              identity,
 		Priorities:            formatPriorities(priorities),
 		ActivationExpressions: formatExpressions(activation),
-		RecentCorrections:     formatCorrections(corrections),
+		RecentCorrections:     formatCorrections(ungatedCorrections(corrections)),
 		ObservationSummaries:  formatObservations(observations),
 	})
 	if err != nil {
@@ -193,6 +193,27 @@ func formatExpressions(items []vocabulary.Item) []string {
 		}
 	}
 	return lines
+}
+
+// ungatedCorrections drops every correction still under Phase 2's
+// socratic active-recall gate (PRD §9/§53 — storage.CorrectionRecord.
+// IsGated(), the same predicate the HTML correction_card partial, the
+// JSON API, and application/anki's GenerateFromCorrection all honour)
+// before formatCorrections renders "original → replacement" lines a
+// tutor guide would otherwise print straight into the learner's
+// /lessons/{id} page — spelling out the answer to a correction the
+// learner hasn't resolved or revealed yet. A tutor guide loses nothing
+// by skipping these: they simply won't appear as a recent example this
+// time around.
+func ungatedCorrections(cs []storage.CorrectionRecord) []storage.CorrectionRecord {
+	out := make([]storage.CorrectionRecord, 0, len(cs))
+	for _, c := range cs {
+		if c.IsGated() {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
 }
 
 // formatCorrections turns each recent correction into one tutor-
