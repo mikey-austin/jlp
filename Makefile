@@ -3,7 +3,7 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs
+.PHONY: help init build up up-auth down restart logs ps test tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -21,6 +21,11 @@ up: ## Start the dev stack (app + postgres)
 
 up-auth: ## Start dev stack including Caddy + Authelia (https://jlp.localhost:8443)
 	APP_AUTH_MODE=authelia $(COMPOSE) --profile auth up -d
+
+ollama-pull: ## Pull a local model into the ollama service (m=qwen3:4b), starting it if needed
+	@test -n "$(m)" || (echo "usage: make ollama-pull m=qwen3:4b"; exit 1)
+	$(COMPOSE) --profile ollama up -d ollama
+	$(COMPOSE) --profile ollama exec ollama ollama pull $(m)
 
 down: ## Stop the stack (including profile-gated services like Caddy/Authelia)
 	$(COMPOSE) --profile auth down

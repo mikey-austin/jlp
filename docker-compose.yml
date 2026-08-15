@@ -27,6 +27,9 @@ services:
       # rather than blanking them out.
       APP_AI_ANTHROPIC_MODEL: ${APP_AI_ANTHROPIC_MODEL:-}
       APP_AI_ANTHROPIC_BASEURL: ${APP_AI_ANTHROPIC_BASEURL:-}
+      APP_AI_OLLAMA_URL: ${APP_AI_OLLAMA_URL:-http://ollama:11434}
+      APP_AI_OLLAMA_MODEL: ${APP_AI_OLLAMA_MODEL:-}
+      APP_AI_ROUTES: ${APP_AI_ROUTES:-}
     depends_on:
       postgres: { condition: service_healthy }
 
@@ -40,6 +43,17 @@ services:
       interval: 2s
       timeout: 3s
       retries: 15
+
+  ollama:
+    # Local-model server for the "ollama" AI provider (Task 11, PRD
+    # §23/§24) — in-network only, no published host port: the app
+    # container reaches it at http://ollama:11434 (APP_AI_OLLAMA_URL's
+    # default), nothing outside the compose network needs to. Not
+    # started by a plain `make up`; join it explicitly with `--profile
+    # ollama` (see `make ollama-pull` below, which does this for you).
+    image: ollama/ollama
+    profiles: ["ollama"]
+    volumes: [ "ollamadata:/root/.ollama" ]
 
   tools:
     build: { context: ., target: dev }
@@ -77,7 +91,7 @@ services:
       - ./deploy/authelia/users.dev.yml:/config/users.yml:ro
       - autheliadata:/data
 
-volumes: { pgdata: {}, gomod: {}, gocache: {}, caddydata: {}, autheliadata: {} }
+volumes: { pgdata: {}, gomod: {}, gocache: {}, caddydata: {}, autheliadata: {}, ollamadata: {} }
 
 networks:
   default:

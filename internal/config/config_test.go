@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestDefaults(t *testing.T) {
 	t.Setenv("APP_DATABASE_URL", "postgres://x")
@@ -13,6 +16,15 @@ func TestDefaults(t *testing.T) {
 	}
 	if cfg.Auth.Static.ID != "dev" {
 		t.Fatalf("static identity default: %+v", cfg.Auth.Static)
+	}
+	if cfg.AI.Ollama.URL != "http://ollama:11434" {
+		t.Fatalf("AI.Ollama.URL default = %q, want http://ollama:11434", cfg.AI.Ollama.URL)
+	}
+	if cfg.AI.Ollama.Model != "" {
+		t.Fatalf("AI.Ollama.Model default = %q, want empty (no default — required only when routed-to)", cfg.AI.Ollama.Model)
+	}
+	if cfg.AI.Routes != "" {
+		t.Fatalf("AI.Routes default = %q, want empty", cfg.AI.Routes)
 	}
 	// Regression: the default must be the loopback address only. A
 	// broad default like 172.16.0.0/12 would trust every private-network
@@ -36,6 +48,27 @@ func TestEnvOverrides(t *testing.T) {
 	}
 	if cfg.Server.Port != 9999 || cfg.AI.Anthropic.APIKey != "sk-test" {
 		t.Fatalf("overrides not applied: %+v", cfg)
+	}
+}
+
+func TestOllamaAndRoutesEnvOverrides(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_AI_PROVIDER", "ollama")
+	t.Setenv("APP_AI_OLLAMA_URL", "http://localhost:11434")
+	t.Setenv("APP_AI_OLLAMA_MODEL", "qwen3:4b")
+	t.Setenv("APP_AI_ROUTES", "teacher.feedback=fake,anthropic")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AI.Ollama.URL != "http://localhost:11434" {
+		t.Fatalf("AI.Ollama.URL = %q, want override applied", cfg.AI.Ollama.URL)
+	}
+	if cfg.AI.Ollama.Model != "qwen3:4b" {
+		t.Fatalf("AI.Ollama.Model = %q, want override applied", cfg.AI.Ollama.Model)
+	}
+	if cfg.AI.Routes != "teacher.feedback=fake,anthropic" {
+		t.Fatalf("AI.Routes = %q, want override applied", cfg.AI.Routes)
 	}
 }
 
@@ -75,10 +108,13 @@ func TestTrustedProxiesEnvOverride(t *testing.T) {
 
 func TestValidation(t *testing.T) {
 	cases := map[string]map[string]string{
-		"missing db url":        {"APP_DATABASE_URL": ""},
-		"bad auth mode":         {"APP_DATABASE_URL": "postgres://x", "APP_AUTH_MODE": "oauth"},
-		"anthropic without key": {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "anthropic"},
-		"unknown ai provider":   {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "hal9000"},
+		"missing db url":         {"APP_DATABASE_URL": ""},
+		"bad auth mode":          {"APP_DATABASE_URL": "postgres://x", "APP_AUTH_MODE": "oauth"},
+		"anthropic without key":  {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "anthropic"},
+		"unknown ai provider":    {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "hal9000"},
+		"ollama without model":   {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "ollama"},
+		"malformed ai routes":    {"APP_DATABASE_URL": "postgres://x", "APP_AI_ROUTES": "teacher.feedback"},
+		"ai routes bad provider": {"APP_DATABASE_URL": "postgres://x", "APP_AI_ROUTES": "teacher.feedback=hal9000"},
 	}
 	for name, env := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -111,5 +147,80 @@ func TestValidationAutheliaRequiresNonEmptyTrustedProxies(t *testing.T) {
 	}
 	if err := cfg.validate(); err == nil {
 		t.Fatal("expected validation error for authelia mode with empty TrustedProxies")
+	}
+}
+
+func TestParseRoutesValid(t *testing.T) {
+	got, err := ParseRoutes("teacher.feedback=fake,anthropic;drill.exercise=ollama")
+	if err != nil {
+		t.Fatalf("ParseRoutes: %v", err)
+	}
+	want := map[string][]string{
+		"teacher.feedback": {"fake", "anthropic"},
+		"drill.exercise":   {"ollama"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseRoutes = %+v, want %+v", got, want)
+	}
+}
+
+func TestParseRoutesEmptyStringIsNoRoutes(t *testing.T) {
+	got, err := ParseRoutes("")
+	if err != nil {
+		t.Fatalf("ParseRoutes: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ParseRoutes(\"\") = %+v, want empty map", got)
+	}
+}
+
+// TestParseRoutesAcceptsCLIProviderNamesNotYetConstructible pins the
+// brief's split: ParseRoutes only validates the provider NAME is one
+// of the five known names. claudecli/codexcli become constructible in
+// Task 12 — until then, cmd/jlp/main.go's own provider map is what
+// turns a route naming one of them into a boot error, not ParseRoutes.
+func TestParseRoutesAcceptsCLIProviderNamesNotYetConstructible(t *testing.T) {
+	got, err := ParseRoutes("teacher.feedback=claudecli,codexcli")
+	if err != nil {
+		t.Fatalf("ParseRoutes: %v", err)
+	}
+	want := []string{"claudecli", "codexcli"}
+	if !reflect.DeepEqual(got["teacher.feedback"], want) {
+		t.Fatalf("ParseRoutes = %+v, want teacher.feedback: %v", got, want)
+	}
+}
+
+func TestParseRoutesRejectsBadInput(t *testing.T) {
+	cases := map[string]string{
+		"unknown provider name": "teacher.feedback=hal9000",
+		"missing =":             "teacher.feedback",
+		"empty prompt name":     "=fake",
+		"empty provider list":   "teacher.feedback=",
+	}
+	for name, s := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ParseRoutes(s); err == nil {
+				t.Fatalf("ParseRoutes(%q): expected error, got nil", s)
+			}
+		})
+	}
+}
+
+// TestParseRoutesTrimsWhitespaceAndSkipsBlankEntries pins the
+// tolerant side of parsing: stray whitespace around names/providers,
+// and a doubled comma inside one entry's provider list, must not be
+// treated as an error — only an entry with NO providers at all (the
+// "empty provider list" case above) is rejected.
+func TestParseRoutesTrimsWhitespaceAndSkipsBlankEntries(t *testing.T) {
+	got, err := ParseRoutes(" teacher.feedback = fake, ,anthropic ; drill.exercise=ollama ")
+	if err != nil {
+		t.Fatalf("ParseRoutes: %v", err)
+	}
+	want := map[string][]string{
+		"teacher.feedback": {"fake", "anthropic"},
+		"drill.exercise":   {"ollama"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ParseRoutes = %+v, want %+v", got, want)
 	}
 }

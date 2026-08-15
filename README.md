@@ -31,6 +31,7 @@ init               One-time setup: create .env from example, generate Authelia d
 build              Build all images
 up                 Start the dev stack (app + postgres)
 up-auth            Start dev stack including Caddy + Authelia (https://jlp.localhost:8443)
+ollama-pull        Pull a local model into the ollama service (m=qwen3:4b), starting it if needed
 down               Stop the stack (including profile-gated services like Caddy/Authelia)
 restart            Restart the app service
 logs               Follow logs (s=<service>, default app)
@@ -77,8 +78,9 @@ Two `auth.Authenticator` adapters are wired behind `APP_AUTH_MODE`:
 
 ## AI providers
 
-`APP_AI_PROVIDER` selects the `ai.StructuredGenerator` behind the Teacher
-agent; every call — whichever provider — is wrapped by an observability
+`APP_AI_PROVIDER` selects the default `ai.StructuredGenerator` behind
+every AI capability (Teacher feedback, drill exercises); every call —
+whichever provider ends up serving it — is wrapped by an observability
 decorator that records latency, cost, and success to `ai_requests` (see
 the `/ai` page).
 
@@ -101,8 +103,62 @@ the `/ai` page).
   APP_AI_ANTHROPIC_BASEURL=
   ```
 
+- **`ollama`** — a local model server, no API key, no per-token cost.
+  Set in `.env`:
+
+  ```
+  APP_AI_PROVIDER=ollama
+  APP_AI_OLLAMA_MODEL=qwen3:4b
+  ```
+
+  `APP_AI_OLLAMA_URL` defaults to `http://ollama:11434`, the compose
+  `ollama` service's in-network address — leave it blank unless you're
+  pointing at an Ollama instance running somewhere else. That service
+  isn't part of a plain `make up` (it's gated behind the `ollama`
+  compose profile, and ships no model of its own); pull one first:
+
+  ```
+  make ollama-pull m=qwen3:4b   # starts the ollama service, then pulls the model
+  ```
+
   `make test` always uses the fake provider regardless of `.env` — a
-  live key is never required to run the test suite.
+  live key or a running Ollama server is never required to run the
+  test suite.
+
+### Per-prompt routing (`APP_AI_ROUTES`)
+
+`APP_AI_PROVIDER` picks the default, but individual prompts can be
+routed to a different provider — or an ordered fallback chain of
+several — via `APP_AI_ROUTES`:
+
+```
+APP_AI_ROUTES=teacher.feedback=ollama,anthropic;drill.exercise=ollama
+```
+
+Format: semicolon-separated `prompt.name=prov1,prov2` entries. A
+request whose `PromptName` matches an entry tries that entry's
+providers in order, falling through to the next on error; a prompt
+with no matching entry uses the `APP_AI_PROVIDER` chain instead. Every
+attempt — not just the one that finally answers — is recorded as its
+own row in `ai_requests`, so a failover from `ollama` to `anthropic`
+shows up as two attempts, correctly attributed.
+
+Only providers the app can actually construct may appear in a route: a
+route naming a provider with missing configuration (e.g. `ollama`
+without `APP_AI_OLLAMA_MODEL` set) fails the app at startup, not on the
+first request that needs it.
+
+### Startup pricing warning
+
+`ai_requests.cost_usd` is computed from a fixed rate card in
+`cmd/jlp/ai.go`'s `aiPricing()` (USD per million tokens, keyed by exact
+model name). A configured or routed model absent from that map still
+works — its cost is simply recorded as `$0`, the same as any
+genuinely-free model — but the app logs a `slog.Warn` at boot naming
+the provider and model, so an operator who typo'd
+`APP_AI_ANTHROPIC_MODEL` (or is running a live-billed model under a
+name `aiPricing()` doesn't know) finds out immediately rather than
+noticing months of untracked spend later.
 
 ## Deploying
 
@@ -157,7 +213,9 @@ domain  ←  application  ←  ports  ←  adapters
   (`Authenticator`), `events` (`EventBus`).
 - **`internal/adapters`** — concrete implementations: `postgres`
   (pgx + sqlc), `http` (chi server, HTML + JSON API), `staticauth` /
-  `authelia`, `inprocbus`, `fakeai` / `anthropic`.
+  `authelia`, `inprocbus`, `fakeai` / `anthropic` / `ollama` (AI
+  providers) and `airouter` (routes among them, see AI providers
+  above).
 - **`internal/agent/teacher`** — the AI agent that reviews writing; it
   reaches the AI port and domain types only, never a repository.
 
@@ -192,7 +250,7 @@ internal/config/             viper -> typed Config, validation
 internal/domain/             learner, session, writing, correction, diff, event
 internal/application/        sessions, writing, feedback, learning, analytics
 internal/ports/               auth, ai, events, storage interfaces
-internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic
+internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, airouter
 internal/agent/teacher/      the Teacher AI agent (ReviewWriting)
 internal/observability/      AI request/cost/latency recording decorator
 internal/prompts/            embedded, versioned prompt templates

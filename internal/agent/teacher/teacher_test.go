@@ -5,7 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mikeyaustin/jlp/internal/adapters/fakeai" //nolint:depguard // fakeai is a port-shaped test double injected via teacher.New(ai.StructuredGenerator); PRD §75 Rule 3 forbids agents reaching real adapters, not fakes constructed in tests
+	"github.com/mikeyaustin/jlp/internal/adapters/airouter" //nolint:depguard // airouter is a port-shaped test double (routes to fakeai below) injected via teacher.New(ai.StructuredGenerator); PRD §75 Rule 3 forbids agents reaching real adapters, not fakes constructed in tests
+	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"   //nolint:depguard // fakeai is a port-shaped test double injected via teacher.New(ai.StructuredGenerator); PRD §75 Rule 3 forbids agents reaching real adapters, not fakes constructed in tests
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
@@ -59,6 +60,47 @@ func TestReviewWritingFakeAIHappyPath(t *testing.T) {
 	}
 	if resp.Provider != "fake" {
 		t.Fatalf("resp.Provider = %q, want fake", resp.Provider)
+	}
+}
+
+// TestReviewWritingThroughRouterOverFakeIsUnaffected is the
+// service-level check the task brief calls for: teacher.New wired to
+// the REAL airouter.New (not a raw fakeai.New()) — routing
+// "teacher.feedback" to a fake chain, exactly how APP_AI_ROUTES=
+// "teacher.feedback=fake" resolves in cmd/jlp/main.go — must produce
+// byte-for-byte the same result as TestReviewWritingFakeAIHappyPath's
+// direct fakeai.New(). This is what the browser verification's manual
+// APP_AI_ROUTES=teacher.feedback=fake round trip is standing on: proof
+// the router path doesn't change behavior, only which provider (and
+// how many attempts) end up recorded in ai_requests.
+func TestReviewWritingThroughRouterOverFakeIsUnaffected(t *testing.T) {
+	routed := airouter.New(
+		map[string][]ai.StructuredGenerator{"teacher.feedback": {fakeai.New()}},
+		[]ai.StructuredGenerator{fakeai.New()},
+	)
+	agent := teacher.New(routed)
+
+	in := teacher.ReviewInput{
+		Identity:  "learner-a",
+		Session:   testSession(),
+		Selection: "とても面白いでした",
+		Context:   "とても面白いでした",
+	}
+	result, resp, err := agent.ReviewWriting(context.Background(), in)
+	if err != nil {
+		t.Fatalf("ReviewWriting returned error: %v", err)
+	}
+	if len(result.Corrections) != 1 {
+		t.Fatalf("len(Corrections) = %d, want 1: %+v", len(result.Corrections), result.Corrections)
+	}
+	if result.Corrections[0].Replacement != "面白かったです" {
+		t.Fatalf("Replacement = %q, want 面白かったです", result.Corrections[0].Replacement)
+	}
+	if result.Corrected != "とても面白かったです" {
+		t.Fatalf("Corrected = %q, want とても面白かったです", result.Corrected)
+	}
+	if resp.Provider != "fake" {
+		t.Fatalf("resp.Provider = %q, want fake (router must pass the inner provider's identity through unchanged)", resp.Provider)
 	}
 }
 

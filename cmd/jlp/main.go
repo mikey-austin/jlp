@@ -7,9 +7,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
-	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
@@ -27,23 +25,8 @@ import (
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
-	"github.com/mikeyaustin/jlp/internal/observability"
-	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
 )
-
-// aiPricing is the USD-per-million-token rate card the observability
-// decorator costs every AI call against. It lives here rather than in
-// package config because it's not deployment configuration a operator
-// tunes per environment — it's a fixed fact about what providers
-// charge, reviewed and updated in code alongside the provider list
-// itself.
-func aiPricing() map[string]observability.ModelPricing {
-	return map[string]observability.ModelPricing{
-		"claude-sonnet-5": {InPerMTok: 3, OutPerMTok: 15},
-		"fake-1":          {InPerMTok: 0, OutPerMTok: 0},
-	}
-}
 
 func main() {
 	cmd := "serve"
@@ -107,22 +90,22 @@ func main() {
 		bus.Subscribe(event.TypeCorrectionPresented, obsUpdater.HandleEvent)
 		bus.Subscribe(event.TypeGrammarConceptEncountered, obsUpdater.HandleEvent)
 
-		var innerGen ai.StructuredGenerator
-		switch cfg.AI.Provider {
-		case "fake":
-			innerGen = fakeai.New()
-		case "anthropic":
-			innerGen = anthropic.New(cfg.AI.Anthropic)
-		default:
-			slog.Error("ai", "err", fmt.Sprintf("unknown ai provider %q", cfg.AI.Provider))
-			os.Exit(1)
-		}
 		// Every AI call is observed, whichever provider is behind it: the
 		// audit trail (latency, cost, success) must never depend on
 		// remembering to wrap a specific adapter. The same repository
 		// instance is read back by the /ai page (Task 15) below.
+		// buildAIGenerator (cmd/jlp/ai.go) does the rest: it builds one
+		// observed instance per configured provider (fake, plus anthropic/
+		// ollama when actually configured), then wraps them in an
+		// airouter.New — so APP_AI_ROUTES-directed requests, and the
+		// APP_AI_PROVIDER fallback, are both just different chains of
+		// already-observed generators (Task 11, PRD §23/§24).
 		aiRequestRepo := postgres.NewAIRequestRepository(pool)
-		aiGen := observability.NewAIObserver(innerGen, aiRequestRepo, aiPricing())
+		aiGen, err := buildAIGenerator(cfg, aiRequestRepo)
+		if err != nil {
+			slog.Error("ai", "err", err)
+			os.Exit(1)
+		}
 
 		// The learner's personal vocabulary (Task 6, PRD §12): vocabSvc's
 		// Ingest backs POST /api/v1/vocabulary/events and the /vocabulary
