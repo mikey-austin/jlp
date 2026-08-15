@@ -11,7 +11,9 @@ import (
 	"testing"
 
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
+	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -352,6 +354,196 @@ func TestAPICorrectionStatusInvalidValueReturnsBadRequest(t *testing.T) {
 	statusRec := postJSON(t, h, "/api/v1/corrections/"+fb.Corrections[0].ID+"/status", []byte(`{"status":"bogus"}`))
 	if statusRec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400, body=%s", statusRec.Code, statusRec.Body.String())
+	}
+}
+
+// --- Post-approval code review fix: the JSON API gains the same
+// socratic answer-gate the HTML correction_card partial enforces (PRD
+// §9/§53) — see api.go's isGatedCorrection/toCorrectionDTO/
+// toFeedbackDTO. ---
+
+// apiFeedbackDTO/apiCorrectionDTO mirror feedbackDTO/correctionDTO
+// field-for-field, including the new gated/hint_ja/hint_en fields —
+// local test-only copies (rather than reusing the unexported package
+// types directly) so a decode failure here means the WIRE contract
+// broke, not just that a Go value didn't round-trip.
+type apiFeedbackDTO struct {
+	ID          string             `json:"id"`
+	Original    string             `json:"original"`
+	Corrected   string             `json:"corrected"`
+	AIRequestID string             `json:"ai_request_id"`
+	Corrections []apiCorrectionDTO `json:"corrections"`
+	Gated       bool               `json:"gated"`
+}
+
+type apiCorrectionDTO struct {
+	ID            string `json:"id"`
+	Original      string `json:"original"`
+	Replacement   string `json:"replacement"`
+	Type          string `json:"type"`
+	Severity      string `json:"severity"`
+	ExplanationJA string `json:"explanation_ja"`
+	ExplanationEN string `json:"explanation_en"`
+	Status        string `json:"status"`
+	HintJA        string `json:"hint_ja"`
+	HintEN        string `json:"hint_en"`
+	Gated         bool   `json:"gated"`
+}
+
+// TestAPIFeedbackRequestSocraticGatesAnswer pins the fix's headline
+// case: a feedback POST against a socratic session (real
+// teacher.Agent+fakeai, same "Teacher mode: socratic" marker
+// feedback_test.go's socraticFeedbackTestServer wires up) comes back
+// with the answer withheld exactly like the HTML card — replacement
+// and both explanations empty, corrected empty, gated:true at both
+// levels — while still surfacing the hint text a client needs to build
+// its own retry/reveal UI.
+func TestAPIFeedbackRequestSocraticGatesAnswer(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, docID, _ := socraticFeedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	reqBody, err := json.Marshal(map[string]any{
+		"document_id": docID,
+		"start":       0,
+		"end":         runeLen,
+		"text":        content,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := postJSON(t, h, "/api/v1/sessions/"+string(sess.ID)+"/feedback", reqBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST feedback status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got apiFeedbackDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("could not decode response %s: %v", rec.Body.String(), err)
+	}
+	if !got.Gated {
+		t.Fatalf("feedback.gated = false, want true: %+v", got)
+	}
+	if got.Corrected != "" {
+		t.Fatalf("feedback.corrected = %q, want empty while gated (leaks Replacement via the whole-selection diff)", got.Corrected)
+	}
+	if len(got.Corrections) != 1 {
+		t.Fatalf("len(Corrections) = %d, want 1: %+v", len(got.Corrections), got.Corrections)
+	}
+	c := got.Corrections[0]
+	if !c.Gated {
+		t.Fatalf("corrections[0].gated = false, want true: %+v", c)
+	}
+	if c.Replacement != "" {
+		t.Fatalf("corrections[0].replacement = %q, want empty while gated", c.Replacement)
+	}
+	if c.ExplanationJA != "" || c.ExplanationEN != "" {
+		t.Fatalf("corrections[0] explanations not empty while gated: %+v", c)
+	}
+	if c.HintJA == "" || c.HintEN == "" {
+		t.Fatalf("corrections[0] missing hint text a client needs to build socratic UI: %+v", c)
+	}
+	// The raw response body must never contain the answer either — the
+	// same DOM-leak class of bug this whole fix targets, checked at the
+	// wire level, not just via the decoded struct.
+	if strings.Contains(rec.Body.String(), "面白かったです") {
+		t.Fatalf("raw JSON body leaks the corrected form: %s", rec.Body.String())
+	}
+}
+
+// TestAPIFeedbackRequestNonSocraticNeverGated is the explicit
+// gated:false pin alongside TestAPIFeedbackRequestReturnsCorrectionsWithReplacement
+// (left untouched — it still passes verbatim, proving the fix is
+// additive): a plain, non-socratic correction has no hint at all, so
+// it's never gated and every field stays populated exactly as before.
+func TestAPIFeedbackRequestNonSocraticNeverGated(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, docID := feedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	reqBody, err := json.Marshal(map[string]any{
+		"document_id": docID,
+		"start":       0,
+		"end":         runeLen,
+		"text":        content,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := postJSON(t, h, "/api/v1/sessions/"+string(sess.ID)+"/feedback", reqBody)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST feedback status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	var got apiFeedbackDTO
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("could not decode response %s: %v", rec.Body.String(), err)
+	}
+	if got.Gated {
+		t.Fatalf("feedback.gated = true, want false for a non-socratic review: %+v", got)
+	}
+	if got.Corrected == "" {
+		t.Fatal("feedback.corrected is empty, want the corrected text (never gated)")
+	}
+	if len(got.Corrections) != 1 {
+		t.Fatalf("len(Corrections) = %d, want 1: %+v", len(got.Corrections), got.Corrections)
+	}
+	c := got.Corrections[0]
+	if c.Gated {
+		t.Fatalf("corrections[0].gated = true, want false: %+v", c)
+	}
+	if c.Replacement != "面白かったです" {
+		t.Fatalf("corrections[0].replacement = %q, want 面白かったです", c.Replacement)
+	}
+	if c.ExplanationJA == "" || c.ExplanationEN == "" {
+		t.Fatalf("corrections[0] explanations unexpectedly empty: %+v", c)
+	}
+	if c.HintJA != "" || c.HintEN != "" {
+		t.Fatalf("corrections[0] has hint text for a non-socratic correction: %+v", c)
+	}
+}
+
+// TestCorrectionDTOUngatedRestoresFieldsWhenRevealed is the unit-level
+// pin: toCorrectionDTO built from a CorrectionView with Revealed=true
+// (the state RevealCorrection leaves a correction in) is NOT gated —
+// Replacement/both explanations are restored — even though HasHint()
+// is still true, proving Gated tracks the full three-part predicate
+// (HasHint && Status=="presented" && !Revealed), not HasHint alone.
+func TestCorrectionDTOUngatedRestoresFieldsWhenRevealed(t *testing.T) {
+	cv := feedback.CorrectionView{
+		Correction: correction.Correction{
+			ID:          "corr-1",
+			Original:    "面白いでした",
+			Replacement: "面白かったです",
+			Explanation: correction.Explanation{JA: "説明", EN: "explanation"},
+			Hint:        correction.Explanation{JA: "ヒント", EN: "hint"},
+		},
+		Status:   "presented",
+		Revealed: true,
+	}
+	dto := toCorrectionDTO(cv)
+	if dto.Gated {
+		t.Fatalf("Gated = true, want false once Revealed: %+v", dto)
+	}
+	if dto.Replacement != "面白かったです" {
+		t.Fatalf("Replacement = %q, want restored 面白かったです", dto.Replacement)
+	}
+	if dto.ExplanationJA != "説明" || dto.ExplanationEN != "explanation" {
+		t.Fatalf("Explanations not restored: %+v", dto)
+	}
+	if dto.HintJA != "ヒント" || dto.HintEN != "hint" {
+		t.Fatalf("Hint text should still be present post-reveal: %+v", dto)
+	}
+
+	// Same CorrectionView but accepted (the other route out of the
+	// gate — a correct retry) is likewise ungated.
+	cv.Status, cv.Revealed = "accepted", false
+	acceptedDTO := toCorrectionDTO(cv)
+	if acceptedDTO.Gated {
+		t.Fatalf("Gated = true, want false once accepted: %+v", acceptedDTO)
+	}
+	if acceptedDTO.Replacement != "面白かったです" {
+		t.Fatalf("Replacement = %q, want restored 面白かったです once accepted", acceptedDTO.Replacement)
 	}
 }
 

@@ -95,9 +95,11 @@ func toCorrectionCardView(cv feedback.CorrectionView) correctionCardView {
 
 // toFeedbackView maps a feedback.Feedback onto the "feedback" partial's
 // view. HasGatedCard is true when ANY card is still in
-// correction_card.html.tmpl's socratic pre-reveal gate (HasHint(),
-// Status "presented", not yet Revealed) — when it is, the whole-
-// selection "修正案" diff block above the individual cards is
+// correction_card.html.tmpl's socratic pre-reveal gate — isGatedCorrection
+// (api.go), the SAME predicate toFeedbackDTO uses for the JSON API's own
+// Gated field, so the HTML and API response shapes can never
+// independently drift on what counts as "hidden" — when it is, the
+// whole-selection "修正案" diff block above the individual cards is
 // suppressed entirely (see the "feedback" partial): that block renders
 // fb.Diff, the WHOLE selection's before/after, which — unlike each
 // card's own diff — isn't behind any per-correction gate, so leaving it
@@ -114,7 +116,7 @@ func toFeedbackView(fb feedback.Feedback) feedbackView {
 	gated := false
 	for _, c := range fb.Corrections {
 		cards = append(cards, toCorrectionCardView(c))
-		if c.HasHint() && c.Status == "presented" && !c.Revealed {
+		if isGatedCorrection(c) {
 			gated = true
 		}
 	}

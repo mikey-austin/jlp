@@ -47,12 +47,31 @@ type sessionDTO struct {
 	CreatedAt           time.Time `json:"created_at"`
 }
 
+// feedbackDTO.Gated/correctionDTO.Gated are Phase 2 Task 8's socratic
+// active-recall gate (PRD §9/§53), extended to the JSON API after a
+// post-approval code-review finding: without them, any API client got
+// Replacement/both Explanations/Corrected unconditionally, bypassing
+// the exact gate the HTML correction_card partial enforces (see
+// toCorrectionDTO/toFeedbackDTO below, and
+// correction_card.html.tmpl's own gate — same predicate, kept in sync
+// deliberately rather than each reimplementing its own notion of
+// "hidden"). Both fields are additive (existing consumers that never
+// see a socratic session keep getting Gated:false with every other
+// field populated exactly as before — see
+// TestAPIFeedbackRequestReturnsCorrectionsWithReplacement, unchanged),
+// so the DTOs' previously-frozen fields stay backward-compatible.
 type feedbackDTO struct {
 	ID          string          `json:"id"`
 	Original    string          `json:"original"`
 	Corrected   string          `json:"corrected"`
 	AIRequestID string          `json:"ai_request_id"`
 	Corrections []correctionDTO `json:"corrections"`
+	// Gated is true when ANY correction in Corrections is itself Gated
+	// — mirrors correction_card.html.tmpl's HasGatedCard suppression of
+	// the whole-selection diff block: Corrected is a diff away from
+	// every correction's Replacement, so it's emptied for the same
+	// leak-prevention reason once any one of them is still hidden.
+	Gated bool `json:"gated"`
 }
 
 type correctionDTO struct {
@@ -64,6 +83,19 @@ type correctionDTO struct {
 	ExplanationJA string `json:"explanation_ja"`
 	ExplanationEN string `json:"explanation_en"`
 	Status        string `json:"status"`
+	// HintJA/HintEN are populated whenever the correction HasHint()
+	// (socratic mode), regardless of Gated — a client needs the hint
+	// text to build its own retry/reveal UI even once the correction has
+	// resolved and the answer is visible again.
+	HintJA string `json:"hint_ja,omitempty"`
+	HintEN string `json:"hint_en,omitempty"`
+	// Gated is true exactly when correction_card.html.tmpl's own
+	// pre-reveal gate would hide the answer: HasHint() && Status ==
+	// "presented" && !Revealed. When true, Replacement/ExplanationJA/
+	// ExplanationEN are emptied below — a client MUST check Gated before
+	// trusting those three fields are meaningful, the same contract the
+	// HTML card enforces by simply not rendering them.
+	Gated bool `json:"gated"`
 }
 
 // errorTypeCountDTO and statisticsDTO mirror storage.Statistics in
@@ -98,8 +130,18 @@ func toSessionDTO(sess session.Session) sessionDTO {
 	}
 }
 
+// isGatedCorrection is the exact socratic pre-reveal predicate
+// correction_card.html.tmpl gates on — the single definition
+// toCorrectionDTO/toFeedbackDTO (API) and toCorrectionCardView/
+// toFeedbackView (HTML, in feedback.go) both call, so the two response
+// shapes can never independently drift on what counts as "hidden."
+func isGatedCorrection(cv feedback.CorrectionView) bool {
+	return cv.HasHint() && cv.Status == "presented" && !cv.Revealed
+}
+
 func toCorrectionDTO(cv feedback.CorrectionView) correctionDTO {
-	return correctionDTO{
+	gated := isGatedCorrection(cv)
+	dto := correctionDTO{
 		ID:            cv.ID,
 		Original:      cv.Original,
 		Replacement:   cv.Replacement,
@@ -108,20 +150,40 @@ func toCorrectionDTO(cv feedback.CorrectionView) correctionDTO {
 		ExplanationJA: cv.Explanation.JA,
 		ExplanationEN: cv.Explanation.EN,
 		Status:        cv.Status,
+		Gated:         gated,
 	}
+	if cv.HasHint() {
+		dto.HintJA = cv.Hint.JA
+		dto.HintEN = cv.Hint.EN
+	}
+	if gated {
+		dto.Replacement = ""
+		dto.ExplanationJA = ""
+		dto.ExplanationEN = ""
+	}
+	return dto
 }
 
 func toFeedbackDTO(fb feedback.Feedback) feedbackDTO {
 	corrections := make([]correctionDTO, 0, len(fb.Corrections))
+	gated := false
 	for _, c := range fb.Corrections {
 		corrections = append(corrections, toCorrectionDTO(c))
+		if isGatedCorrection(c) {
+			gated = true
+		}
+	}
+	corrected := fb.Corrected
+	if gated {
+		corrected = ""
 	}
 	return feedbackDTO{
 		ID:          fb.ID,
 		Original:    fb.Original,
-		Corrected:   fb.Corrected,
+		Corrected:   corrected,
 		AIRequestID: fb.AIRequestID,
 		Corrections: corrections,
+		Gated:       gated,
 	}
 }
 
