@@ -4,6 +4,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
@@ -59,6 +60,27 @@ type CorrectionRecord struct {
 	Confidence                   *int // nil until RecordConfidence sets it (1..5)
 	Revealed                     bool
 	SessionID                    session.ID
+}
+
+// HasHint reports whether c carries a socratic hint — the
+// storage.CorrectionRecord equivalent of correction.Correction.HasHint,
+// which CorrectionRecord can't call directly since it doesn't embed
+// correction.Correction (it flattens Hint into HintJA/HintEN alongside
+// every other field, matching every other *_record shape's flat, DB-row
+// layout).
+func (c CorrectionRecord) HasHint() bool {
+	return c.HintJA != "" || c.HintEN != ""
+}
+
+// IsGated reports whether c is still withheld from the learner under
+// Phase 2's socratic active-recall gate (PRD §9/§53) — see
+// correction.IsGated, the single predicate this delegates to so it can
+// never drift from the HTML correction_card partial's or the JSON
+// API's own gate check. application/anki.Service.GenerateFromCorrection
+// and application/lessons.Service.Generate both call this directly on
+// the CorrectionRecord(s) storage.FeedbackRepository hands them.
+func (c CorrectionRecord) IsGated() bool {
+	return correction.IsGated(c.HasHint(), c.Status, c.Revealed)
 }
 
 // ConceptTag is one grammar-concept tag a correction carries (Phase 2

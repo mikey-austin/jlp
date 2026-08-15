@@ -274,3 +274,32 @@ func TestNewResultCursorAdvancesPastReplacement(t *testing.T) {
 		t.Errorf("NewResult() applied count = %d, want 2", len(result.Corrections))
 	}
 }
+
+// TestIsGated pins the single socratic pre-reveal predicate (PRD
+// §9/§53) every layer — the HTML correction_card partial, the JSON API,
+// application/anki's GenerateFromCorrection, and application/lessons'
+// context formatter — must evaluate identically: a hint-bearing,
+// still-"presented", not-yet-revealed correction is gated; anything
+// else (no hint, already resolved, or already revealed) is not.
+func TestIsGated(t *testing.T) {
+	tests := []struct {
+		name     string
+		hasHint  bool
+		status   string
+		revealed bool
+		want     bool
+	}{
+		{"hint_presented_unrevealed_is_gated", true, "presented", false, true},
+		{"no_hint_never_gated", false, "presented", false, false},
+		{"accepted_not_gated_even_with_hint", true, "accepted", false, false},
+		{"rejected_not_gated_even_with_hint", true, "rejected", false, false},
+		{"revealed_not_gated_even_while_presented", true, "presented", true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsGated(tt.hasHint, tt.status, tt.revealed); got != tt.want {
+				t.Errorf("IsGated(%v, %q, %v) = %v, want %v", tt.hasHint, tt.status, tt.revealed, got, tt.want)
+			}
+		})
+	}
+}

@@ -47,6 +47,24 @@ func (c Correction) HasHint() bool {
 	return c.Hint != (Explanation{})
 }
 
+// IsGated is the single socratic pre-reveal predicate (PRD §9/§53)
+// every layer that can show or withhold a correction's answer
+// evaluates: hasHint && status == "presented" && !revealed. It's
+// expressed over the three raw fields rather than a Correction/
+// CorrectionView/storage.CorrectionRecord directly so every shape that
+// carries this information — correction.Correction (via HasHint,
+// combined with a caller's own Status/Revealed), feedback.CorrectionView,
+// and storage.CorrectionRecord (via its own IsGated method) — can share
+// this one definition without a dependency cycle. Callers: the HTML
+// correction_card partial and JSON API (adapters/http, via
+// feedback.CorrectionView.HasHint), application/anki's
+// GenerateFromCorrection and application/lessons' context formatter
+// (both via storage.CorrectionRecord.IsGated). None of them may
+// independently redefine "hidden."
+func IsGated(hasHint bool, status string, revealed bool) bool {
+	return hasHint && status == "presented" && !revealed
+}
+
 // Result represents the result of applying corrections to a selection
 type Result struct {
 	Original    string

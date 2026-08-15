@@ -27,6 +27,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
+	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
@@ -131,12 +132,16 @@ func toSessionDTO(sess session.Session) sessionDTO {
 }
 
 // isGatedCorrection is the exact socratic pre-reveal predicate
-// correction_card.html.tmpl gates on — the single definition
-// toCorrectionDTO/toFeedbackDTO (API) and toCorrectionCardView/
-// toFeedbackView (HTML, in feedback.go) both call, so the two response
-// shapes can never independently drift on what counts as "hidden."
+// correction_card.html.tmpl gates on — toCorrectionDTO/toFeedbackDTO
+// (API) and toCorrectionCardView/toFeedbackView (HTML, in feedback.go)
+// both call this, and it in turn delegates to correction.IsGated, the
+// single definition also used by storage.CorrectionRecord.IsGated (see
+// application/anki.Service.GenerateFromCorrection and
+// application/lessons.Service.Generate) — so none of these response
+// shapes or application-layer gates can independently drift on what
+// counts as "hidden."
 func isGatedCorrection(cv feedback.CorrectionView) bool {
-	return cv.HasHint() && cv.Status == "presented" && !cv.Revealed
+	return correction.IsGated(cv.HasHint(), cv.Status, cv.Revealed)
 }
 
 func toCorrectionDTO(cv feedback.CorrectionView) correctionDTO {
