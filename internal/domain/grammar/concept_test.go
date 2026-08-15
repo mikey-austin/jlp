@@ -115,3 +115,61 @@ func TestLoadCatalogEmptySlugErrors(t *testing.T) {
 		t.Fatal("LoadCatalog() err = nil, want error for empty slug")
 	}
 }
+
+// TestLoadCatalogDanglingRelatedErrors pins the cross-ref validation
+// (Phase 3 Task 1, carried over from Phase 2's final review): a
+// `related` slug that names no concept in the catalog must fail to
+// load, naming the dangling ref in the error — a typo here would
+// otherwise only surface later as a 404 when a learner clicks the
+// resulting chip on /grammar/{slug} (see concept.go's package doc
+// comment).
+func TestLoadCatalogDanglingRelatedErrors(t *testing.T) {
+	const fixture = `
+- slug: te-form
+  name: "て-form"
+  jlpt_level: 5
+  description: "d"
+  examples: ["a", "b"]
+  related: ["no-such-concept"]
+`
+	_, err := grammar.LoadCatalog(strings.NewReader(fixture))
+	if err == nil {
+		t.Fatal("LoadCatalog() err = nil, want error for dangling related ref")
+	}
+	if !strings.Contains(err.Error(), "no-such-concept") {
+		t.Errorf("LoadCatalog() err = %v, want it to name the dangling ref %q", err, "no-such-concept")
+	}
+}
+
+// TestLoadCatalogDanglingPrerequisiteErrors mirrors the above for
+// `prerequisites` — the two fields are validated the same way, but
+// pinned separately so a future change that only wires up one of them
+// can't hide behind the other's passing test.
+func TestLoadCatalogDanglingPrerequisiteErrors(t *testing.T) {
+	const fixture = `
+- slug: past-tense-plain
+  name: "plain past tense"
+  jlpt_level: 5
+  description: "d"
+  examples: ["a", "b"]
+  prerequisites: ["ghost-concept"]
+`
+	_, err := grammar.LoadCatalog(strings.NewReader(fixture))
+	if err == nil {
+		t.Fatal("LoadCatalog() err = nil, want error for dangling prerequisite ref")
+	}
+	if !strings.Contains(err.Error(), "ghost-concept") {
+		t.Errorf("LoadCatalog() err = %v, want it to name the dangling ref %q", err, "ghost-concept")
+	}
+}
+
+// TestLoadCatalogValidCrossRefsPass is the positive counterpart: refs
+// that DO resolve to another slug in the same catalog must not be
+// rejected by the new validation (guards against an overzealous
+// implementation, e.g. one that rejects every non-empty related list).
+func TestLoadCatalogValidCrossRefsPass(t *testing.T) {
+	_, err := grammar.LoadCatalog(strings.NewReader(twoConceptFixture))
+	if err != nil {
+		t.Fatalf("LoadCatalog() err = %v, want nil (both refs resolve within the fixture)", err)
+	}
+}

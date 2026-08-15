@@ -502,14 +502,27 @@ func parseReportSummary(path string) (reportSummary, error) {
 	return s, nil
 }
 
-// latestReportBefore returns the most recent *.md report filename in
-// dir whose RFC3339 timestamp sorts strictly before ts (the current
-// run's own timestamp) — i.e. the report the current run should be
-// compared against — or "" if dir doesn't exist yet or holds no such
-// report. RFC3339-with-UTC-Z filenames sort lexically in chronological
-// order, so this is a plain string comparison over a sorted directory
-// listing, not a parse-every-filename-as-a-time operation.
-func latestReportBefore(dir, ts string) (string, error) {
+// latestReportBefore returns the most recent *.md report in dir whose
+// RFC3339 timestamp sorts strictly before ts (the current run's own
+// timestamp) AND whose persisted provider/model match provider/model
+// exactly — i.e. the report the current run's regression check should
+// be compared against — or "" if dir doesn't exist yet, or holds no
+// such report at all, or holds only reports from OTHER provider/model
+// pairs. Comparing precision/recall across different providers or
+// models would be comparing unlike things (PRD §49's regression gate
+// is about catching a real change in ONE configuration's quality, not
+// flagging "provider B scores differently than provider A"), so this
+// is a like-with-like filter, not just a chronological one.
+//
+// RFC3339-with-UTC-Z filenames sort lexically in chronological order,
+// so candidates are still found via a plain string comparison over a
+// sorted directory listing; each candidate (newest first) is then
+// parsed to check its provider/model, stopping at the first match. A
+// candidate that fails to parse (e.g. a hand-edited or corrupted
+// report) is skipped rather than erroring the whole search — the same
+// tolerance runEvalCommand already applies to a single previous
+// report that fails to parse.
+func latestReportBefore(dir, ts, provider, model string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -527,16 +540,22 @@ func latestReportBefore(dir, ts string) (string, error) {
 	sort.Strings(names)
 
 	tsFile := ts + ".md"
-	var latest string
-	for _, n := range names {
-		if n < tsFile {
-			latest = n
+	for i := len(names) - 1; i >= 0; i-- {
+		n := names[i]
+		if n >= tsFile {
+			continue
+		}
+		path := filepath.Join(dir, n)
+		summary, err := parseReportSummary(path)
+		if err != nil {
+			slog.Warn("eval: could not parse candidate baseline report, skipping", "path", path, "err", err)
+			continue
+		}
+		if summary.Provider == provider && summary.Model == model {
+			return path, nil
 		}
 	}
-	if latest == "" {
-		return "", nil
-	}
-	return filepath.Join(dir, latest), nil
+	return "", nil
 }
 
 // noopAIRequestRepo discards observability.NewAIObserver's audit
@@ -558,15 +577,16 @@ func (noopAIRequestRepo) List(context.Context, learner.IdentityID, int) ([]stora
 }
 
 // printEvalSummary writes report's headline numbers to stdout, plus
-// the delta against prev (nil when there's no earlier report to
-// compare against) — the human-readable counterpart to the yaml block
-// writeReportMarkdown embeds in the report file itself.
+// the delta against prev (nil when there's no earlier report with the
+// SAME provider+model to compare against — see latestReportBefore) —
+// the human-readable counterpart to the yaml block writeReportMarkdown
+// embeds in the report file itself.
 func printEvalSummary(report Report, ts string, prev *reportSummary) {
 	fmt.Printf("jlp eval — %s\n", ts)
 	fmt.Printf("  provider=%s model=%s prompt_version=%s cases=%d\n", report.Provider, report.Model, report.PromptVersion, len(report.Cases))
 	fmt.Printf("  precision=%.3f recall=%.3f fp_rate=%.3f\n", report.Precision, report.Recall, report.FPRate)
 	if prev == nil {
-		fmt.Println("  no previous report found — nothing to compare against")
+		fmt.Println("  no comparable baseline")
 		return
 	}
 	fmt.Printf("  vs %s: precision=%+.3f recall=%+.3f fp_rate=%+.3f\n",
@@ -610,7 +630,7 @@ func runEvalCommand(ctx context.Context, cfg config.Config) error {
 	report.FPRate = roundTo(report.FPRate, reportPrecision)
 
 	ts := time.Now().UTC().Format(evalReportTimeLayout)
-	prevPath, err := latestReportBefore(evalReportsDir, ts)
+	prevPath, err := latestReportBefore(evalReportsDir, ts, report.Provider, report.Model)
 	if err != nil {
 		return fmt.Errorf("eval: find previous report: %w", err)
 	}

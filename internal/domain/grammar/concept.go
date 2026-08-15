@@ -29,11 +29,14 @@ type Concept struct {
 
 // LoadCatalog parses a YAML list of Concept entries (see
 // data/grammar/concepts.yaml) and validates it before returning:
-// every slug must be non-empty and unique across the file, and every
-// JLPTLevel must fall in 1..5 (N1..N5). Malformed catalog data fails
-// fast here — at load time, in seed and tests — instead of surfacing
-// later as a broken UpsertConcepts call or an unexplained /grammar
-// page.
+// every slug must be non-empty and unique across the file, every
+// JLPTLevel must fall in 1..5 (N1..N5), and every `related`/
+// `prerequisites` slug must name another concept in the SAME file.
+// Malformed catalog data fails fast here — at load time, in seed and
+// tests — instead of surfacing later as a broken UpsertConcepts call
+// or, for a dangling cross-ref specifically, a 404 when a learner
+// clicks the resulting chip on /grammar/{slug} (see the package doc
+// comment above).
 func LoadCatalog(r io.Reader) ([]Concept, error) {
 	var concepts []Concept
 	if err := yaml.NewDecoder(r).Decode(&concepts); err != nil {
@@ -53,5 +56,23 @@ func LoadCatalog(r io.Reader) ([]Concept, error) {
 			return nil, fmt.Errorf("grammar: concept %q: jlpt_level %d out of range 1..5", c.Slug, c.JLPTLevel)
 		}
 	}
+
+	// Cross-ref validation runs as a second pass, after `seen` is fully
+	// populated: a ref is allowed to point FORWARD to a concept later in
+	// the file (concepts.yaml isn't topologically sorted), which a
+	// single combined pass couldn't validate correctly.
+	for _, c := range concepts {
+		for _, ref := range c.Related {
+			if !seen[ref] {
+				return nil, fmt.Errorf("grammar: concept %q: related slug %q does not exist in the catalog", c.Slug, ref)
+			}
+		}
+		for _, ref := range c.Prerequisites {
+			if !seen[ref] {
+				return nil, fmt.Errorf("grammar: concept %q: prerequisites slug %q does not exist in the catalog", c.Slug, ref)
+			}
+		}
+	}
+
 	return concepts, nil
 }

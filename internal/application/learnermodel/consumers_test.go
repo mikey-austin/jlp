@@ -253,6 +253,60 @@ func TestWeaknessFlipsToEmergingAfterFourteenQuietDays(t *testing.T) {
 	}
 }
 
+// TestEmergingFlipsBackToWeaknessAfterThreeFreshOccurrences pins a
+// Phase 2 review carryover: upsertWeakness unconditionally sets
+// Kind=weakness whenever the threshold is met — it has no special
+// case for "this subject was already emerging" — so a subject that
+// quieted down into emerging and then accrues 3 FRESH qualifying
+// occurrences (distinct correction IDs) flips straight back to
+// weakness. This is existing, intentional behavior (per the
+// controller ruling); this test only pins it against a future
+// regression, it does not change it.
+//
+// The gap to day 40 (vs. the 15-day gap in
+// TestWeaknessFlipsToEmergingAfterFourteenQuietDays) is deliberate:
+// it pushes c1-c3 (day 0) outside the 30-day trailing weaknessWindow
+// as measured from the fresh occurrences (day 40+), so the flip-back
+// is driven ONLY by the 3 fresh occurrences below, not by the old
+// ones still being in-window.
+func TestEmergingFlipsBackToWeaknessAfterThreeFreshOccurrences(t *testing.T) {
+	store := newFakeEventStore()
+	obs := newFakeObsRepo()
+	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
+
+	fireAll(t, u, store,
+		correctionEvent("c1", "conjugation", "incorrect", baseTime),
+		correctionEvent("c2", "conjugation", "incorrect", baseTime.Add(time.Hour)),
+		correctionEvent("c3", "conjugation", "incorrect", baseTime.Add(2*time.Hour)),
+	)
+	if o, ok := obs.find(testIdentity, learnermodel.SubjectCorrectionType, "conjugation"); !ok || o.Kind != learnermodel.KindWeakness {
+		t.Fatalf("precondition failed: expected a conjugation weakness, got %+v (ok=%v)", o, ok)
+	}
+
+	quietUntil := baseTime.Add(40 * 24 * time.Hour)
+	fireAll(t, u, store, correctionEvent("c-particle", "particle", "incorrect", quietUntil))
+	if o, ok := obs.find(testIdentity, learnermodel.SubjectCorrectionType, "conjugation"); !ok || o.Kind != learnermodel.KindEmerging {
+		t.Fatalf("precondition failed: expected conjugation to have flipped to emerging, got %+v (ok=%v)", o, ok)
+	}
+
+	fireAll(t, u, store,
+		correctionEvent("c5", "conjugation", "incorrect", quietUntil.Add(time.Hour)),
+		correctionEvent("c6", "conjugation", "incorrect", quietUntil.Add(2*time.Hour)),
+		correctionEvent("c7", "conjugation", "incorrect", quietUntil.Add(3*time.Hour)),
+	)
+
+	o, ok := obs.find(testIdentity, learnermodel.SubjectCorrectionType, "conjugation")
+	if !ok {
+		t.Fatal("conjugation observation disappeared, want it flipped back to weakness")
+	}
+	if o.Kind != learnermodel.KindWeakness {
+		t.Errorf("Kind = %q after 3 fresh occurrences, want %q (flip-back)", o.Kind, learnermodel.KindWeakness)
+	}
+	if count, _ := o.Evidence["count"].(int); count != 3 {
+		t.Errorf("Evidence[count] = %v, want 3 (only the 3 fresh occurrences — c1-c3 are now outside the 30-day window)", o.Evidence["count"])
+	}
+}
+
 // TestDuplicateCorrectionIDCountsOnce pins the controller ruling:
 // weakness counting dedupes by DISTINCT evidence.correction_id per
 // subject, not raw event count, so a retried grammar.concept.encountered

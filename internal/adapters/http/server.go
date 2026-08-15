@@ -133,6 +133,16 @@ func (s *Server) routes() http.Handler {
 	r.Handle("/static/*", fs)
 	r.Group(func(r chi.Router) {
 		r.Use(RequireIdentity(s.opts.Auth, s.opts.Identities))
+		// CSRFProtect (origin verification, not tokens — see csrf.go)
+		// mounts here, after RequireIdentity but before every route
+		// handler in this group: every state-changing route below is
+		// session-cookie-authenticated, so a cross-site page that
+		// tricked a browser into submitting a request would otherwise
+		// ride the victim's own cookie. Deliberately scoped to this
+		// authenticated group only — every unauthenticated route above
+		// (/healthz, /static/*, /offline) is GET-only, so there's
+		// nothing state-changing there to protect.
+		r.Use(CSRFProtect())
 		r.Get("/", s.home)
 		r.Get("/sessions", s.sessionsList)
 		r.Post("/sessions", s.sessionsCreate)

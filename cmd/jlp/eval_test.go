@@ -306,12 +306,94 @@ func TestWriteReportSameWallClockSecondDoesNotCollide(t *testing.T) {
 	// latestReportBefore must still recover run 1 as the report BEFORE
 	// run 2's timestamp — the fixed-width format must sort lexically in
 	// the same order it sorts chronologically.
-	prev, err := latestReportBefore(evalReportsDir, ts2)
+	prev, err := latestReportBefore(evalReportsDir, ts2, "fake", "")
 	if err != nil {
 		t.Fatalf("latestReportBefore() error = %v", err)
 	}
 	if prev != path1 {
 		t.Errorf("latestReportBefore(ts2) = %q, want %q (run 1, chronologically first)", prev, path1)
+	}
+}
+
+// TestLatestReportBeforeFiltersByProviderAndModel pins the
+// like-with-like baseline rule (Phase 3 Task 1, carried over from
+// Phase 2's final review): the regression comparison must only ever
+// consider the most recent PRIOR report with the SAME provider AND
+// model as the current run — an intervening report from a different
+// provider/model must be skipped over, not just ignored-but-still-
+// counted-as-"a prior report exists".
+func TestLatestReportBeforeFiltersByProviderAndModel(t *testing.T) {
+	original := evalReportsDir
+	evalReportsDir = t.TempDir()
+	t.Cleanup(func() { evalReportsDir = original })
+
+	base := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)
+	at := func(offset time.Duration) string {
+		return base.Add(offset).Format(evalReportTimeLayout)
+	}
+
+	// Oldest: anthropic/claude-x.
+	oldestTS := at(0)
+	if _, err := writeReport(Report{Provider: "anthropic", Model: "claude-x", Precision: 0.9}, oldestTS); err != nil {
+		t.Fatalf("writeReport() error = %v", err)
+	}
+	// Middle: a DIFFERENT provider+model — must be skipped over when
+	// comparing an anthropic/claude-x run against its history.
+	middleTS := at(time.Second)
+	if _, err := writeReport(Report{Provider: "ollama", Model: "llama3", Precision: 0.5}, middleTS); err != nil {
+		t.Fatalf("writeReport() error = %v", err)
+	}
+	// Most recent matching report: anthropic/claude-x again.
+	matchingTS := at(2 * time.Second)
+	if _, err := writeReport(Report{Provider: "anthropic", Model: "claude-x", Precision: 0.95}, matchingTS); err != nil {
+		t.Fatalf("writeReport() error = %v", err)
+	}
+
+	currentTS := at(3 * time.Second)
+	got, err := latestReportBefore(evalReportsDir, currentTS, "anthropic", "claude-x")
+	if err != nil {
+		t.Fatalf("latestReportBefore() error = %v", err)
+	}
+	want := filepath.Join(evalReportsDir, matchingTS+".md")
+	if got != want {
+		t.Errorf("latestReportBefore() = %q, want %q (most recent matching provider+model, skipping the intervening ollama/llama3 report)", got, want)
+	}
+
+	// A provider/model pair that has never reported before has no
+	// comparable baseline at all — must return "" (not an error), which
+	// is what tells runEvalCommand to skip the regression check and
+	// print "no comparable baseline".
+	got2, err := latestReportBefore(evalReportsDir, currentTS, "openai", "gpt-4")
+	if err != nil {
+		t.Fatalf("latestReportBefore() error = %v", err)
+	}
+	if got2 != "" {
+		t.Errorf("latestReportBefore() for an unseen provider/model = %q, want \"\" (no comparable baseline)", got2)
+	}
+}
+
+// TestRunEvalCommandIgnoresMismatchedProviderBaseline drives
+// runEvalCommand end-to-end (the exact function `jlp eval` calls) with
+// a prior report seeded from a DIFFERENT provider whose scores are far
+// better than the fake provider will ever achieve against the real
+// corpus. If the regression check incorrectly compared against it
+// anyway, this run would fail with a false regression; asserting a nil
+// error pins that it doesn't.
+func TestRunEvalCommandIgnoresMismatchedProviderBaseline(t *testing.T) {
+	t.Chdir(filepath.Join("..", ".."))
+
+	original := evalReportsDir
+	evalReportsDir = t.TempDir()
+	t.Cleanup(func() { evalReportsDir = original })
+
+	priorTS := time.Now().UTC().Add(-time.Hour).Format(evalReportTimeLayout)
+	if _, err := writeReport(Report{Provider: "anthropic", Model: "claude-x", Precision: 1.0, Recall: 1.0}, priorTS); err != nil {
+		t.Fatalf("writeReport() error = %v", err)
+	}
+
+	cfg := config.Config{AI: config.AI{Provider: "fake"}}
+	if err := runEvalCommand(context.Background(), cfg); err != nil {
+		t.Fatalf("runEvalCommand() error = %v, want nil (a mismatched-provider baseline must not trigger a false regression)", err)
 	}
 }
 
