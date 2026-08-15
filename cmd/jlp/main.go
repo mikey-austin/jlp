@@ -15,6 +15,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	adaptermqtt "github.com/mikeyaustin/jlp/internal/adapters/mqtt"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
+	signaladapter "github.com/mikeyaustin/jlp/internal/adapters/signal"
 	slackadapter "github.com/mikeyaustin/jlp/internal/adapters/slack"
 	smtpadapter "github.com/mikeyaustin/jlp/internal/adapters/smtp"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
@@ -295,6 +296,30 @@ func main() {
 				}
 			}()
 			slog.Info("slack: adapter starting")
+		}
+
+		// Signal is dormant unless BOTH APP_SIGNAL_RPCURL and
+		// APP_SIGNAL_NUMBER are set (config.Signal's own doc comment;
+		// validate() already rejects a lone value at boot). Same
+		// never-fatal, own-goroutine posture as Slack immediately
+		// above: a bad RPCURL, or a sidecar that's down, only ends this
+		// one channel, never the process — see
+		// internal/adapters/signal's own package doc comment for the
+		// full "why" (identical to Slack's, over a different
+		// transport).
+		if cfg.Signal.RPCURL != "" && cfg.Signal.Number != "" {
+			signalAdapter := signaladapter.New(cfg.Signal.RPCURL, cfg.Signal.Number)
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						slog.Error("signal: adapter goroutine panicked", "panic", r, "stack", string(debug.Stack()))
+					}
+				}()
+				if err := signalAdapter.Start(context.Background(), channelSvc.Handle); err != nil {
+					slog.Error("signal: adapter stopped", "err", err)
+				}
+			}()
+			slog.Info("signal: adapter starting")
 		}
 
 		// The Anki review queue (Phase 3 Task 3, PRD §19): ankiAgent

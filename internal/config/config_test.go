@@ -716,6 +716,90 @@ func TestSlackRejectsWrongTokenPrefix(t *testing.T) {
 	}
 }
 
+// TestSignalDefaults pins Signal's dormant-by-default contract: both
+// RPCURL and Number empty must boot clean, mirroring TestSlackDefaults
+// for the other opt-in channel adapter.
+func TestSignalDefaults(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Signal.RPCURL != "" || cfg.Signal.Number != "" {
+		t.Fatalf("Signal defaults = %+v, want both fields empty", cfg.Signal)
+	}
+}
+
+// TestSignalEnvOverrides pins the APP_SIGNAL_RPCURL/APP_SIGNAL_NUMBER
+// env var names exactly as documented.
+func TestSignalEnvOverrides(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_SIGNAL_RPCURL", "signal-cli:6006")
+	t.Setenv("APP_SIGNAL_NUMBER", "+15555550100")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Signal.RPCURL != "signal-cli:6006" || cfg.Signal.Number != "+15555550100" {
+		t.Fatalf("Signal = %+v, want overrides applied", cfg.Signal)
+	}
+}
+
+// TestSignalRequiresBothFieldsTogether pins validate's guard: a LONE
+// value (the other left at its empty default) is almost certainly a
+// misconfiguration, not the valid "dormant" state — only both-empty or
+// both-set are accepted. Mirrors TestSlackRequiresBothTokensTogether.
+func TestSignalRequiresBothFieldsTogether(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	onlyURL := base
+	onlyURL.Signal = Signal{RPCURL: "signal-cli:6006"}
+	if err := onlyURL.validate(); err == nil {
+		t.Fatal("expected a validation error for RPCURL set without Number")
+	}
+
+	onlyNumber := base
+	onlyNumber.Signal = Signal{Number: "+15555550100"}
+	if err := onlyNumber.validate(); err == nil {
+		t.Fatal("expected a validation error for Number set without RPCURL")
+	}
+
+	bothEmpty := base
+	if err := bothEmpty.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil for the dormant both-empty state", err)
+	}
+
+	bothSet := base
+	bothSet.Signal = Signal{RPCURL: "signal-cli:6006", Number: "+15555550100"}
+	if err := bothSet.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil for a well-formed both-set Signal config", err)
+	}
+}
+
+// TestSignalRejectsNonE164Number pins validate's second guard: Number,
+// once set, must carry a leading "+" — catching a pasted-without-the-
+// plus mistake at boot rather than at the adapter's first, silently
+// failing "send" call. Mirrors TestSlackRejectsWrongTokenPrefix.
+func TestSignalRejectsNonE164Number(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	bad := base
+	bad.Signal = Signal{RPCURL: "signal-cli:6006", Number: "15555550100"}
+	if err := bad.validate(); err == nil {
+		t.Fatal("expected a validation error for a Number missing its leading +")
+	}
+}
+
 // TestChannelsAllowFromValidation pins the config.validate() ->
 // ParseAllowFrom wiring: a malformed APP_CHANNELS_ALLOWFROM must fail
 // fast at boot, unconditionally (not gated behind Slack being enabled)

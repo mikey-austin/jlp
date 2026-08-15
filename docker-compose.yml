@@ -66,6 +66,14 @@ services:
       APP_SLACK_APPTOKEN: ${APP_SLACK_APPTOKEN:-}
       APP_SLACK_BOTTOKEN: ${APP_SLACK_BOTTOKEN:-}
       APP_SLACK_SMOKECHANNEL: ${APP_SLACK_SMOKECHANNEL:-}
+      # Signal channel adapter (Phase 4 Task 5, PRD §20/§20.1): both
+      # empty (the default) keeps it entirely dormant — see
+      # internal/config.Signal's doc comment. RPCURL points at the
+      # "signal-cli" service below (the "signal" profile — not started
+      # by `make up`; join it with `make up-signal`), which is
+      # in-network only, no host port published.
+      APP_SIGNAL_RPCURL: ${APP_SIGNAL_RPCURL:-}
+      APP_SIGNAL_NUMBER: ${APP_SIGNAL_NUMBER:-}
       APP_CHANNELS_ALLOWFROM: ${APP_CHANNELS_ALLOWFROM:-}
     depends_on:
       postgres: { condition: service_healthy }
@@ -160,6 +168,40 @@ services:
     volumes:
       - ./deploy/mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
 
+  signal-cli:
+    # signal-cli JSON-RPC daemon for the Signal channel adapter (Phase 4
+    # Task 5, PRD §20/§20.1): internal/adapters/signal dials this at
+    # tcp://signal-cli:6006 (APP_SIGNAL_RPCURL, set by `make up-signal`
+    # below) over a plain newline-delimited JSON-RPC 2.0 connection —
+    # see that package's own doc comment for the wire protocol. No
+    # host port published — in-network only, same "join it explicitly"
+    # posture as ollama/mailpit/mosquitto above (`--profile signal`).
+    #
+    # Deliberately started WITHOUT a `-a <number>` account of its own:
+    # internal/config.Signal.Number is instead sent as the JSON-RPC
+    # "account" param on every call this adapter makes, so the daemon
+    # itself never needs restarting just to point it at a different
+    # linked number. Until an account is actually linked (`make
+    # signal-register` — see deploy/signal/README.md, the phone-in-hand
+    # one-time step this repo cannot itself complete), every call the
+    # adapter makes gets back a "not registered" JSON-RPC error — logged,
+    # never fatal (see internal/adapters/signal's own doc comment) —
+    # which is the documented, expected state of a freshly started
+    # sidecar with no linked device yet.
+    # No official signal-cli Docker image exists on any registry (see
+    # deploy/signal/README.md) — deploy/signal/Dockerfile builds one
+    # from the pinned, checksummed upstream release tarball instead of
+    # trusting an arbitrary third-party image.
+    build: { context: deploy/signal }
+    profiles: ["signal"]
+    # --config pins the data directory explicitly (rather than relying
+    # on the image's own default) so the volume mount below is
+    # unambiguous: this is the ONLY place the linked device's keys
+    # live — losing it means re-linking from the phone again.
+    command: ["--config", "/var/lib/signal-cli", "daemon", "--tcp", "0.0.0.0:6006"]
+    volumes:
+      - signaldata:/var/lib/signal-cli
+
   authelia:
     # Pinned to the same 4.39 minor as deploy/compose.prod.yml (parity
     # between dev and prod) rather than the floating :4 tag — see that
@@ -171,7 +213,7 @@ services:
       - ./deploy/authelia/users.dev.yml:/config/users.yml:ro
       - autheliadata:/data
 
-volumes: { pgdata: {}, gomod: {}, gocache: {}, caddydata: {}, autheliadata: {}, ollamadata: {} }
+volumes: { pgdata: {}, gomod: {}, gocache: {}, caddydata: {}, autheliadata: {}, ollamadata: {}, signaldata: {} }
 
 networks:
   default:

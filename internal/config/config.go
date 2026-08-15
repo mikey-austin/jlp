@@ -20,6 +20,7 @@ type Config struct {
 	MQTT     MQTT
 	A2A      A2A
 	Slack    Slack
+	Signal   Signal
 	Channels Channels
 }
 
@@ -238,6 +239,43 @@ type Slack struct {
 	SmokeChannel string
 }
 
+// Signal configures Phase 4 Task 5's channel adapter
+// (internal/adapters/signal, PRD §20/§20.1): a `signal-cli` sidecar run
+// in JSON-RPC daemon mode over a plain TCP socket (docker-compose.yml's
+// "signal" profile — not started by default; see `make up-signal`),
+// with NO account baked into the sidecar's own startup command — every
+// JSON-RPC call the adapter makes names Number as the request's
+// "account" param instead, so the same sidecar could, in principle,
+// serve more than one linked number. RPCURL and Number both empty (the
+// default) keep the adapter entirely dormant: main.go never constructs
+// a signal.Adapter and no TCP connection is ever dialed, matching
+// Slack's own "dormant unless explicitly configured" contract above.
+// validate() below requires both to be set together (a lone value is
+// almost certainly a misconfiguration, same as Slack's paired-token
+// check) and, once Number is set, that it looks like an E.164 phone
+// number (leading "+") — catching a pasted-without-the-plus mistake at
+// boot rather than at the adapter's first, silently failing "send"
+// call.
+//
+// Linking a device (`signal-cli link`) requires scanning a QR/URI with
+// the user's own phone — see deploy/signal/README.md and `make
+// signal-register` — so this repo can build and unit-test the adapter,
+// but cannot itself complete registration or verify a live send/
+// receive; see that README's own "what wasn't verified" section.
+type Signal struct {
+	// RPCURL is the signal-cli daemon's JSON-RPC TCP address, host:port
+	// (e.g. "signal-cli:6006", docker-compose.yml's "signal" profile
+	// default) — no scheme, no path: internal/adapters/signal dials it
+	// directly with net.Dialer, the same way MQTT.URL is a bare broker
+	// URI for a different transport (see that field's own doc comment).
+	RPCURL string
+	// Number is the linked Signal account's own E.164 phone number
+	// (e.g. "+15555550100"), sent as the "account" param on every
+	// JSON-RPC call — required because the sidecar's daemon is started
+	// WITHOUT a `-a` account of its own (see this struct's doc comment).
+	Number string
+}
+
 // Channels configures the transport-agnostic channel port (Phase 4 Task
 // 4, PRD §20/§20.1) application/channel.Service composes on top of the
 // existing sessions/feedback/practice application services.
@@ -382,7 +420,8 @@ func Load() (Config, error) {
 		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes", "ai.agenticteacher",
 		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url",
 		"a2a.enabled", "a2a.path",
-		"slack.apptoken", "slack.bottoken", "slack.smokechannel", "channels.allowfrom"} {
+		"slack.apptoken", "slack.bottoken", "slack.smokechannel",
+		"signal.rpcurl", "signal.number", "channels.allowfrom"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}
@@ -479,6 +518,16 @@ func (c Config) validate() error {
 		if !strings.HasPrefix(c.Slack.BotToken, "xoxb-") {
 			return fmt.Errorf("config: APP_SLACK_BOTTOKEN must be a bot token (starts with \"xoxb-\")")
 		}
+	}
+	// Signal: both empty is the valid "dormant" state (see Signal's doc
+	// comment) — only a LONE value, or a Number that doesn't look like
+	// an E.164 number, is rejected. Mirrors the Slack pairing check
+	// immediately above.
+	if (c.Signal.RPCURL == "") != (c.Signal.Number == "") {
+		return fmt.Errorf("config: APP_SIGNAL_RPCURL and APP_SIGNAL_NUMBER must both be set, or both left empty to keep the Signal adapter dormant")
+	}
+	if c.Signal.Number != "" && !strings.HasPrefix(c.Signal.Number, "+") {
+		return fmt.Errorf("config: APP_SIGNAL_NUMBER must be an E.164 phone number (starts with \"+\")")
 	}
 	// APP_CHANNELS_ALLOWFROM is validated unconditionally (not gated
 	// behind Slack or any other channel being enabled): it's cheap to

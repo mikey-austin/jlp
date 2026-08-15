@@ -33,6 +33,8 @@ up                 Start the dev stack (app + postgres)
 up-auth            Start dev stack including Caddy + Authelia (https://jlp.localhost:8443)
 up-mail            Start the dev stack plus Mailpit (SMTP capture UI at http://localhost:8025) for the weekly summary
 up-mqtt            Start the dev stack plus mosquitto (MQTT event bridge, PRD §31-33/§12/§59), app pointed at it
+up-signal          Start the dev stack plus the signal-cli JSON-RPC sidecar (Signal channel adapter, PRD §20/§20.1), app pointed at it
+signal-register    One-time Signal device link: prints a QR/URI to scan with the Signal app on the account's phone (needs `make up-signal` first; see deploy/signal/README.md)
 ollama-pull        Pull a local model into the ollama service (m=qwen3:4b), starting it if needed
 down               Stop the stack (including profile-gated services like Caddy/Authelia)
 restart            Restart the app service
@@ -485,6 +487,74 @@ network, no real Slack connection) — see
 `internal/adapters/slack/slack_test.go`. `make slack-smoke` is the only
 way to confirm real Slack credentials actually work, and requires the
 person running it to supply their own bot token and app-level token.
+
+## Signal channel adapter (PRD §20, §20.1)
+
+`internal/adapters/signal` (Phase 4 Task 5) is the second concrete
+`Channel` implementation over the same `ports/channels`/
+`application/channel.Service` pipeline the Slack section above
+describes — a Signal message gets no privilege, and no different
+socratic-gating behaviour, a Slack message or an HTTP request wouldn't
+also get. It talks to a
+[`signal-cli`](https://github.com/AsamK/signal-cli) sidecar running in
+JSON-RPC daemon mode over a plain TCP socket, newline-delimited JSON-RPC
+2.0 in both directions on one connection (this adapter's own `send`/
+`subscribeReceive` calls interleaved with the daemon's unsolicited
+`receive` notifications for inbound messages) — see that package's own
+doc comment for the exact wire protocol.
+
+**Dormant by default**: both `APP_SIGNAL_RPCURL` and `APP_SIGNAL_NUMBER`
+empty (the default) keeps the adapter entirely unconstructed —
+`cmd/jlp/main.go` never dials the sidecar. Setting only one of the two
+is rejected at boot (`config.validate()`), as is an `APP_SIGNAL_NUMBER`
+that isn't E.164 (missing its leading `+`).
+
+**Sidecar, not baked-in account**: the `signal-cli` compose service (the
+`signal` profile — not started by `make up`; join it with `make
+up-signal`) starts with no `-a <number>` of its own. `APP_SIGNAL_NUMBER`
+is instead sent as the `"account"` param on every JSON-RPC call this
+adapter makes, so the sidecar's own command line never needs to change
+just to point at a different linked number.
+
+**Routing** is identical to Slack's own table above (Japanese text →
+compact correction, `practice`/練習 → drill, `help`/ヘルプ → command
+list) — `application/channel.Service` doesn't distinguish which channel
+sent the message. A Signal channel session's title is `"Signal —
+<sender's E.164 number>"`; `APP_CHANNELS_ALLOWFROM` entries for Signal
+look like `signal:+15555550100=dev`, keyed on the sender's own number
+(the untrusted edge, same contract as Slack's — see that section above).
+
+```sh
+make up-signal          # starts postgres + app + signal-cli, app pointed at tcp://signal-cli:6006
+make signal-register    # one-time device link — prints a QR/URI to scan with the account's phone (see deploy/signal/README.md)
+# then set APP_SIGNAL_RPCURL, APP_SIGNAL_NUMBER, APP_CHANNELS_ALLOWFROM in .env and:
+make restart
+```
+
+**Honesty**: linking a device requires scanning that QR/URI with a
+phone that owns the number — there's no credential-free way around
+that, by Signal's own design. This repo built and unit-tested the
+adapter fully offline (a fake transport, plus a real in-memory TCP
+listener standing in for signal-cli's JSON-RPC protocol — see
+`internal/adapters/signal/signal_test.go`) and confirmed the sidecar's
+real JSON-RPC endpoint responds correctly to a dry run against an
+unlinked account (a `"not registered"` JSON-RPC error — the expected,
+documented evidence the wiring is correct). **Live Signal send/receive
+was never exercised** — see `deploy/signal/README.md` for the full
+device-link procedure and the exact dry-run transcript.
+
+## WhatsApp: deferred, documented, not stubbed
+
+WhatsApp shares the same `ports/channels.Channel` port Slack and Signal
+implement, but **no `internal/adapters/whatsapp` code exists** — not
+even a stub. It requires a Meta Business account, an approved WhatsApp
+Business phone number, and public HTTPS ingress for inbound webhooks,
+none of which exist for this project and none of which this task
+attempted to obtain. `docs/api/whatsapp-notes.md` documents exactly what
+the adapter would need — the webhook route and verify-token handshake,
+the inbound payload shape, the Cloud API send call, config shape — and
+why building against credentials nobody has would be an elaborate stub
+wearing an adapter's shape, not working code.
 
 ## Deploying
 
