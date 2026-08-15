@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -81,41 +82,57 @@ func (r *AnkiCardRepository) UpdateStatus(ctx context.Context, identity learner.
 	return fromAnkiCardRow(row), nil
 }
 
-// ApprovedForExport returns every "approved" card for identity, oldest
-// first.
-func (r *AnkiCardRepository) ApprovedForExport(ctx context.Context, identity learner.IdentityID) ([]storage.AnkiCard, error) {
-	rows, err := r.q.ApprovedAnkiCardsForExport(ctx, string(identity))
+// TakeApprovedForExport atomically reads every "approved" card for
+// identity and marks them "exported", in ONE transaction: SELECT ...
+// FOR UPDATE (row-locking, serializing concurrent callers for the same
+// identity) followed by an UPDATE restricted to exactly the ids that
+// SELECT returned — see storage.AnkiCardRepository's doc comment for
+// the full concurrency contract this implements, and
+// db/queries/anki.sql's SelectApprovedAnkiCardsForUpdate/
+// MarkAnkiCardsExportedByIDs doc comments for the two statements this
+// runs. at is accepted (future use / clock injection) but not
+// persisted — see the port's doc comment.
+func (r *AnkiCardRepository) TakeApprovedForExport(ctx context.Context, identity learner.IdentityID, _ time.Time) ([]storage.AnkiCard, error) {
+	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return nil, err
 	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has succeeded
+	qtx := r.q.WithTx(tx)
+
+	rows, err := qtx.SelectApprovedAnkiCardsForUpdate(ctx, string(identity))
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, tx.Commit(ctx)
+	}
+
+	ids := make([]pgtype.UUID, 0, len(rows))
+	for _, row := range rows {
+		ids = append(ids, row.ID)
+	}
+	if err := qtx.MarkAnkiCardsExportedByIDs(ctx, sqlcgen.MarkAnkiCardsExportedByIDsParams{
+		IdentityID: string(identity),
+		Ids:        ids,
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, err
+	}
+
+	// rows themselves still read "approved" (that's what SELECT saw
+	// before the UPDATE above) — the returned cards must reflect the
+	// post-commit truth instead.
 	cards := make([]storage.AnkiCard, 0, len(rows))
 	for _, row := range rows {
-		cards = append(cards, fromAnkiCardRow(row))
+		c := fromAnkiCardRow(row)
+		c.Status = "exported"
+		cards = append(cards, c)
 	}
 	return cards, nil
-}
-
-// MarkExported flips exactly the given ids to "exported", scoped to
-// identity and restricted to cards still "approved" (see
-// db/queries/anki.sql's MarkAnkiCardsExported doc comment: calling it
-// twice with the same ids is a safe no-op the second time). An empty
-// ids is a no-op — no query is issued.
-func (r *AnkiCardRepository) MarkExported(ctx context.Context, identity learner.IdentityID, ids []string) error {
-	if len(ids) == 0 {
-		return nil
-	}
-	uuids := make([]pgtype.UUID, 0, len(ids))
-	for _, id := range ids {
-		u, err := parseUUID(id)
-		if err != nil {
-			return fmt.Errorf("anki card id: %w", err)
-		}
-		uuids = append(uuids, u)
-	}
-	return r.q.MarkAnkiCardsExported(ctx, sqlcgen.MarkAnkiCardsExportedParams{
-		IdentityID: string(identity),
-		Ids:        uuids,
-	})
 }
 
 func fromAnkiCardRow(row sqlcgen.AnkiCard) storage.AnkiCard {

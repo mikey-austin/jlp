@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -168,32 +169,18 @@ func (s *Service) SetStatus(ctx context.Context, identity learner.IdentityID, ca
 
 // ExportTSV builds a `front\tback\n`-per-row, no-header TSV (Anki's
 // default plain-text import format) from every currently "approved"
-// card, marks exactly those cards "exported", and records one
+// card, atomically marks exactly those cards "exported" (via
+// repo.TakeApprovedForExport — see that method's doc comment for the
+// single-transaction/concurrency contract this relies on, per the
+// controller's ruling on Phase 3 Task 3's code review), and records one
 // anki.card.exported event per card. It returns the TSV bytes plus the
 // exported card IDs; a caller with nothing approved gets an empty,
-// zero-length TSV back (not an error).
-//
-// Atomicity note: repo.ApprovedForExport and repo.MarkExported are two
-// separate calls (see storage.AnkiCardRepository — MarkExported also
-// backs PushToAnkiConnect's read-then-push-then-mark flow, where a real
-// network call to AnkiConnect necessarily sits BETWEEN the read and the
-// mark, so the two could never share one SQL transaction anyway). For
-// THIS caller specifically there's no such gap: MarkExported is called
-// immediately afterward with exactly the ids ApprovedForExport just
-// returned — never a broader "mark everything approved" — and
-// repo.MarkExported's own WHERE clause is restricted to still-
-// "approved" rows (idempotent). That closes the practical risk this
-// method's "no double export on an immediate second call" contract
-// cares about: by the time a second, later ExportTSV call's own read
-// runs, the first call's mark has already committed. A genuinely
-// concurrent pair of calls from the same identity remains a narrow,
-// accepted race in this single-operator app — true row-level locking
-// across both statements would need a repository method this port
-// doesn't expose.
+// zero-length TSV back (not an error). Front/Back are sanitized before
+// being written — see sanitizeTSVField.
 func (s *Service) ExportTSV(ctx context.Context, identity learner.IdentityID) ([]byte, []string, error) {
-	cards, err := s.repo.ApprovedForExport(ctx, identity)
+	cards, err := s.repo.TakeApprovedForExport(ctx, identity, time.Now().UTC())
 	if err != nil {
-		return nil, nil, fmt.Errorf("anki: list approved cards: %w", err)
+		return nil, nil, fmt.Errorf("anki: take approved cards: %w", err)
 	}
 	if len(cards) == 0 {
 		return []byte{}, nil, nil
@@ -202,15 +189,11 @@ func (s *Service) ExportTSV(ctx context.Context, identity learner.IdentityID) ([
 	var buf bytes.Buffer
 	ids := make([]string, 0, len(cards))
 	for _, c := range cards {
-		buf.WriteString(c.Front)
+		buf.WriteString(sanitizeTSVField(c.Front))
 		buf.WriteByte('\t')
-		buf.WriteString(c.Back)
+		buf.WriteString(sanitizeTSVField(c.Back))
 		buf.WriteByte('\n')
 		ids = append(ids, c.ID)
-	}
-
-	if err := s.repo.MarkExported(ctx, identity, ids); err != nil {
-		return nil, nil, fmt.Errorf("anki: mark exported: %w", err)
 	}
 
 	// recordExported logs-and-continues on its own failures (see its doc
@@ -221,23 +204,63 @@ func (s *Service) ExportTSV(ctx context.Context, identity learner.IdentityID) ([
 	return buf.Bytes(), ids, nil
 }
 
-// PushToAnkiConnect pushes every currently "approved" card straight
+// sanitizeTSVField makes s safe to write as one column of one row of a
+// tab-separated file: an embedded tab would otherwise be indistinguishable
+// from the column separator (silently shifting every field after it into
+// the wrong column for that row), and an embedded newline would end the
+// row early, splitting one card into two garbled lines in Anki's importer.
+// This is not a hypothetical: the canned anki_card.v1 fixture's own Back
+// ("「とても面白かったです」\n\n理由: ...") — and, more importantly, the
+// anki.generate.v1 prompt's own instruction to write a 理由 on its own
+// line — makes an embedded newline the EXPECTED shape of a real Back, not
+// an edge case. \r\n is replaced before the lone \n/\r cases so a Windows-
+// style line ending becomes exactly one "<br>", not two. Anki's Basic note
+// type renders <br> as a line break in its HTML-capable fields, so this is
+// the same visual result the learner would see if newlines survived
+// intact — just encoded in a way the TSV format itself can carry safely.
+func sanitizeTSVField(s string) string {
+	s = strings.ReplaceAll(s, "\t", " ")
+	s = strings.ReplaceAll(s, "\r\n", "<br>")
+	s = strings.ReplaceAll(s, "\n", "<br>")
+	s = strings.ReplaceAll(s, "\r", "<br>")
+	return s
+}
+
+// PushToAnkiConnect atomically takes every currently "approved" card
+// (repo.TakeApprovedForExport — the same primitive ExportTSV uses,
+// marking them "exported" up front, in one transaction) and pushes them
 // into a running Anki instance via the wired AnkiConnector (see
-// SetConnector), then marks the ones AddNotes actually reports having
-// added as "exported" and records anki.card.exported for each. It
-// returns ErrAnkiConnectNotConfigured, unchanged, when no connector has
-// been wired — the caller (the /anki page's handler) should never reach
-// this in the first place when the 「Ankiへ送信」 button is correctly
-// hidden, but the check stays here too so the guarantee holds
-// regardless of what the UI does.
+// SetConnector), recording anki.card.exported for each once the push
+// has actually succeeded. It returns ErrAnkiConnectNotConfigured,
+// unchanged, when no connector has been wired — the caller (the /anki
+// page's handler) should never reach this in the first place when the
+// 「Ankiへ送信」 button is correctly hidden, but the check stays here too
+// so the guarantee holds regardless of what the UI does.
+//
+// Because TakeApprovedForExport marks cards "exported" BEFORE the
+// AnkiConnect call (there's no way to keep that atomic AND defer the
+// mark until after a real network round trip — see the port's doc
+// comment), a failed or partial AddNotes call reverts every taken card
+// back to "approved" via repo.UpdateStatus (the same method SetStatus
+// uses for an ordinary approve/reject) so a card AnkiConnect never
+// actually received is never left silently "exported" — it stays in
+// the review queue for the learner to retry, exactly like before this
+// method existed in its current (atomic-take) shape. This trades one
+// failure mode for a narrower one: if AddNotes fails AND the revert's
+// UpdateStatus call ALSO fails (two independent failures), the card is
+// stuck "exported" without ever reaching Anki — logged, not silently
+// swallowed, but not automatically recovered either. AnkiConnect push
+// is dormant by default and unit-tested only in this task (no live Anki
+// instance), so this narrow double-failure window is an accepted,
+// documented tradeoff rather than something worth more machinery here.
 func (s *Service) PushToAnkiConnect(ctx context.Context, identity learner.IdentityID) (int, error) {
 	if s.connector == nil {
 		return 0, ErrAnkiConnectNotConfigured
 	}
 
-	cards, err := s.repo.ApprovedForExport(ctx, identity)
+	cards, err := s.repo.TakeApprovedForExport(ctx, identity, time.Now().UTC())
 	if err != nil {
-		return 0, fmt.Errorf("anki: list approved cards: %w", err)
+		return 0, fmt.Errorf("anki: take approved cards: %w", err)
 	}
 	if len(cards) == 0 {
 		return 0, nil
@@ -245,6 +268,7 @@ func (s *Service) PushToAnkiConnect(ctx context.Context, identity learner.Identi
 
 	added, err := s.connector.AddNotes(ctx, cards)
 	if err != nil {
+		s.revertToApproved(ctx, identity, cards)
 		return 0, fmt.Errorf("anki: push to ankiconnect: %w", err)
 	}
 
@@ -252,46 +276,39 @@ func (s *Service) PushToAnkiConnect(ctx context.Context, identity learner.Identi
 	// which ones (AnkiConnect's addNotes response is a parallel array of
 	// note IDs / nulls per input — see adapters/ankiconnect's doc
 	// comment). Rather than guess which subset succeeded, this method
-	// only marks the whole batch exported when EVERY card was accepted;
-	// a partial success is surfaced as an error so the learner can retry
-	// (approved cards stay approved, never silently lost) instead of
-	// mismarking cards Anki never actually received.
+	// requires EVERY card to have been accepted before treating the
+	// batch as exported; a partial success reverts the WHOLE batch back
+	// to "approved" (never silently left "exported" for a card Anki
+	// didn't actually take) so the learner can retry.
 	if added != len(cards) {
+		s.revertToApproved(ctx, identity, cards)
 		return added, fmt.Errorf("anki: ankiconnect accepted %d of %d cards", added, len(cards))
-	}
-
-	ids := make([]string, 0, len(cards))
-	for _, c := range cards {
-		ids = append(ids, c.ID)
-	}
-	// Known limitation: if MarkExported itself fails here (a transient DB
-	// error), AddNotes has ALREADY durably succeeded against the real
-	// Anki instance, but these cards stay "approved" in our own storage
-	// — the two systems are now out of sync. A learner who retries sees
-	// their own already-pushed cards re-submitted; AnkiConnect typically
-	// rejects exact duplicates (a null entry in its response, the same
-	// shape as any other rejection this adapter can't distinguish — see
-	// adapters/ankiconnect's doc comment), so the retry's `added` comes
-	// back 0 and trips the "accepted 0 of N" branch above with a
-	// confusing message for cards that are, in fact, already in Anki.
-	// added is still returned (not discarded) below and in ankiPush's
-	// error-path rendering, so the learner at least sees a nonzero count
-	// alongside the failure rather than a bare error. A full fix (making
-	// this genuinely idempotent against AnkiConnect's own duplicate
-	// semantics) is out of scope here — AnkiConnect push is dormant by
-	// default and unit-tested only in this task (no live Anki instance).
-	if err := s.repo.MarkExported(ctx, identity, ids); err != nil {
-		return added, fmt.Errorf("anki: mark exported: %w", err)
 	}
 
 	// recordExported logs-and-continues on its own failures (see its doc
 	// comment) — AnkiConnect has already accepted every card and
-	// MarkExported has already committed, so the push genuinely
-	// succeeded; a recording hiccup must not turn that into a reported
-	// failure.
+	// TakeApprovedForExport already committed the "exported" mark, so
+	// the push genuinely succeeded; a recording hiccup must not turn
+	// that into a reported failure.
 	s.recordExported(ctx, identity, cards)
 
 	return added, nil
+}
+
+// revertToApproved undoes a TakeApprovedForExport take for cards whose
+// subsequent AnkiConnect push failed or was only partially accepted —
+// see PushToAnkiConnect's doc comment for why this, not a DB
+// transaction spanning the network call, is how that safety property is
+// restored. Failures here are logged, not propagated: the caller
+// already has a real error to report (the AddNotes failure or partial
+// acceptance), and a revert failure on top of that is the narrow,
+// documented double-failure window that same doc comment describes.
+func (s *Service) revertToApproved(ctx context.Context, identity learner.IdentityID, cards []storage.AnkiCard) {
+	for _, c := range cards {
+		if _, err := s.repo.UpdateStatus(ctx, identity, c.ID, "approved"); err != nil {
+			slog.Error("revert anki card to approved after failed ankiconnect push", "identity", identity, "card", c.ID, "err", err)
+		}
+	}
 }
 
 // recordExported records one anki.card.exported event per card in
@@ -301,9 +318,10 @@ func (s *Service) PushToAnkiConnect(ctx context.Context, identity learner.Identi
 // Deliberately log-and-continue, not hard-fail (unlike
 // application/feedback.Service's own event-recording, which DOES
 // hard-fail — see that package's RequestFeedback doc comment): by the
-// time this runs, repo.MarkExported has ALREADY durably committed
-// (ExportTSV) or AnkiConnect has already accepted every card AND
-// MarkExported has committed (PushToAnkiConnect) — the real, valuable
+// time this runs, repo.TakeApprovedForExport has ALREADY durably
+// committed the "exported" mark (both callers use it), and
+// PushToAnkiConnect additionally only reaches this call once
+// AnkiConnect has accepted every card too — the real, valuable
 // work is done. Nothing downstream subscribes to anki.card.exported the
 // way learnermodel.Updater subscribes to correction.presented/
 // grammar.concept.encountered (see cmd/jlp/main.go's bus.Subscribe

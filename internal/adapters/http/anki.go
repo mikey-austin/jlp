@@ -129,11 +129,11 @@ func (s *Server) ankiExportTSV(w http.ResponseWriter, r *http.Request) {
 // so this handler is safe even if reached some other way. Renders the
 // "anki_push_result" partial with a count or an error message. Added is
 // included alongside Error too (not just on the success path):
-// PushToAnkiConnect can fail AFTER AddNotes already succeeded (e.g. the
-// follow-up MarkExported write errors — see that method's own doc
-// comment) and still returns however many cards were actually pushed,
-// so the learner sees that count rather than a bare, uninformative
-// failure message.
+// PushToAnkiConnect's partial-acceptance case (AnkiConnect accepted
+// some but not all of the batch — see that method's own doc comment)
+// still reports how many WERE accepted even though the whole batch gets
+// reverted back to "approved", so the learner sees that count rather
+// than a bare, uninformative failure message.
 func (s *Server) ankiPush(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 

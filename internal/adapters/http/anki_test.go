@@ -67,26 +67,21 @@ func (f *fakeAnkiCardRepo) UpdateStatus(_ context.Context, identity learner.Iden
 	return c, nil
 }
 
-func (f *fakeAnkiCardRepo) ApprovedForExport(_ context.Context, identity learner.IdentityID) ([]storage.AnkiCard, error) {
+// TakeApprovedForExport mirrors the real postgres repository's
+// read+mark atomicity closely enough for these single-goroutine HTTP
+// tests (see application/anki/service_test.go's own fake for the
+// concurrency-safe version, and adapters/postgres/anki_test.go's
+// integration test for the real concurrent-callers proof).
+func (f *fakeAnkiCardRepo) TakeApprovedForExport(_ context.Context, identity learner.IdentityID, _ time.Time) ([]storage.AnkiCard, error) {
 	var out []storage.AnkiCard
-	for _, c := range f.byID {
+	for id, c := range f.byID {
 		if c.IdentityID == identity && c.Status == "approved" {
+			c.Status = "exported"
+			f.byID[id] = c
 			out = append(out, c)
 		}
 	}
 	return out, nil
-}
-
-func (f *fakeAnkiCardRepo) MarkExported(_ context.Context, identity learner.IdentityID, ids []string) error {
-	for _, id := range ids {
-		c, ok := f.byID[id]
-		if !ok || c.IdentityID != identity || c.Status != "approved" {
-			continue
-		}
-		c.Status = "exported"
-		f.byID[id] = c
-	}
-	return nil
 }
 
 // fakeConnector is an appanki.AnkiConnector test double for HTTP-layer

@@ -47,14 +47,38 @@ type AnkiCardRepository interface {
 	// UpdateStatus sets id's status (application/anki.Service.SetStatus
 	// validates it's "approved" or "rejected" before calling this) and
 	// returns the updated card. A wrong identity or unknown id both miss
-	// with ErrNotFound.
+	// with ErrNotFound. Also used internally by
+	// application/anki.Service.PushToAnkiConnect to revert a card taken
+	// by TakeApprovedForExport back to "approved" when the AnkiConnect
+	// push fails — status is not restricted to an enum here, so that
+	// revert is just an ordinary UpdateStatus(ctx, identity, id,
+	// "approved") call, no separate method needed.
 	UpdateStatus(ctx context.Context, identity learner.IdentityID, id, status string) (AnkiCard, error)
-	// ApprovedForExport returns every "approved" card for identity,
-	// oldest first — the set ExportTSV and PushToAnkiConnect both read
-	// from before deciding what to mark exported.
-	ApprovedForExport(ctx context.Context, identity learner.IdentityID) ([]AnkiCard, error)
-	// MarkExported flips exactly the given ids to "exported", scoped to
-	// identity and restricted to cards still "approved" — calling it
-	// twice with the same ids is a safe no-op the second time.
-	MarkExported(ctx context.Context, identity learner.IdentityID, ids []string) error
+	// TakeApprovedForExport atomically reads every "approved" card for
+	// identity AND marks them "exported", in ONE transaction (postgres:
+	// SELECT ... FOR UPDATE, then UPDATE ... for exactly those ids),
+	// returning the taken cards (with Status already "exported"). This
+	// replaced a separate ApprovedForExport+MarkExported pair (Phase 3
+	// Task 3 code review, finding 2): those were two sequential,
+	// non-transactional calls, which left a real (if narrow) race for
+	// two concurrent callers of the same identity to both read the same
+	// approved set before either one marked it, double-exporting rows.
+	//
+	// Concurrency contract: two callers racing for the same identity get
+	// DISJOINT results — the row lock SELECT ... FOR UPDATE takes means
+	// exactly one caller's transaction proceeds first and sees (and
+	// takes) the full approved set; any other concurrent caller either
+	// blocks until the first commits (then sees nothing left approved,
+	// so returns empty) or, under a stricter isolation level, would
+	// itself fail — either way, no card is ever handed to two callers.
+	// at is accepted for future use / caller-controlled clock injection
+	// (this codebase's usual "inject the clock" convention) but is not
+	// currently persisted anywhere (anki_cards has no exported_at
+	// column).
+	//
+	// A caller that needs to undo a take (e.g.
+	// application/anki.Service.PushToAnkiConnect, when the subsequent
+	// AnkiConnect push fails) does so via UpdateStatus(ctx, identity,
+	// id, "approved") per card — see that method's doc comment.
+	TakeApprovedForExport(ctx context.Context, identity learner.IdentityID, at time.Time) ([]AnkiCard, error)
 }

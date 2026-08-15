@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"    //nolint:depguard // fakeai/inprocbus are port-shaped test doubles; PRD §75 forbids agents/application importing real adapters, not fakes constructed in tests
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus" //nolint:depguard // see fakeai above
@@ -22,8 +24,12 @@ const testIdentity = learner.IdentityID("learner-a")
 // fakeAnkiCardRepo is an in-memory storage.AnkiCardRepository:
 // identity-scoped UpdateStatus, same miss semantics as the real
 // postgres adapter — mirrors internal/application/practice/
-// service_test.go's fakeExerciseRepo shape.
+// service_test.go's fakeExerciseRepo shape. mu guards every method
+// (not just TakeApprovedForExport) so this double is safe to drive from
+// concurrent goroutines the same way the real postgres repository's
+// per-transaction locking is.
 type fakeAnkiCardRepo struct {
+	mu   sync.Mutex
 	byID map[string]storage.AnkiCard
 }
 
@@ -32,11 +38,15 @@ func newFakeAnkiCardRepo() *fakeAnkiCardRepo {
 }
 
 func (f *fakeAnkiCardRepo) Insert(_ context.Context, c storage.AnkiCard) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.byID[c.ID] = c
 	return nil
 }
 
 func (f *fakeAnkiCardRepo) List(_ context.Context, identity learner.IdentityID, status string) ([]storage.AnkiCard, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []storage.AnkiCard
 	for _, c := range f.byID {
 		if c.IdentityID != identity {
@@ -51,6 +61,8 @@ func (f *fakeAnkiCardRepo) List(_ context.Context, identity learner.IdentityID, 
 }
 
 func (f *fakeAnkiCardRepo) UpdateStatus(_ context.Context, identity learner.IdentityID, id, status string) (storage.AnkiCard, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	c, ok := f.byID[id]
 	if !ok || c.IdentityID != identity {
 		return storage.AnkiCard{}, storage.ErrNotFound
@@ -60,26 +72,23 @@ func (f *fakeAnkiCardRepo) UpdateStatus(_ context.Context, identity learner.Iden
 	return c, nil
 }
 
-func (f *fakeAnkiCardRepo) ApprovedForExport(_ context.Context, identity learner.IdentityID) ([]storage.AnkiCard, error) {
+// TakeApprovedForExport mirrors the real postgres repository's
+// SELECT-FOR-UPDATE-then-UPDATE atomicity: holding mu for the whole
+// read+mark means two goroutines calling this concurrently for the same
+// identity can never both see the same approved row — mirrors
+// storage.AnkiCardRepository's documented concurrency contract.
+func (f *fakeAnkiCardRepo) TakeApprovedForExport(_ context.Context, identity learner.IdentityID, _ time.Time) ([]storage.AnkiCard, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []storage.AnkiCard
-	for _, c := range f.byID {
+	for id, c := range f.byID {
 		if c.IdentityID == identity && c.Status == "approved" {
+			c.Status = "exported"
+			f.byID[id] = c
 			out = append(out, c)
 		}
 	}
 	return out, nil
-}
-
-func (f *fakeAnkiCardRepo) MarkExported(_ context.Context, identity learner.IdentityID, ids []string) error {
-	for _, id := range ids {
-		c, ok := f.byID[id]
-		if !ok || c.IdentityID != identity || c.Status != "approved" {
-			continue
-		}
-		c.Status = "exported"
-		f.byID[id] = c
-	}
-	return nil
 }
 
 // fakeFeedbackRepo is a minimal storage.FeedbackRepository double: Anki
@@ -393,6 +402,14 @@ func approvedCard(t *testing.T, h *testHarness, correctionID string) storage.Ank
 
 // TestExportTSVFormatAndMarksExported pins the brief's TSV format
 // (`front\tback\n`, no header) and the status transition to "exported".
+// The canned card's own Back — "「とても面白かったです」\n\n理由: ..." —
+// already contains an embedded blank line (exactly the shape the
+// anki.generate.v1 prompt asks the model to produce for every real
+// card: corrected form, then a blank line, then 理由 on its own line),
+// so this is also the canonical sanitization case, not a contrived one:
+// the exported line must still be exactly ONE line with exactly ONE
+// tab, with the embedded newlines turned into "<br>" rather than
+// splitting the TSV record.
 func TestExportTSVFormatAndMarksExported(t *testing.T) {
 	h := newTestHarness()
 	card := approvedCard(t, h, "corr-1")
@@ -401,17 +418,81 @@ func TestExportTSVFormatAndMarksExported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ExportTSV returned error: %v", err)
 	}
-	want := card.Front + "\t" + card.Back + "\n"
+	if !strings.Contains(card.Back, "\n") {
+		t.Fatal("precondition failed: the canned card's Back has no embedded newline to sanitize")
+	}
+	wantBack := strings.ReplaceAll(card.Back, "\n", "<br>")
+	want := card.Front + "\t" + wantBack + "\n"
 	if string(tsv) != want {
 		t.Fatalf("tsv = %q, want %q", tsv, want)
 	}
 	if len(ids) != 1 || ids[0] != card.ID {
 		t.Fatalf("ids = %v, want [%s]", ids, card.ID)
 	}
+	// The card's Back has an embedded blank line (two "\n"s) — proving
+	// they were sanitized away, not just that SOME substitution
+	// happened, requires counting: exactly one newline in the whole
+	// export (the row terminator), matching len(cards)=1.
+	if got := strings.Count(string(tsv), "\n"); got != 1 {
+		t.Fatalf("newline count = %d, want 1 (one row terminator per card; the embedded \\n\\n in Back must not survive)", got)
+	}
+	if got := strings.Count(string(tsv), "\t"); got != 1 {
+		t.Fatalf("tab count = %d, want 1 (exactly one front/back separator)", got)
+	}
 
 	got := h.cards.byID[card.ID]
 	if got.Status != "exported" {
 		t.Fatalf("Status = %q, want exported", got.Status)
+	}
+}
+
+// TestExportTSVSanitizesEmbeddedTabsAndNewlines pins the fix directly
+// against a fabricated card whose Back contains a tab AND every kind of
+// line ending (\n, \r\n, \r) — the exact scenario the code review's
+// Finding 1 called out: a raw embedded tab/newline corrupts the TSV
+// record it appears in (a tab shifts every later field into the wrong
+// column for that row; a newline ends the row early, splitting one
+// card into two garbled lines in Anki's importer).
+func TestExportTSVSanitizesEmbeddedTabsAndNewlines(t *testing.T) {
+	h := newTestHarness()
+	card := storage.AnkiCard{
+		ID:         "card-with-tricky-fields",
+		IdentityID: testIdentity,
+		SourceType: "correction",
+		SourceID:   "corr-1",
+		Front:      "front\twith\ttabs",
+		Back:       "A\n\n理由: B\r\nC\rD",
+		Status:     "approved",
+		CreatedAt:  time.Now().UTC(),
+	}
+	if err := h.cards.Insert(context.Background(), card); err != nil {
+		t.Fatalf("Insert returned error: %v", err)
+	}
+
+	tsv, ids, err := h.svc.ExportTSV(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("ExportTSV returned error: %v", err)
+	}
+	want := "front with tabs\tA<br><br>理由: B<br>C<br>D\n"
+	if string(tsv) != want {
+		t.Fatalf("tsv = %q, want %q", tsv, want)
+	}
+	if len(ids) != 1 || ids[0] != card.ID {
+		t.Fatalf("ids = %v, want [%s]", ids, card.ID)
+	}
+	// Exactly one line (one card, one row terminator) — not the several
+	// an unsanitized embedded "\n\n" plus "\r\n" plus "\r" would produce.
+	if got := strings.Count(string(tsv), "\n"); got != 1 {
+		t.Fatalf("newline count = %d, want 1 (== number of cards)", got)
+	}
+	// Exactly one tab (the front/back column separator) — the embedded
+	// tabs in Front must have been replaced with spaces, not left to
+	// masquerade as extra column separators.
+	if got := strings.Count(string(tsv), "\t"); got != 1 {
+		t.Fatalf("tab count = %d, want 1 (the embedded tabs in Front must be sanitized, not counted as separators)", got)
+	}
+	if !strings.Contains(string(tsv), "<br>") {
+		t.Fatal("tsv missing the <br> substitution for embedded newlines")
 	}
 }
 
@@ -442,11 +523,18 @@ func TestExportTSVExcludesRejectedAndDraft(t *testing.T) {
 	if len(ids) != 1 || ids[0] != approved.ID {
 		t.Fatalf("ids = %v, want exactly [%s] (draft/rejected excluded)", ids, approved.ID)
 	}
-	// One tab per row (the front\tback separator) — not "\n" count,
-	// since the canned back text itself contains an embedded "\n\n"
-	// (the front/理由 line break) unrelated to row separation.
-	if strings.Count(string(tsv), "\t") != 1 {
-		t.Fatalf("tsv = %q, want exactly one row (one tab separator)", tsv)
+	// Exactly one row: one tab (front/back separator) AND one newline
+	// (row terminator). Asserting on "\n" count is safe now that
+	// ExportTSV sanitizes embedded newlines (see sanitizeTSVField) —
+	// the canned back text's own embedded "\n\n" (the front/理由 line
+	// break) is turned into "<br>" before this count runs, so a
+	// newline-count of 1 genuinely means "one card," not an artifact of
+	// picking a metric that happened to dodge the multi-line back text.
+	if got := strings.Count(string(tsv), "\t"); got != 1 {
+		t.Fatalf("tab count = %d, want exactly 1", got)
+	}
+	if got := strings.Count(string(tsv), "\n"); got != 1 {
+		t.Fatalf("newline count = %d, want exactly 1 (== number of exported cards)", got)
 	}
 }
 
@@ -530,7 +618,7 @@ func TestExportTSVSurvivesEventRecordFailure(t *testing.T) {
 		t.Fatalf("ids = %v, want [%s]", ids, card.ID)
 	}
 	if h.cards.byID[card.ID].Status != "exported" {
-		t.Fatalf("Status = %q, want exported (MarkExported already committed before the failed Record call)", h.cards.byID[card.ID].Status)
+		t.Fatalf("Status = %q, want exported (TakeApprovedForExport already committed before the failed Record call)", h.cards.byID[card.ID].Status)
 	}
 }
 
@@ -571,9 +659,12 @@ func TestPushToAnkiConnectHappyPathMarksExported(t *testing.T) {
 }
 
 // TestPushToAnkiConnectPartialFailureDoesNotMarkExported pins the
-// "only mark exported when every card was accepted" safety rule: a
-// partial AddNotes result leaves the approved card untouched (never
-// silently lost) and surfaces as an error.
+// "only leave exported when every card was accepted" safety rule:
+// TakeApprovedForExport marks the card "exported" up front (it must, to
+// be atomic with the read — see storage.AnkiCardRepository's doc
+// comment), but a partial AddNotes result reverts it straight back to
+// "approved" (never silently left "exported" for a card Anki didn't
+// actually take) and surfaces as an error.
 func TestPushToAnkiConnectPartialFailureDoesNotMarkExported(t *testing.T) {
 	h := newTestHarness()
 	card := approvedCard(t, h, "corr-1")
@@ -584,7 +675,7 @@ func TestPushToAnkiConnectPartialFailureDoesNotMarkExported(t *testing.T) {
 		t.Fatal("expected an error on partial AddNotes success, got nil")
 	}
 	if h.cards.byID[card.ID].Status != "approved" {
-		t.Fatalf("Status = %q, want still approved (nothing marked exported on partial failure)", h.cards.byID[card.ID].Status)
+		t.Fatalf("Status = %q, want reverted back to approved (nothing left exported on partial failure)", h.cards.byID[card.ID].Status)
 	}
 }
 
@@ -608,10 +699,12 @@ func TestPushToAnkiConnectNoApprovedCardsIsNoop(t *testing.T) {
 }
 
 // TestPushToAnkiConnectConnectorErrorPropagates pins error propagation
-// from AddNotes.
+// from AddNotes, and that the taken card is reverted back to
+// "approved" (not left "exported" for a card that never actually
+// reached AnkiConnect at all).
 func TestPushToAnkiConnectConnectorErrorPropagates(t *testing.T) {
 	h := newTestHarness()
-	approvedCard(t, h, "corr-1")
+	card := approvedCard(t, h, "corr-1")
 	boom := errors.New("boom")
 	conn := &fakeConnector{err: boom}
 	h.svc.SetConnector(conn)
@@ -619,13 +712,17 @@ func TestPushToAnkiConnectConnectorErrorPropagates(t *testing.T) {
 	if _, err := h.svc.PushToAnkiConnect(context.Background(), testIdentity); err == nil {
 		t.Fatal("expected an error when AddNotes fails, got nil")
 	}
+	if h.cards.byID[card.ID].Status != "approved" {
+		t.Fatalf("Status = %q, want reverted back to approved", h.cards.byID[card.ID].Status)
+	}
 }
 
 // TestPushToAnkiConnectSurvivesEventRecordFailure mirrors
 // TestExportTSVSurvivesEventRecordFailure for the AnkiConnect path:
-// AddNotes already succeeded and MarkExported already committed by the
-// time recordExported runs, so a Recorder failure there must not turn a
-// genuinely successful push into a reported failure.
+// AddNotes already succeeded and TakeApprovedForExport already
+// committed the "exported" mark by the time recordExported runs, so a
+// Recorder failure there must not turn a genuinely successful push
+// into a reported failure.
 func TestPushToAnkiConnectSurvivesEventRecordFailure(t *testing.T) {
 	h := newTestHarness()
 	card := approvedCard(t, h, "corr-1")

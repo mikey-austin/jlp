@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -151,12 +152,15 @@ func TestAnkiUpdateStatusUnknownIDMisses(t *testing.T) {
 	}
 }
 
-// TestAnkiApprovedForExportThenMarkExported pins the export pipeline's
-// full round trip: only "approved" cards come back, MarkExported flips
-// exactly those ids to "exported", and calling it again is a safe
-// no-op (the "second immediate export is empty" contract
-// application/anki.Service.ExportTSV relies on).
-func TestAnkiApprovedForExportThenMarkExported(t *testing.T) {
+// TestAnkiTakeApprovedForExportRoundTrip pins the export pipeline's
+// full round trip: only "approved" cards are taken, they come back
+// already marked "exported", and a second immediate call sees nothing
+// left approved (the "second immediate export is empty" contract
+// application/anki.Service.ExportTSV relies on) — all now achieved by
+// ONE atomic TakeApprovedForExport call rather than a separate read
+// (ApprovedForExport) plus write (MarkExported), per the controller's
+// ruling on Phase 3 Task 3's code review (finding 2).
+func TestAnkiTakeApprovedForExportRoundTrip(t *testing.T) {
 	repo, identity := ankiTestSetup(t)
 	ctx := context.Background()
 	now := time.Now().UTC()
@@ -182,36 +186,105 @@ func TestAnkiApprovedForExportThenMarkExported(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	forExport, err := repo.ApprovedForExport(ctx, identity)
+	taken, err := repo.TakeApprovedForExport(ctx, identity, time.Now().UTC())
 	if err != nil {
-		t.Fatalf("ApprovedForExport: %v", err)
+		t.Fatalf("TakeApprovedForExport: %v", err)
 	}
-	if len(forExport) != 1 || forExport[0].ID != approved.ID {
-		t.Fatalf("ApprovedForExport = %+v, want exactly [%s] (draft/rejected excluded)", forExport, approved.ID)
+	if len(taken) != 1 || taken[0].ID != approved.ID {
+		t.Fatalf("TakeApprovedForExport = %+v, want exactly [%s] (draft/rejected excluded)", taken, approved.ID)
 	}
-
-	if err := repo.MarkExported(ctx, identity, []string{approved.ID}); err != nil {
-		t.Fatalf("MarkExported: %v", err)
-	}
-
-	afterMark, err := repo.List(ctx, identity, "exported")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(afterMark) != 1 || afterMark[0].ID != approved.ID {
-		t.Fatalf("List(exported) = %+v, want exactly [%s]", afterMark, approved.ID)
+	if taken[0].Status != "exported" {
+		t.Fatalf("taken[0].Status = %q, want exported (already marked, atomically, by the take itself)", taken[0].Status)
 	}
 
-	// Second immediate call: nothing left approved, so ApprovedForExport
-	// is empty, and a redundant MarkExported call is a harmless no-op.
-	secondRound, err := repo.ApprovedForExport(ctx, identity)
+	afterTake, err := repo.List(ctx, identity, "exported")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if len(afterTake) != 1 || afterTake[0].ID != approved.ID {
+		t.Fatalf("List(exported) = %+v, want exactly [%s]", afterTake, approved.ID)
+	}
+
+	// Second immediate call: nothing left approved, so it returns empty
+	// — a safe no-op, not an error.
+	secondRound, err := repo.TakeApprovedForExport(ctx, identity, time.Now().UTC())
+	if err != nil {
+		t.Fatalf("second TakeApprovedForExport: %v", err)
 	}
 	if len(secondRound) != 0 {
-		t.Fatalf("ApprovedForExport after marking = %+v, want empty", secondRound)
+		t.Fatalf("second TakeApprovedForExport = %+v, want empty", secondRound)
 	}
-	if err := repo.MarkExported(ctx, identity, []string{approved.ID}); err != nil {
-		t.Fatalf("MarkExported (redundant call): %v", err)
+}
+
+// TestAnkiTakeApprovedForExportConcurrentCallsReturnDisjointSets is the
+// controller-mandated regression test for finding 2: two goroutines
+// calling TakeApprovedForExport concurrently for the SAME identity must
+// never both see the same approved row. With N approved cards and two
+// concurrent callers, the only correct outcomes are "one caller gets
+// all N, the other gets none" — proving the SELECT ... FOR UPDATE row
+// lock actually serializes the two transactions rather than letting
+// both read the same "approved" snapshot before either commits its
+// mark (the exact race the old two-call ApprovedForExport+MarkExported
+// pair was vulnerable to).
+func TestAnkiTakeApprovedForExportConcurrentCallsReturnDisjointSets(t *testing.T) {
+	repo, identity := ankiTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+
+	const cardCount = 5
+	want := make(map[string]bool, cardCount)
+	for i := 0; i < cardCount; i++ {
+		card := testAnkiCard(identity, "draft", now)
+		if err := repo.Insert(ctx, card); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := repo.UpdateStatus(ctx, identity, card.ID, "approved"); err != nil {
+			t.Fatal(err)
+		}
+		want[card.ID] = true
+	}
+
+	var wg sync.WaitGroup
+	results := make([][]storage.AnkiCard, 2)
+	errs := make([]error, 2)
+	wg.Add(2)
+	for i := range 2 {
+		go func(i int) {
+			defer wg.Done()
+			results[i], errs[i] = repo.TakeApprovedForExport(ctx, identity, time.Now().UTC())
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: TakeApprovedForExport: %v", i, err)
+		}
+	}
+
+	total := len(results[0]) + len(results[1])
+	if total != cardCount {
+		t.Fatalf("total cards taken across both calls = %d, want %d (0+%d or %d+0 — every card taken exactly once)", total, cardCount, cardCount, cardCount)
+	}
+	// Disjoint: no card ID appears in both result sets.
+	seen := make(map[string]bool, cardCount)
+	for _, r := range results {
+		for _, c := range r {
+			if seen[c.ID] {
+				t.Fatalf("card %s was returned by BOTH concurrent calls — the race finding 2 exists to close", c.ID)
+			}
+			seen[c.ID] = true
+			if !want[c.ID] {
+				t.Fatalf("unexpected card %s in results", c.ID)
+			}
+		}
+	}
+	if len(seen) != cardCount {
+		t.Fatalf("union of both result sets = %d cards, want %d (every approved card taken by exactly one caller)", len(seen), cardCount)
+	}
+	// "One gets all, the other gets none" — the specific disjoint shape
+	// the ruling calls out, not just "no overlap in general."
+	if !((len(results[0]) == cardCount && len(results[1]) == 0) || (len(results[0]) == 0 && len(results[1]) == cardCount)) {
+		t.Fatalf("result sizes = %d and %d, want one call to get all %d and the other 0", len(results[0]), len(results[1]), cardCount)
 	}
 }

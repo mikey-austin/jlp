@@ -11,43 +11,6 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const approvedAnkiCardsForExport = `-- name: ApprovedAnkiCardsForExport :many
-SELECT id, identity_id, source_type, source_id, front, back, notes, status, created_at
-FROM anki_cards
-WHERE identity_id = $1 AND status = 'approved'
-ORDER BY created_at ASC
-`
-
-func (q *Queries) ApprovedAnkiCardsForExport(ctx context.Context, identityID string) ([]AnkiCard, error) {
-	rows, err := q.db.Query(ctx, approvedAnkiCardsForExport, identityID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []AnkiCard
-	for rows.Next() {
-		var i AnkiCard
-		if err := rows.Scan(
-			&i.ID,
-			&i.IdentityID,
-			&i.SourceType,
-			&i.SourceID,
-			&i.Front,
-			&i.Back,
-			&i.Notes,
-			&i.Status,
-			&i.CreatedAt,
-		); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const insertAnkiCard = `-- name: InsertAnkiCard :exec
 INSERT INTO anki_cards (id, identity_id, source_type, source_id, front, back, notes, status, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
@@ -125,21 +88,71 @@ func (q *Queries) ListAnkiCards(ctx context.Context, arg ListAnkiCardsParams) ([
 	return items, nil
 }
 
-const markAnkiCardsExported = `-- name: MarkAnkiCardsExported :exec
+const markAnkiCardsExportedByIDs = `-- name: MarkAnkiCardsExportedByIDs :exec
 UPDATE anki_cards SET status = 'exported'
 WHERE identity_id = $1 AND id = ANY($2::uuid[]) AND status = 'approved'
 `
 
-type MarkAnkiCardsExportedParams struct {
+type MarkAnkiCardsExportedByIDsParams struct {
 	IdentityID string
 	Ids        []pgtype.UUID
 }
 
-// Restricted to status = 'approved' so calling this twice with the same
-// ids (e.g. a retried request) is a safe no-op the second time.
-func (q *Queries) MarkAnkiCardsExported(ctx context.Context, arg MarkAnkiCardsExportedParams) error {
-	_, err := q.db.Exec(ctx, markAnkiCardsExported, arg.IdentityID, arg.Ids)
+// Write half of TakeApprovedForExport, run in the SAME transaction as
+// SelectApprovedAnkiCardsForUpdate above, against exactly the ids that
+// query just locked and returned. status = 'approved' is kept as a
+// belt-and-suspenders guard (defense in depth, not load-bearing given
+// the FOR UPDATE lock already serializes access).
+func (q *Queries) MarkAnkiCardsExportedByIDs(ctx context.Context, arg MarkAnkiCardsExportedByIDsParams) error {
+	_, err := q.db.Exec(ctx, markAnkiCardsExportedByIDs, arg.IdentityID, arg.Ids)
 	return err
+}
+
+const selectApprovedAnkiCardsForUpdate = `-- name: SelectApprovedAnkiCardsForUpdate :many
+SELECT id, identity_id, source_type, source_id, front, back, notes, status, created_at
+FROM anki_cards
+WHERE identity_id = $1 AND status = 'approved'
+ORDER BY created_at ASC
+FOR UPDATE
+`
+
+// Row-locking read half of TakeApprovedForExport (see
+// storage.AnkiCardRepository's doc comment): postgres/anki.go runs this
+// and MarkAnkiCardsExportedByIDs below in ONE transaction. FOR UPDATE
+// takes an exclusive row lock on every matched row, so a second,
+// concurrent call for the SAME identity blocks here until the first
+// transaction commits (or rolls back) — at which point the rows it
+// locked either no longer match status = 'approved' (first call
+// succeeded: second call sees nothing) or are visible again unchanged
+// (first call rolled back).
+func (q *Queries) SelectApprovedAnkiCardsForUpdate(ctx context.Context, identityID string) ([]AnkiCard, error) {
+	rows, err := q.db.Query(ctx, selectApprovedAnkiCardsForUpdate, identityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []AnkiCard
+	for rows.Next() {
+		var i AnkiCard
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdentityID,
+			&i.SourceType,
+			&i.SourceID,
+			&i.Front,
+			&i.Back,
+			&i.Notes,
+			&i.Status,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateAnkiCardStatus = `-- name: UpdateAnkiCardStatus :one
