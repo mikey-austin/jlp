@@ -188,8 +188,49 @@ type A2A struct {
 	// authenticated group internal/adapters/http/server.go already
 	// establishes (so Authelia/CSRF posture is unchanged) — see
 	// a2a.Server.Routes' own doc comment for the routes themselves,
-	// relative to this prefix. Defaults to "/a2a".
+	// relative to this prefix. Defaults to "/a2a". validate() rejects a
+	// Path whose top-level segment collides with one of that package's
+	// own routes (a2aReservedPathPrefixes below) — see validate's own
+	// comment on why that check exists.
 	Path string
+}
+
+// a2aReservedPathPrefixes is every top-level path segment
+// internal/adapters/http/server.go already routes, as of this
+// writing: "" is the home page ("/" itself), the rest are each
+// route's first path segment (e.g. "/ai" covers both "/ai" and
+// "/ai/agents/{id}"; "/api" covers the whole "/api/v1/..." subtree).
+// validate() rejects APP_A2A_PATH when Enabled and its own first
+// segment is in this set — see that call site's doc comment for why
+// (chi's r.Mount panics on the collision instead of failing
+// gracefully). Keep in sync with server.go's routes() if its top-level
+// route list ever changes.
+var a2aReservedPathPrefixes = map[string]bool{
+	"":            true, // "/" itself
+	"healthz":     true,
+	"offline":     true,
+	"static":      true,
+	"sessions":    true,
+	"corrections": true,
+	"documents":   true,
+	"ai":          true,
+	"ratings":     true,
+	"grammar":     true,
+	"learner":     true,
+	"vocabulary":  true,
+	"practice":    true,
+	"anki":        true,
+	"lessons":     true,
+	"api":         true,
+}
+
+// firstPathSegment returns p's first "/"-delimited segment (no leading
+// or trailing slash) — "" for "/" itself, "api" for both "/api" and
+// "/api/v1/words". Assumes p already starts with "/" (validate only
+// calls this after that's confirmed).
+func firstPathSegment(p string) string {
+	seg, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
+	return seg
 }
 
 func Load() (Config, error) {
@@ -313,8 +354,21 @@ func (c Config) validate() error {
 	// feature is live" pattern Summary.Enabled's guard above uses; an
 	// operator who never sets APP_A2A_ENABLED never has this checked
 	// at all, even if APP_A2A_PATH was somehow set to something odd.
-	if c.A2A.Enabled && !strings.HasPrefix(c.A2A.Path, "/") {
-		return fmt.Errorf("config: APP_A2A_PATH must start with \"/\" when APP_A2A_ENABLED=true, got %q", c.A2A.Path)
+	if c.A2A.Enabled {
+		if !strings.HasPrefix(c.A2A.Path, "/") {
+			return fmt.Errorf("config: APP_A2A_PATH must start with \"/\" when APP_A2A_ENABLED=true, got %q", c.A2A.Path)
+		}
+		// A path whose top-level segment collides with an
+		// already-mounted route makes internal/adapters/http/server.go's
+		// r.Mount PANIC at boot (Task 3 code review, Minor 6) instead of
+		// failing here with a clean error — reject it fail-fast instead,
+		// the same way every other cross-field A2A check in this
+		// function does. a2aReservedPathPrefixes is that package's own
+		// top-level routes; keep the two in sync if server.go's route
+		// list ever changes.
+		if seg := firstPathSegment(c.A2A.Path); a2aReservedPathPrefixes[seg] {
+			return fmt.Errorf("config: APP_A2A_PATH %q collides with an existing route (\"/%s\") — choose a different mount path", c.A2A.Path, seg)
+		}
 	}
 	return nil
 }

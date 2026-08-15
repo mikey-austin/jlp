@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -24,21 +25,33 @@ import (
 // this package's own copy of application/agentrun's own test fixture
 // of the same name/shape (see runner_test.go), needed here too since
 // building a real *agentrun.Runner (this adapter's one collaborator
-// besides *tools.Registry) requires one.
-type fakeRepo struct{}
+// besides *tools.Registry) requires one. It also records every Start
+// call (System/Agent in particular) so TestCreateTaskUsesHonestSystemPromptForToollessSkill
+// can assert on what System prompt actually reached the runner.
+type fakeRepo struct {
+	mu      sync.Mutex
+	started []storage.AgentRun
+}
 
-func (fakeRepo) Start(context.Context, storage.AgentRun) error { return nil }
-func (fakeRepo) Finish(context.Context, learner.IdentityID, string, string, string, string, int, time.Time) error {
+func (r *fakeRepo) Start(_ context.Context, run storage.AgentRun) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.started = append(r.started, run)
 	return nil
 }
-func (fakeRepo) RecordToolCall(context.Context, learner.IdentityID, storage.ToolCall) error {
+func (r *fakeRepo) Finish(context.Context, learner.IdentityID, string, string, string, string, int, time.Time) error {
 	return nil
 }
-func (fakeRepo) RecordTurn(context.Context, learner.IdentityID, storage.AgentTurn) error { return nil }
-func (fakeRepo) List(context.Context, learner.IdentityID, int) ([]storage.AgentRun, error) {
+func (r *fakeRepo) RecordToolCall(context.Context, learner.IdentityID, storage.ToolCall) error {
+	return nil
+}
+func (r *fakeRepo) RecordTurn(context.Context, learner.IdentityID, storage.AgentTurn) error {
+	return nil
+}
+func (r *fakeRepo) List(context.Context, learner.IdentityID, int) ([]storage.AgentRun, error) {
 	return nil, nil
 }
-func (fakeRepo) Get(context.Context, learner.IdentityID, string) (storage.AgentRun, []storage.ToolCall, []storage.AgentTurn, error) {
+func (r *fakeRepo) Get(context.Context, learner.IdentityID, string) (storage.AgentRun, []storage.ToolCall, []storage.AgentTurn, error) {
 	return storage.AgentRun{}, nil, nil, nil
 }
 
@@ -75,15 +88,16 @@ func (rt recordingTool) register(reg *tools.Registry) {
 // result and analyse_learner/plan_lesson's ("summary"/"lesson", not
 // Allow()ed here either, matching main.go's current wiring) get a
 // refusal, exactly like production.
-func newTestServer(t *testing.T) (*a2a.Server, *[]learner.IdentityID) {
+func newTestServer(t *testing.T) (*a2a.Server, *[]learner.IdentityID, *fakeRepo) {
 	t.Helper()
 	reg := tools.NewRegistry()
 	var seen []learner.IdentityID
 	recordingTool{name: "get_learning_priorities", seen: &seen}.register(reg)
 	reg.Allow("teacher", "get_learning_priorities")
 
-	runner := agentrun.NewRunner(fakeai.New(), reg, fakeRepo{}, time.Now)
-	return a2a.New(runner, reg, config.A2A{Enabled: true, Path: "/a2a"}), &seen
+	repo := &fakeRepo{}
+	runner := agentrun.NewRunner(fakeai.New(), reg, repo, time.Now)
+	return a2a.New(runner, reg, config.A2A{Enabled: true, Path: "/a2a"}), &seen, repo
 }
 
 func doRequest(t *testing.T, h http.Handler, method, path string, identity learner.IdentityID, body string) *httptest.ResponseRecorder {
@@ -112,7 +126,7 @@ func doRequest(t *testing.T, h http.Handler, method, path string, identity learn
 // tool Allow()ed, analyse_learner/plan_lesson ("summary"/"lesson", not
 // Allow()ed anything here) see none.
 func TestAgentCardShape(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rec := doRequest(t, srv.Routes(), http.MethodGet, "/.well-known/agent-card.json", "", "")
 
 	if rec.Code != http.StatusOK {
@@ -162,7 +176,7 @@ func TestAgentCardShape(t *testing.T) {
 // a completed task whose output actually reflects the underlying
 // agent-run's investigation, not a stub.
 func TestCreateTaskReviewWritingReturnsCorrections(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	body := `{"skill":"review_writing","input":"友達と映画を見ました。とても面白いでした。"}`
 	rec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", body)
 
@@ -191,7 +205,7 @@ func TestCreateTaskReviewWritingReturnsCorrections(t *testing.T) {
 // TestCreateTaskUnknownSkillReturns400 pins the Step 1 "unknown skill
 // → 400" case.
 func TestCreateTaskUnknownSkillReturns400(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", `{"skill":"not_a_real_skill","input":"hello"}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
@@ -199,7 +213,7 @@ func TestCreateTaskUnknownSkillReturns400(t *testing.T) {
 }
 
 func TestCreateTaskMissingInputReturns400(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", `{"skill":"review_writing","input":"   "}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
@@ -207,7 +221,7 @@ func TestCreateTaskMissingInputReturns400(t *testing.T) {
 }
 
 func TestCreateTaskMalformedJSONReturns400(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", `{not json`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
@@ -221,7 +235,7 @@ func TestCreateTaskMalformedJSONReturns400(t *testing.T) {
 // its caller got that right) is rejected rather than silently running
 // as some zero-value identity.
 func TestCreateTaskRequiresAuthenticatedIdentity(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	rec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "", `{"skill":"review_writing","input":"hello"}`)
 	if rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d, want 401: %s", rec.Code, rec.Body.String())
@@ -241,7 +255,7 @@ func TestCreateTaskRequiresAuthenticatedIdentity(t *testing.T) {
 // inspecting the response (which never echoes an identity back at
 // all).
 func TestCreateTaskIgnoresForgedIdentityInBody(t *testing.T) {
-	srv, seen := newTestServer(t)
+	srv, seen, _ := newTestServer(t)
 	body := `{"skill":"review_writing","input":"友達と映画を見ました。","identity":"someone-else"}`
 	rec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "real-caller", body)
 
@@ -259,9 +273,10 @@ func TestCreateTaskIgnoresForgedIdentityInBody(t *testing.T) {
 // TestGetTaskRoundTripsCreatedTask pins GET {path}/tasks/{task_id}
 // reading back exactly what POST already computed (see
 // handleCreateTask's doc comment on synchronous execution — GET never
-// finds a "running" task, only ever the already-final result).
+// finds a "running" task, only ever the already-final result), when
+// the GET comes from the SAME identity that created it.
 func TestGetTaskRoundTripsCreatedTask(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	createRec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", `{"skill":"review_writing","input":"hello"}`)
 	var created struct {
 		TaskID string `json:"task_id"`
@@ -272,7 +287,7 @@ func TestGetTaskRoundTripsCreatedTask(t *testing.T) {
 		t.Fatalf("unmarshal create response: %v", err)
 	}
 
-	getRec := doRequest(t, srv.Routes(), http.MethodGet, "/tasks/"+created.TaskID, "", "")
+	getRec := doRequest(t, srv.Routes(), http.MethodGet, "/tasks/"+created.TaskID, "mikey", "")
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("GET status = %d, want 200: %s", getRec.Code, getRec.Body.String())
 	}
@@ -290,9 +305,109 @@ func TestGetTaskRoundTripsCreatedTask(t *testing.T) {
 }
 
 func TestGetTaskUnknownReturns404(t *testing.T) {
-	srv, _ := newTestServer(t)
-	rec := doRequest(t, srv.Routes(), http.MethodGet, "/tasks/does-not-exist", "", "")
+	srv, _, _ := newTestServer(t)
+	rec := doRequest(t, srv.Routes(), http.MethodGet, "/tasks/does-not-exist", "mikey", "")
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGetTaskWithNoIdentityReturns404 pins the defensive half of I1's
+// fix (mirroring TestCreateTaskRequiresAuthenticatedIdentity): a
+// request reaching handleGetTask with no context identity at all must
+// not be treated as "allowed to read anything" — 404, same as an
+// unknown task_id, never a 401 that would distinguish "no identity"
+// from "wrong identity" to a caller probing for task ids.
+func TestGetTaskWithNoIdentityReturns404(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	createRec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", `{"skill":"review_writing","input":"hello"}`)
+	var created struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+
+	rec := doRequest(t, srv.Routes(), http.MethodGet, "/tasks/"+created.TaskID, "", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGetTaskReturns404ForAnotherIdentitysTask is the review's
+// Important 1 pin: identity B must not be able to read identity A's
+// task output through GET {path}/tasks/{task_id} — the one read path
+// in this codebase that isn't identity-scoped otherwise (every
+// storage.*Repository method takes an IdentityID; agent_runs itself is
+// indexed (identity_id, started_at) for exactly this reason). 404, not
+// 403, so the response can't be used to confirm a task_id belongs to
+// someone else.
+func TestGetTaskReturns404ForAnotherIdentitysTask(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	createRec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "identity-a", `{"skill":"review_writing","input":"友達と映画を見ました。"}`)
+	var created struct {
+		TaskID string `json:"task_id"`
+	}
+	if err := json.Unmarshal(createRec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("unmarshal create response: %v", err)
+	}
+	if created.TaskID == "" {
+		t.Fatal("created.TaskID is empty")
+	}
+
+	// Sanity: the OWNING identity can read it back (otherwise this test
+	// would trivially pass for the wrong reason).
+	ownerRec := doRequest(t, srv.Routes(), http.MethodGet, "/tasks/"+created.TaskID, "identity-a", "")
+	if ownerRec.Code != http.StatusOK {
+		t.Fatalf("owner GET status = %d, want 200: %s", ownerRec.Code, ownerRec.Body.String())
+	}
+
+	otherRec := doRequest(t, srv.Routes(), http.MethodGet, "/tasks/"+created.TaskID, "identity-b", "")
+	if otherRec.Code != http.StatusNotFound {
+		t.Fatalf("other identity's GET status = %d, want 404 (must not read identity-a's task): %s", otherRec.Code, otherRec.Body.String())
+	}
+}
+
+// TestCreateTaskRejectsOversizedBody is the review's Important 2 pin:
+// POST {path}/tasks must cap its body the same way every sibling
+// body-reading handler in internal/adapters/http already does (see
+// task.go's maxTaskRequestBodyBytes), rather than buffering an
+// unbounded body that gets forwarded verbatim into an LLM call.
+func TestCreateTaskRejectsOversizedBody(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	huge := `{"skill":"review_writing","input":"` + strings.Repeat("a", 2<<20) + `"}`
+	rec := doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", huge)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400: %s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestCreateTaskUsesHonestSystemPromptForToollessSkill is the review's
+// Minor 1 pin: analyse_learner/plan_lesson (agents "summary"/"lesson",
+// not Allow()ed any tool in this test's Registry, matching
+// cmd/jlp/main.go's current wiring) must not be told to "investigate
+// using your available tools" when they provably have none — the same
+// live reg.DefsFor signal card.go's SkillCard.Tools already uses.
+// review_writing ("teacher", which IS Allow()ed a tool here) is the
+// control: its System prompt still carries the investigate-first
+// instruction.
+func TestCreateTaskUsesHonestSystemPromptForToollessSkill(t *testing.T) {
+	srv, _, repo := newTestServer(t)
+
+	doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", `{"skill":"analyse_learner","input":"how am I doing?"}`)
+	doRequest(t, srv.Routes(), http.MethodPost, "/tasks", "mikey", `{"skill":"review_writing","input":"hello"}`)
+
+	repo.mu.Lock()
+	defer repo.mu.Unlock()
+	if len(repo.started) != 2 {
+		t.Fatalf("started = %d rows, want 2", len(repo.started))
+	}
+	toollessSystem := repo.started[0].System
+	if strings.Contains(toollessSystem, "using your available tools") {
+		t.Errorf("analyse_learner System = %q, must not claim tool access it doesn't have", toollessSystem)
+	}
+	toolsSystem := repo.started[1].System
+	if !strings.Contains(toolsSystem, "using your available tools") {
+		t.Errorf("review_writing System = %q, want it to still instruct investigation (it DOES have a tool)", toolsSystem)
 	}
 }

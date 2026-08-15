@@ -516,3 +516,40 @@ func TestA2AEnabledRequiresPathWithLeadingSlash(t *testing.T) {
 		t.Fatalf("validate() = %v, want nil for a well-formed enabled A2A", err)
 	}
 }
+
+// TestA2AEnabledRejectsPathCollidingWithExistingRoute is the Task 3
+// code review's Minor 6 pin: internal/adapters/http/server.go's
+// r.Mount panics at boot if APP_A2A_PATH collides with a route already
+// registered under the same top-level segment (e.g. "/api", which
+// r.Route("/api/v1", ...) already owns) — that must fail here, in
+// config validation, with a clean "config:" error, instead of crashing
+// the process at startup. Only checked once Enabled=true, same as the
+// leading-slash guard above.
+func TestA2AEnabledRejectsPathCollidingWithExistingRoute(t *testing.T) {
+	base := Config{
+		Server:   Server{Port: 8080},
+		Database: Database{URL: "postgres://x"},
+		Auth:     Auth{Mode: "static"},
+		AI:       AI{Provider: "fake"},
+	}
+
+	for _, collision := range []string{"/api", "/api/v1", "/ai", "/ai/agents", "/", "/static", "/static/js", "/sessions"} {
+		cfg := base
+		cfg.A2A = A2A{Enabled: true, Path: collision}
+		if err := cfg.validate(); err == nil {
+			t.Errorf("validate() = nil for A2A.Path %q, want an error (collides with an existing route)", collision)
+		}
+	}
+
+	disabled := base
+	disabled.A2A = A2A{Enabled: false, Path: "/api"}
+	if err := disabled.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil (the collision check only applies once Enabled=true)", err)
+	}
+
+	noCollision := base
+	noCollision.A2A = A2A{Enabled: true, Path: "/a2a"}
+	if err := noCollision.validate(); err != nil {
+		t.Fatalf("validate() = %v, want nil for the non-colliding default path", err)
+	}
+}

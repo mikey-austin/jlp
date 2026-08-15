@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mikeyaustin/jlp/internal/application/agentrun"
+	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 )
@@ -36,7 +38,18 @@ type skillDef struct {
 	// this file. See docs/api/a2a.md's "known consequence" note.
 	Agent                     string
 	PromptName, PromptVersion string
-	System                    string
+	// SystemWithTools/SystemWithoutTools are the two system prompts
+	// systemFor chooses between, at request time, based on whether
+	// Agent CURRENTLY has any tool Allow()ed (reg.DefsFor(Agent) — the
+	// exact same live signal card.go's SkillCard.Tools already reads).
+	// Kept as two separate, fully-written prompts rather than one
+	// templated string: Task 3 code review Minor 1 flagged
+	// SystemWithTools' "investigate using your available tools"
+	// instruction as unfollowable for analyse_learner/plan_lesson,
+	// whose agents ("summary"/"lesson") cmd/jlp/main.go hasn't
+	// Allow()ed any tool for — the system prompt must agree with what
+	// the card honestly discloses, not just the card.
+	SystemWithTools, SystemWithoutTools string
 }
 
 // skillOrder is the card's/lookup's deterministic ordering — a plain
@@ -51,29 +64,45 @@ var skillOrder = []string{"review_writing", "analyse_learner", "plan_lesson"}
 // internal/agent/summary, internal/agent/lesson).
 var skillDefs = map[string]skillDef{
 	"review_writing": {
-		Name:          "Writing Reviewer",
-		Description:   "Reviews a piece of Japanese writing and reports corrections and feedback, after investigating the learner's own history through the Teacher agent's permitted tools.",
-		Agent:         "teacher",
-		PromptName:    "a2a.review_writing",
-		PromptVersion: "v1",
-		System:        "You are the Writing Reviewer agent (JLP's Teacher). First investigate the learner's own history using your available tools, then review the Japanese writing given as input: report the corrections and feedback you would give, in prose.",
+		Name:               "Writing Reviewer",
+		Description:        "Reviews a piece of Japanese writing and reports corrections and feedback, after investigating the learner's own history through the Teacher agent's permitted tools.",
+		Agent:              "teacher",
+		PromptName:         "a2a.review_writing",
+		PromptVersion:      "v1",
+		SystemWithTools:    "You are the Writing Reviewer agent (JLP's Teacher). First investigate the learner's own history using your available tools, then review the Japanese writing given as input: report the corrections and feedback you would give, in prose.",
+		SystemWithoutTools: "You are the Writing Reviewer agent (JLP's Teacher). You have no tools available for this task right now, so review the Japanese writing given as input directly, from the input alone: report the corrections and feedback you would give, in prose.",
 	},
 	"analyse_learner": {
-		Name:          "Learner Analyst",
-		Description:   "Analyses the learner's recent progress, strengths, and weaknesses, after investigating their history through the Learner Analyst agent's permitted tools.",
-		Agent:         "summary",
-		PromptName:    "a2a.analyse_learner",
-		PromptVersion: "v1",
-		System:        "You are the Learner Analyst agent. First investigate the learner's own history using your available tools, then analyse their recent progress, strengths, and weaknesses in light of the input given.",
+		Name:               "Learner Analyst",
+		Description:        "Analyses the learner's recent progress, strengths, and weaknesses, after investigating their history through the Learner Analyst agent's permitted tools.",
+		Agent:              "summary",
+		PromptName:         "a2a.analyse_learner",
+		PromptVersion:      "v1",
+		SystemWithTools:    "You are the Learner Analyst agent. First investigate the learner's own history using your available tools, then analyse their recent progress, strengths, and weaknesses in light of the input given.",
+		SystemWithoutTools: "You are the Learner Analyst agent. You have no tools available for this task right now, so analyse the learner's recent progress, strengths, and weaknesses using only the input given, without further investigation.",
 	},
 	"plan_lesson": {
-		Name:          "Lesson Planner",
-		Description:   "Proposes what a human tutor's next lesson should cover, after investigating the learner's history through the Lesson Planner agent's permitted tools.",
-		Agent:         "lesson",
-		PromptName:    "a2a.plan_lesson",
-		PromptVersion: "v1",
-		System:        "You are the Lesson Planner agent. First investigate the learner's own history using your available tools, then propose what a human tutor's next lesson should cover, given the input as context.",
+		Name:               "Lesson Planner",
+		Description:        "Proposes what a human tutor's next lesson should cover, after investigating the learner's history through the Lesson Planner agent's permitted tools.",
+		Agent:              "lesson",
+		PromptName:         "a2a.plan_lesson",
+		PromptVersion:      "v1",
+		SystemWithTools:    "You are the Lesson Planner agent. First investigate the learner's own history using your available tools, then propose what a human tutor's next lesson should cover, given the input as context.",
+		SystemWithoutTools: "You are the Lesson Planner agent. You have no tools available for this task right now, so propose what a human tutor's next lesson should cover using only the input given as context, without further investigation.",
 	},
+}
+
+// systemFor returns def's system prompt, chosen by whether reg
+// currently Allow()s def.Agent any tool at all — see skillDef's
+// SystemWithTools/SystemWithoutTools doc comment. Reads reg live, on
+// every call, the same as card.go's SkillCard.Tools: if
+// cmd/jlp/main.go's allowlist for this agent ever changes, the very
+// next task picks up the matching prompt automatically.
+func (s *Server) systemFor(def skillDef) string {
+	if len(s.reg.DefsFor(def.Agent)) > 0 {
+		return def.SystemWithTools
+	}
+	return def.SystemWithoutTools
 }
 
 // taskInputSchema/taskOutputSchema are the (identical, across all
@@ -112,14 +141,33 @@ type taskResponse struct {
 	Error  string `json:"error,omitempty"`
 }
 
+// maxTaskRequestBodyBytes caps POST {path}/tasks' body — the same 1
+// MiB cap internal/adapters/http applies to every JSON body it reads
+// (see that package's api.go maxRequestBodyBytes doc comment, and
+// documents.go/words.go, which apply it the same way this handler
+// does). task input is forwarded verbatim into an LLM call, so an
+// unbounded body is both a memory problem and a token-spend problem —
+// same reasoning as every sibling handler, same number, not a new one
+// invented for this package (Task 3 code review, Important 2).
+const maxTaskRequestBodyBytes = 1 << 20
+
 // taskRecord is what Server.tasks caches per task_id — see that
 // field's own doc comment on why this is a response cache, not a
-// second source of truth.
+// second source of truth. Identity is the identity that CREATED the
+// task (never one from the request body — see taskRequest's doc
+// comment) and is what scopes handleGetTask: Output is model text
+// derived from that identity's own learner history (corrections,
+// priorities, session context), so a different authenticated identity
+// reading it back would be a cross-identity leak — the one read path
+// in this codebase that would otherwise not be identity-scoped, unlike
+// every storage.*Repository method and the agent_runs table itself
+// (Task 3 code review, Important 1).
 type taskRecord struct {
-	Skill  string
-	Status string
-	Output string
-	Error  string
+	Identity learner.IdentityID
+	Skill    string
+	Status   string
+	Output   string
+	Error    string
 }
 
 // handleCreateTask runs skill req.Skill's underlying agent through
@@ -134,8 +182,14 @@ type taskRecord struct {
 // with A2A clients that always poll after creating a task — it just
 // always finds the task already done.
 func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxTaskRequestBodyBytes)
 	var req taskRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusBadRequest, "request body too large")
+			return
+		}
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
@@ -172,7 +226,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		Agent:         def.Agent,
 		PromptName:    def.PromptName,
 		PromptVersion: def.PromptVersion,
-		System:        def.System,
+		System:        s.systemFor(def),
 		Messages:      []ai.ToolMessage{{Role: "user", Text: req.Input}},
 		Identity:      identity,
 		SessionID:     sessionID,
@@ -190,7 +244,7 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 		taskID = uuid.NewString()
 	}
 
-	rec := taskRecord{Skill: req.Skill}
+	rec := taskRecord{Identity: identity, Skill: req.Skill}
 	if runErr != nil {
 		rec.Status = "failed"
 		rec.Error = runErr.Error()
@@ -210,13 +264,25 @@ func (s *Server) handleCreateTask(w http.ResponseWriter, r *http.Request) {
 // computed (see Server.tasks' doc comment) — protocol compatibility
 // for a client that always polls after POSTing a task, per
 // handleCreateTask's doc comment.
+//
+// Identity-scoped, same as every other read in this codebase (see
+// taskRecord's doc comment): 404 for BOTH "no such task_id" and "that
+// task_id exists but belongs to a different identity" — never 403 —
+// so the response can never be used to confirm a task_id belongs to
+// someone else.
 func (s *Server) handleGetTask(w http.ResponseWriter, r *http.Request) {
 	taskID := chi.URLParam(r, "task_id")
 
+	identity, ok := IdentityFrom(r.Context())
+	if !ok || identity == "" {
+		writeError(w, http.StatusNotFound, "task not found")
+		return
+	}
+
 	s.mu.RLock()
-	rec, ok := s.tasks[taskID]
+	rec, found := s.tasks[taskID]
 	s.mu.RUnlock()
-	if !ok {
+	if !found || rec.Identity != identity {
 		writeError(w, http.StatusNotFound, "task not found")
 		return
 	}
