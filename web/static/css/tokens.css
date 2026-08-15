@@ -81,6 +81,18 @@
   --warning-ink: oklch(0.22 0.05 70);
 }
 
+/* Print output (lesson guides, PRD §18/§60) is intentionally forced to
+ * plain black-on-white regardless of the active theme — a printed or
+ * exported-to-PDF lesson guide should be legible straight off a plain
+ * paper page, not carry whatever dark/light theme happened to be active
+ * on screen. Defined once on a bare :root (not duplicated under
+ * [data-theme="dark"]) since these two tokens deliberately never vary
+ * by theme — see app.css's @media print block, the only consumer. */
+:root {
+  --print-bg: #fff;
+  --print-fg: #000;
+}
+
 @keyframes jlpPulse {
   0%,
   100% {

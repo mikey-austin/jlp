@@ -12,9 +12,10 @@ import (
 // as internal/agent/lesson.Agent.Generate produced it — this package
 // never parses it apart; the HTTP layer's detail template does. Status
 // starts "prepared" (right after Generate persists it) and moves to
-// "completed" exactly once, via Complete, when the tutor session it was
-// prepared for has actually happened and the tutor's observation has
-// been recorded. CompletedAt is the zero time.Time until then.
+// "completed" exactly once, via CompleteWithObservation, when the
+// tutor session it was prepared for has actually happened and the
+// tutor's observation has been recorded. CompletedAt is the zero
+// time.Time until then.
 type Lesson struct {
 	ID          string
 	IdentityID  learner.IdentityID
@@ -27,11 +28,11 @@ type Lesson struct {
 // LessonObservation is one human tutor's post-lesson note (PRD §60): a
 // free-text Notes field plus Subjects, a caller-supplied list of
 // concept slugs or free-form tags the tutor called out (e.g.
-// "i-adjective-past") — recorded alongside the lesson's completion but
-// deliberately NOT yet consumed by the learner model (see
-// application/lessons.Service.Complete's doc comment for why): it
-// enriches the event log's history/rebuild fidelity for a future task,
-// not this one.
+// "i-adjective-past") — recorded atomically with the lesson's
+// completion (see CompleteWithObservation) but deliberately NOT yet
+// consumed by the learner model (see application/lessons.Service.
+// Complete's doc comment for why): it enriches the event log's
+// history/rebuild fidelity for a future task, not this one.
 type LessonObservation struct {
 	ID        string
 	LessonID  string
@@ -43,11 +44,11 @@ type LessonObservation struct {
 
 // LessonRepository persists tutor lesson guides and their post-lesson
 // observations. Every method except Insert is identity-scoped: a
-// lesson ID (or, for AddObservation/Observations, a lesson ID reached
-// via one) that exists but belongs to a different identity misses with
-// ErrNotFound — the same "wrong identity or unknown ID both miss the
-// same way" contract every other identity-scoped repository in this
-// package uses (see e.g. FeedbackRepository.GetCorrection).
+// lesson ID (or, for CompleteWithObservation/Observations, a lesson ID
+// reached via one) that exists but belongs to a different identity
+// misses with ErrNotFound — the same "wrong identity or unknown ID both
+// miss the same way" contract every other identity-scoped repository in
+// this package uses (see e.g. FeedbackRepository.GetCorrection).
 type LessonRepository interface {
 	// Insert persists a newly generated lesson, Status "prepared".
 	Insert(ctx context.Context, l Lesson) error
@@ -55,22 +56,25 @@ type LessonRepository interface {
 	List(ctx context.Context, identity learner.IdentityID) ([]Lesson, error)
 	// Get reads back one lesson.
 	Get(ctx context.Context, identity learner.IdentityID, id string) (Lesson, error)
-	// Complete sets id's Status to "completed" and CompletedAt to the
-	// current time, returning the updated lesson. Called once per lesson
-	// — application/lessons.Service.Complete calls this alongside
-	// AddObservation below, but the two are separate persistence
-	// operations (see that method's doc comment for why no single
-	// transaction spans them).
-	Complete(ctx context.Context, identity learner.IdentityID, id string) (Lesson, error)
-	// AddObservation persists o (o.LessonID identifies the target
-	// lesson) only if that lesson actually belongs to identity — checked
-	// via a join to the lessons table itself, mirroring
-	// AIRatingRepository.Upsert's "never trust the caller, check via a
-	// join" shape. A lesson ID that doesn't exist, or exists but belongs
-	// to a different identity, both miss with ErrNotFound.
-	AddObservation(ctx context.Context, identity learner.IdentityID, o LessonObservation) error
+	// CompleteWithObservation persists o (o.LessonID identifies the
+	// target lesson) AND sets that same lesson's Status to "completed"
+	// with CompletedAt set to at, IN ONE TRANSACTION — a lesson must
+	// never end up "completed" without its triggering observation
+	// actually attached, or vice versa (a partial write here is
+	// silently invisible: lesson_detail.html.tmpl only ever renders
+	// recorded observations once Status is "completed", so an
+	// observation attached without the status flip would be durably
+	// stored yet permanently unreachable from the UI, and a naive retry
+	// would then attach a SECOND, duplicate observation with no
+	// idempotency guard). The identity-ownership check is a join to the
+	// lessons table itself, mirroring AIRatingRepository.Upsert's
+	// "never trust the caller, check via a join" shape: a lesson ID
+	// that doesn't exist, or exists but belongs to a different
+	// identity, misses with ErrNotFound and writes NEITHER the
+	// observation nor the status change.
+	CompleteWithObservation(ctx context.Context, identity learner.IdentityID, lessonID string, o LessonObservation, at time.Time) (Lesson, error)
 	// Observations returns every observation recorded against lessonID,
-	// newest first, scoped via the same join to lessons AddObservation
+	// newest first, scoped via the same join CompleteWithObservation
 	// uses: a lessonID that doesn't exist, or belongs to a different
 	// identity, both come back an empty slice (no error) — the caller
 	// (application/lessons.Service.Detail via the HTTP handler) always

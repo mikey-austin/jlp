@@ -67,32 +67,24 @@ func (f *fakeLessonRepo) Get(_ context.Context, identity learner.IdentityID, id 
 	return l, nil
 }
 
-func (f *fakeLessonRepo) Complete(_ context.Context, identity learner.IdentityID, id string) (storage.Lesson, error) {
+// CompleteWithObservation mirrors the real postgres repo's atomic
+// contract: the observation attach and the status flip happen together
+// under the same lock, so from any other goroutine's perspective they
+// are indivisible — either both are visible or neither is. An
+// observation aimed at a lesson that doesn't exist, or belongs to a
+// different identity, misses with ErrNotFound and mutates nothing.
+func (f *fakeLessonRepo) CompleteWithObservation(_ context.Context, identity learner.IdentityID, lessonID string, o storage.LessonObservation, at time.Time) (storage.Lesson, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	l, ok := f.byID[id]
+	l, ok := f.byID[lessonID]
 	if !ok || l.IdentityID != identity {
 		return storage.Lesson{}, storage.ErrNotFound
 	}
 	l.Status = "completed"
-	l.CompletedAt = time.Now().UTC()
-	f.byID[id] = l
+	l.CompletedAt = at
+	f.byID[lessonID] = l
+	f.observations[lessonID] = append(f.observations[lessonID], o)
 	return l, nil
-}
-
-// AddObservation mirrors the real postgres repo's "identity check via
-// a join to lessons" contract: an observation aimed at a lesson that
-// doesn't exist, or belongs to a different identity, misses with
-// ErrNotFound rather than silently attaching.
-func (f *fakeLessonRepo) AddObservation(_ context.Context, identity learner.IdentityID, o storage.LessonObservation) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	l, ok := f.byID[o.LessonID]
-	if !ok || l.IdentityID != identity {
-		return storage.ErrNotFound
-	}
-	f.observations[o.LessonID] = append(f.observations[o.LessonID], o)
-	return nil
 }
 
 func (f *fakeLessonRepo) Observations(_ context.Context, _ learner.IdentityID, lessonID string) ([]storage.LessonObservation, error) {

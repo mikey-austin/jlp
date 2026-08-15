@@ -142,46 +142,10 @@ func TestLessonListNewestFirst(t *testing.T) {
 	}
 }
 
-// TestLessonCompleteSetsStatusAndCompletedAt pins Complete's status
-// transition.
-func TestLessonCompleteSetsStatusAndCompletedAt(t *testing.T) {
-	repo, identity := lessonTestSetup(t)
-	ctx := context.Background()
-	lesson := testLesson(identity, time.Now().UTC())
-	if err := repo.Insert(ctx, lesson); err != nil {
-		t.Fatal(err)
-	}
-
-	got, err := repo.Complete(ctx, identity, lesson.ID)
-	if err != nil {
-		t.Fatalf("Complete: %v", err)
-	}
-	if got.Status != "completed" {
-		t.Fatalf("Status = %q, want completed", got.Status)
-	}
-	if got.CompletedAt.IsZero() {
-		t.Fatal("CompletedAt is zero, want it set")
-	}
-}
-
-// TestLessonCompleteCrossIdentityMisses pins Complete's identity scope.
-func TestLessonCompleteCrossIdentityMisses(t *testing.T) {
-	repo, identity := lessonTestSetup(t)
-	ctx := context.Background()
-	lesson := testLesson(identity, time.Now().UTC())
-	if err := repo.Insert(ctx, lesson); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := repo.Complete(ctx, learner.IdentityID("someone-else"), lesson.ID); !errors.Is(err, storage.ErrNotFound) {
-		t.Fatalf("cross-identity Complete err = %v, want storage.ErrNotFound", err)
-	}
-}
-
-// TestLessonAddObservationThenListRoundTrips pins AddObservation/
-// Observations' full-field round trip, including Subjects surviving
-// the jsonb round trip.
-func TestLessonAddObservationThenListRoundTrips(t *testing.T) {
+// TestLessonCompleteWithObservationRoundTrips pins CompleteWithObservation's
+// combined status-transition + observation-attach round trip, including
+// Subjects surviving the jsonb round trip.
+func TestLessonCompleteWithObservationRoundTrips(t *testing.T) {
 	repo, identity := lessonTestSetup(t)
 	ctx := context.Background()
 	lesson := testLesson(identity, time.Now().UTC())
@@ -198,32 +162,39 @@ func TestLessonAddObservationThenListRoundTrips(t *testing.T) {
 		Subjects:  []string{"i-adjective-past"},
 		CreatedAt: now,
 	}
-	if err := repo.AddObservation(ctx, identity, obs); err != nil {
-		t.Fatalf("AddObservation: %v", err)
+	got, err := repo.CompleteWithObservation(ctx, identity, lesson.ID, obs, now)
+	if err != nil {
+		t.Fatalf("CompleteWithObservation: %v", err)
+	}
+	if got.Status != "completed" {
+		t.Fatalf("Status = %q, want completed", got.Status)
+	}
+	if !got.CompletedAt.Equal(now) {
+		t.Fatalf("CompletedAt = %v, want %v", got.CompletedAt, now)
 	}
 
-	got, err := repo.Observations(ctx, identity, lesson.ID)
+	obsList, err := repo.Observations(ctx, identity, lesson.ID)
 	if err != nil {
 		t.Fatalf("Observations: %v", err)
 	}
-	if len(got) != 1 {
-		t.Fatalf("Observations = %d, want 1", len(got))
+	if len(obsList) != 1 {
+		t.Fatalf("Observations = %d, want 1", len(obsList))
 	}
-	if got[0].Author != "tutor-a" || got[0].Notes != "助詞の復習が必要" {
-		t.Fatalf("got[0] = %+v, want Author/Notes matching %+v", got[0], obs)
+	if obsList[0].Author != "tutor-a" || obsList[0].Notes != "助詞の復習が必要" {
+		t.Fatalf("obsList[0] = %+v, want Author/Notes matching %+v", obsList[0], obs)
 	}
-	if len(got[0].Subjects) != 1 || got[0].Subjects[0] != "i-adjective-past" {
-		t.Fatalf("Subjects = %+v, want [i-adjective-past]", got[0].Subjects)
+	if len(obsList[0].Subjects) != 1 || obsList[0].Subjects[0] != "i-adjective-past" {
+		t.Fatalf("Subjects = %+v, want [i-adjective-past]", obsList[0].Subjects)
 	}
-	if !got[0].CreatedAt.Equal(now) {
-		t.Fatalf("CreatedAt = %v, want %v", got[0].CreatedAt, now)
+	if !obsList[0].CreatedAt.Equal(now) {
+		t.Fatalf("CreatedAt = %v, want %v", obsList[0].CreatedAt, now)
 	}
 }
 
-// TestLessonAddObservationCrossIdentityMisses pins the "identity check
-// via a join to lessons" contract: an observation aimed at another
-// identity's lesson is rejected, not silently attached.
-func TestLessonAddObservationCrossIdentityMisses(t *testing.T) {
+// TestLessonCompleteWithObservationCrossIdentityIsNoOp pins the
+// atomic identity-scoping contract: a call against another identity's
+// lesson writes NEITHER the status change NOR the observation.
+func TestLessonCompleteWithObservationCrossIdentityIsNoOp(t *testing.T) {
 	repo, identity := lessonTestSetup(t)
 	ctx := context.Background()
 	lesson := testLesson(identity, time.Now().UTC())
@@ -239,35 +210,122 @@ func TestLessonAddObservationCrossIdentityMisses(t *testing.T) {
 		Subjects:  []string{},
 		CreatedAt: time.Now().UTC(),
 	}
-	err := repo.AddObservation(ctx, learner.IdentityID("someone-else"), obs)
+	_, err := repo.CompleteWithObservation(ctx, learner.IdentityID("someone-else"), lesson.ID, obs, time.Now().UTC())
 	if !errors.Is(err, storage.ErrNotFound) {
-		t.Fatalf("cross-identity AddObservation err = %v, want storage.ErrNotFound", err)
+		t.Fatalf("cross-identity CompleteWithObservation err = %v, want storage.ErrNotFound", err)
 	}
 
-	got, err := repo.Observations(ctx, identity, lesson.ID)
+	// Neither write took effect: status is still "prepared" ...
+	still, err := repo.Get(ctx, identity, lesson.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 0 {
-		t.Fatalf("Observations = %+v, want empty (the cross-identity insert must not have attached)", got)
+	if still.Status != "prepared" {
+		t.Fatalf("Status = %q, want still prepared (cross-identity call must not flip it)", still.Status)
+	}
+	if !still.CompletedAt.IsZero() {
+		t.Fatalf("CompletedAt = %v, want zero", still.CompletedAt)
+	}
+	// ... and no observation attached either.
+	obsList, err := repo.Observations(ctx, identity, lesson.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obsList) != 0 {
+		t.Fatalf("Observations = %+v, want empty (the cross-identity call must not have attached anything)", obsList)
 	}
 }
 
-// TestLessonAddObservationUnknownLessonMisses pins the plain
-// not-found case for an observation aimed at a lesson ID that doesn't
-// exist at all.
-func TestLessonAddObservationUnknownLessonMisses(t *testing.T) {
+// TestLessonCompleteWithObservationUnknownLessonMisses pins the plain
+// not-found case for a lesson ID that doesn't exist at all.
+func TestLessonCompleteWithObservationUnknownLessonMisses(t *testing.T) {
 	repo, identity := lessonTestSetup(t)
+	unknownID := uuid.NewString()
 	obs := storage.LessonObservation{
 		ID:        uuid.NewString(),
-		LessonID:  uuid.NewString(),
+		LessonID:  unknownID,
 		Author:    "tutor-a",
 		Notes:     "n",
 		Subjects:  []string{},
 		CreatedAt: time.Now().UTC(),
 	}
-	err := repo.AddObservation(context.Background(), identity, obs)
+	_, err := repo.CompleteWithObservation(context.Background(), identity, unknownID, obs, time.Now().UTC())
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("err = %v, want storage.ErrNotFound", err)
+	}
+}
+
+// TestLessonCompleteWithObservationRollsBackBothWritesOnFailure is the
+// controller-mandated atomicity proof (code review finding 1): forces
+// the transaction's SECOND statement (the observation insert) to fail
+// with a genuine constraint violation — a duplicate lesson_observations
+// primary key, reusing the exact "reuse an ID that already exists" the
+// controller's earlier Anki/feedback rollback tests used
+// (TestFeedbackInsertFeedbackFailureRollsBackAlreadyPersistedConcepts)
+// — and proves the FIRST statement (CompleteLesson's status flip, which
+// already succeeded within this same, still-uncommitted transaction)
+// rolled back too: the target lesson is left exactly as it was before
+// the call, "prepared" with no CompletedAt and no attached observation.
+func TestLessonCompleteWithObservationRollsBackBothWritesOnFailure(t *testing.T) {
+	repo, identity := lessonTestSetup(t)
+	ctx := context.Background()
+
+	target := testLesson(identity, time.Now().UTC())
+	if err := repo.Insert(ctx, target); err != nil {
+		t.Fatal(err)
+	}
+	// A second, unrelated lesson that already owns one observation row
+	// — its ID is what the failing call below will collide with.
+	other := testLesson(identity, time.Now().UTC())
+	if err := repo.Insert(ctx, other); err != nil {
+		t.Fatal(err)
+	}
+	dupID := uuid.NewString()
+	existingObs := storage.LessonObservation{
+		ID:        dupID,
+		LessonID:  other.ID,
+		Author:    "tutor-b",
+		Notes:     "pre-existing",
+		Subjects:  []string{},
+		CreatedAt: time.Now().UTC(),
+	}
+	if _, err := repo.CompleteWithObservation(ctx, identity, other.ID, existingObs, time.Now().UTC()); err != nil {
+		t.Fatalf("seeding the pre-existing observation: %v", err)
+	}
+
+	// Now attempt to complete target with an observation that reuses
+	// dupID — lesson_observations.id is a primary key, so this INSERT
+	// fails with a PK violation AFTER CompleteLesson has already
+	// updated target's status within this same, still-uncommitted
+	// transaction.
+	colliding := storage.LessonObservation{
+		ID:        dupID,
+		LessonID:  target.ID,
+		Author:    "tutor-a",
+		Notes:     "should never be visible",
+		Subjects:  []string{"i-adjective-past"},
+		CreatedAt: time.Now().UTC(),
+	}
+	if _, err := repo.CompleteWithObservation(ctx, identity, target.ID, colliding, time.Now().UTC()); err == nil {
+		t.Fatal("expected an error from the duplicate observation ID PK violation, got nil")
+	}
+
+	got, err := repo.Get(ctx, identity, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != "prepared" {
+		t.Fatalf("Status = %q, want still prepared (CompleteLesson's flip must have rolled back with the failed insert)", got.Status)
+	}
+	if !got.CompletedAt.IsZero() {
+		t.Fatalf("CompletedAt = %v, want zero", got.CompletedAt)
+	}
+
+	obsList, err := repo.Observations(ctx, identity, target.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(obsList) != 0 {
+		t.Fatalf("Observations(target) = %+v, want empty (the colliding insert must not have attached)", obsList)
 	}
 }

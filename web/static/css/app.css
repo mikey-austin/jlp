@@ -488,27 +488,27 @@ p.empty {
     display: none !important;
   }
   body {
-    background: #fff;
-    color: #000;
+    background: var(--print-bg);
+    color: var(--print-fg);
   }
   main {
     max-width: none;
     padding: 0;
   }
   a {
-    color: #000;
+    color: var(--print-fg);
     text-decoration: underline;
   }
   .card,
   .table-card {
-    border: 1px solid #000;
+    border: 1px solid var(--print-fg);
     box-shadow: none;
     break-inside: avoid;
   }
   .badge,
   .chip {
-    border: 1px solid #000;
+    border: 1px solid var(--print-fg);
     background: none;
-    color: #000;
+    color: var(--print-fg);
   }
 }

@@ -23,6 +23,11 @@ type CompleteLessonParams struct {
 	CompletedAt pgtype.Timestamptz
 }
 
+// Run inside the SAME transaction as InsertLessonObservation below —
+// see postgres/lessons.go's CompleteWithObservation, the ONLY caller of
+// either query: a lesson must never end up "completed" without its
+// triggering observation actually attached, or vice versa. Not called
+// standalone by anything else.
 func (q *Queries) CompleteLesson(ctx context.Context, arg CompleteLessonParams) (Lesson, error) {
 	row := q.db.QueryRow(ctx, completeLesson, arg.ID, arg.IdentityID, arg.CompletedAt)
 	var i Lesson
@@ -102,12 +107,15 @@ type InsertLessonObservationParams struct {
 	IdentityID string
 }
 
-// Identity check via a join to lessons itself, the same "never trust
-// the caller, check via a join" shape UpsertAIRating (ai_ratings.sql)
-// uses: nothing is written unless lesson_id actually belongs to
-// identity_id. :execrows lets the caller (postgres/lessons.go) tell
-// "wrote" from "no such lesson for this identity" apart — zero rows
-// affected means the latter, mapped to storage.ErrNotFound.
+// Run inside the SAME transaction as CompleteLesson above, by
+// postgres/lessons.go's CompleteWithObservation. Identity check via a
+// join to lessons itself, the same "never trust the caller, check via
+// a join" shape UpsertAIRating (ai_ratings.sql) uses: nothing is
+// written unless lesson_id actually belongs to identity_id. :execrows
+// lets the caller tell "wrote" from "no such lesson for this identity"
+// apart — zero rows affected means the latter, mapped to
+// storage.ErrNotFound (and, since this runs inside the same
+// transaction, rolls back CompleteLesson's status flip too).
 func (q *Queries) InsertLessonObservation(ctx context.Context, arg InsertLessonObservationParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertLessonObservation,
 		arg.ID,

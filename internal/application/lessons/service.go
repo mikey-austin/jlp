@@ -125,12 +125,16 @@ func (s *Service) Generate(ctx context.Context, identity learner.IdentityID) (st
 
 // Complete records a human tutor's post-lesson observation (author,
 // free-text notes, and a caller-supplied list of subjects — concept
-// slugs or free-form tags) and marks lessonID "completed", recording
-// tutor.lesson.completed with Evidence carrying subjects. Both
-// AddObservation and Complete are identity-scoped (via
-// storage.LessonRepository's lesson-ownership join): a wrong identity
-// or unknown lessonID both propagate storage.ErrNotFound from whichever
-// call reaches it first.
+// slugs or free-form tags) and marks lessonID "completed", atomically
+// (storage.LessonRepository.CompleteWithObservation — see its doc
+// comment for why a partial write here is unacceptable, not just
+// untidy: the detail template only renders observations once Status is
+// "completed", so an observation attached without the status flip
+// would be durably persisted yet permanently invisible, and a retry
+// would then attach a second, duplicate observation), then records
+// tutor.lesson.completed with Evidence carrying subjects. A wrong
+// identity or unknown lessonID both propagate storage.ErrNotFound with
+// NEITHER the observation nor the status change taking effect.
 //
 // The learner model does NOT yet consume tutor.lesson.completed —
 // unlike correction.presented/grammar.concept.encountered, no consumer
@@ -149,11 +153,7 @@ func (s *Service) Complete(ctx context.Context, identity learner.IdentityID, les
 		Subjects:  subjects,
 		CreatedAt: time.Now().UTC(),
 	}
-	if err := s.repo.AddObservation(ctx, identity, obs); err != nil {
-		return storage.Lesson{}, err
-	}
-
-	l, err := s.repo.Complete(ctx, identity, lessonID)
+	l, err := s.repo.CompleteWithObservation(ctx, identity, lessonID, obs, time.Now().UTC())
 	if err != nil {
 		return storage.Lesson{}, err
 	}

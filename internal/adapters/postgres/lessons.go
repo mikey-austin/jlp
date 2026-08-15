@@ -23,11 +23,12 @@ import (
 // storage.LessonRepository's doc comment for the full identity-scoping
 // contract.
 type LessonRepository struct {
-	q *sqlcgen.Queries
+	pool *pgxpool.Pool
+	q    *sqlcgen.Queries
 }
 
 func NewLessonRepository(pool *pgxpool.Pool) *LessonRepository {
-	return &LessonRepository{q: sqlcgen.New(pool)}
+	return &LessonRepository{pool: pool, q: sqlcgen.New(pool)}
 }
 
 // Insert persists a newly generated lesson, Status "prepared".
@@ -75,41 +76,36 @@ func (r *LessonRepository) Get(ctx context.Context, identity learner.IdentityID,
 	return fromLessonRow(row), nil
 }
 
-// Complete sets id's Status to "completed" and CompletedAt to now,
-// identity-scoped like Get.
-func (r *LessonRepository) Complete(ctx context.Context, identity learner.IdentityID, id string) (storage.Lesson, error) {
-	lessonID, err := parseUUID(id)
+// CompleteWithObservation persists o AND sets its target lesson's
+// Status to "completed" (CompletedAt = at), in ONE transaction — see
+// storage.LessonRepository.CompleteWithObservation's doc comment for
+// why this must be atomic rather than two independent calls (the
+// code-review finding this replaced: a lesson left "completed" without
+// its observation attached, or vice versa, is either invisible in the
+// UI or duplicable on retry). CompleteLesson runs first (its own
+// identity-scoped WHERE clause is what turns a wrong identity or
+// unknown id into pgx.ErrNoRows / storage.ErrNotFound); the observation
+// insert runs second, inside the SAME transaction, and independently
+// re-checks lesson ownership via its own join (see db/queries/
+// lessons.sql's InsertLessonObservation) — belt-and-suspenders, not
+// load-bearing given CompleteLesson's row lock already guarantees the
+// row exists and is owned by identity by the time this runs. Either
+// statement failing (a wrong identity, an unknown lesson ID, or any
+// other error — e.g. a duplicate observation ID) rolls back BOTH: the
+// status flip is never left committed without its observation, and the
+// observation is never left attached without the status flip.
+func (r *LessonRepository) CompleteWithObservation(ctx context.Context, identity learner.IdentityID, lessonID string, o storage.LessonObservation, at time.Time) (storage.Lesson, error) {
+	lid, err := parseUUID(lessonID)
 	if err != nil {
 		return storage.Lesson{}, fmt.Errorf("lesson id: %w", err)
 	}
-	row, err := r.q.CompleteLesson(ctx, sqlcgen.CompleteLessonParams{
-		ID:          lessonID,
-		IdentityID:  string(identity),
-		CompletedAt: pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
-	})
+	obsID, err := parseUUID(o.ID)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return storage.Lesson{}, storage.ErrNotFound
-		}
-		return storage.Lesson{}, err
+		return storage.Lesson{}, fmt.Errorf("observation id: %w", err)
 	}
-	return fromLessonRow(row), nil
-}
-
-// AddObservation persists o only if o.LessonID actually belongs to
-// identity — verified via a join to lessons inside the query itself
-// (see db/queries/lessons.sql's InsertLessonObservation): a lesson ID
-// that doesn't exist, or exists but belongs to a different identity,
-// both come back storage.ErrNotFound via the :execrows zero-rows check,
-// mirroring AIRatingRepository.Upsert.
-func (r *LessonRepository) AddObservation(ctx context.Context, identity learner.IdentityID, o storage.LessonObservation) error {
-	id, err := parseUUID(o.ID)
+	obsLessonID, err := parseUUID(o.LessonID)
 	if err != nil {
-		return fmt.Errorf("observation id: %w", err)
-	}
-	lessonID, err := parseUUID(o.LessonID)
-	if err != nil {
-		return fmt.Errorf("lesson id: %w", err)
+		return storage.Lesson{}, fmt.Errorf("observation lesson id: %w", err)
 	}
 	subjects := o.Subjects
 	if subjects == nil {
@@ -117,11 +113,31 @@ func (r *LessonRepository) AddObservation(ctx context.Context, identity learner.
 	}
 	subjectsJSON, err := json.Marshal(subjects)
 	if err != nil {
-		return fmt.Errorf("subjects: %w", err)
+		return storage.Lesson{}, fmt.Errorf("subjects: %w", err)
 	}
-	rows, err := r.q.InsertLessonObservation(ctx, sqlcgen.InsertLessonObservationParams{
-		ID:         id,
-		LessonID:   lessonID,
+
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return storage.Lesson{}, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }() // no-op once Commit has succeeded
+	qtx := r.q.WithTx(tx)
+
+	completed, err := qtx.CompleteLesson(ctx, sqlcgen.CompleteLessonParams{
+		ID:          lid,
+		IdentityID:  string(identity),
+		CompletedAt: pgtype.Timestamptz{Time: at, Valid: true},
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storage.Lesson{}, storage.ErrNotFound
+		}
+		return storage.Lesson{}, err
+	}
+
+	rows, err := qtx.InsertLessonObservation(ctx, sqlcgen.InsertLessonObservationParams{
+		ID:         obsID,
+		LessonID:   obsLessonID,
 		Author:     o.Author,
 		Notes:      o.Notes,
 		Subjects:   subjectsJSON,
@@ -129,18 +145,22 @@ func (r *LessonRepository) AddObservation(ctx context.Context, identity learner.
 		IdentityID: string(identity),
 	})
 	if err != nil {
-		return err
+		return storage.Lesson{}, err
 	}
 	if rows == 0 {
-		return storage.ErrNotFound
+		return storage.Lesson{}, storage.ErrNotFound
 	}
-	return nil
+
+	if err := tx.Commit(ctx); err != nil {
+		return storage.Lesson{}, err
+	}
+	return fromLessonRow(completed), nil
 }
 
 // Observations returns every observation recorded against lessonID,
-// newest first, scoped via the same join AddObservation uses — see
-// storage.LessonRepository.Observations' doc comment for the "filters,
-// doesn't error" contract this implements.
+// newest first, scoped via the same join CompleteWithObservation uses
+// — see storage.LessonRepository.Observations' doc comment for the
+// "filters, doesn't error" contract this implements.
 func (r *LessonRepository) Observations(ctx context.Context, identity learner.IdentityID, lessonID string) ([]storage.LessonObservation, error) {
 	id, err := parseUUID(lessonID)
 	if err != nil {

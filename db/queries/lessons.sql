@@ -14,17 +14,25 @@ FROM lessons
 WHERE id = $1 AND identity_id = $2;
 
 -- name: CompleteLesson :one
+-- Run inside the SAME transaction as InsertLessonObservation below —
+-- see postgres/lessons.go's CompleteWithObservation, the ONLY caller of
+-- either query: a lesson must never end up "completed" without its
+-- triggering observation actually attached, or vice versa. Not called
+-- standalone by anything else.
 UPDATE lessons SET status = 'completed', completed_at = $3
 WHERE id = $1 AND identity_id = $2
 RETURNING id, identity_id, plan, status, created_at, completed_at;
 
 -- name: InsertLessonObservation :execrows
--- Identity check via a join to lessons itself, the same "never trust
--- the caller, check via a join" shape UpsertAIRating (ai_ratings.sql)
--- uses: nothing is written unless lesson_id actually belongs to
--- identity_id. :execrows lets the caller (postgres/lessons.go) tell
--- "wrote" from "no such lesson for this identity" apart — zero rows
--- affected means the latter, mapped to storage.ErrNotFound.
+-- Run inside the SAME transaction as CompleteLesson above, by
+-- postgres/lessons.go's CompleteWithObservation. Identity check via a
+-- join to lessons itself, the same "never trust the caller, check via
+-- a join" shape UpsertAIRating (ai_ratings.sql) uses: nothing is
+-- written unless lesson_id actually belongs to identity_id. :execrows
+-- lets the caller tell "wrote" from "no such lesson for this identity"
+-- apart — zero rows affected means the latter, mapped to
+-- storage.ErrNotFound (and, since this runs inside the same
+-- transaction, rolls back CompleteLesson's status flip too).
 INSERT INTO lesson_observations (id, lesson_id, author, notes, subjects, created_at)
 SELECT $1, $2, $3, $4, $5, $6
 WHERE EXISTS (SELECT 1 FROM lessons l WHERE l.id = $2 AND l.identity_id = $7);

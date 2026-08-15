@@ -55,24 +55,20 @@ func (f *fakeLessonRepo) Get(_ context.Context, identity learner.IdentityID, id 
 	return l, nil
 }
 
-func (f *fakeLessonRepo) Complete(_ context.Context, identity learner.IdentityID, id string) (storage.Lesson, error) {
-	l, ok := f.byID[id]
+// CompleteWithObservation mirrors the real postgres repo's atomic
+// contract (Insert + status flip together): a lesson ID that doesn't
+// exist, or belongs to a different identity, misses with ErrNotFound
+// and mutates nothing.
+func (f *fakeLessonRepo) CompleteWithObservation(_ context.Context, identity learner.IdentityID, lessonID string, o storage.LessonObservation, at time.Time) (storage.Lesson, error) {
+	l, ok := f.byID[lessonID]
 	if !ok || l.IdentityID != identity {
 		return storage.Lesson{}, storage.ErrNotFound
 	}
 	l.Status = "completed"
-	l.CompletedAt = time.Now().UTC()
-	f.byID[id] = l
+	l.CompletedAt = at
+	f.byID[lessonID] = l
+	f.observations[lessonID] = append(f.observations[lessonID], o)
 	return l, nil
-}
-
-func (f *fakeLessonRepo) AddObservation(_ context.Context, identity learner.IdentityID, o storage.LessonObservation) error {
-	l, ok := f.byID[o.LessonID]
-	if !ok || l.IdentityID != identity {
-		return storage.ErrNotFound
-	}
-	f.observations[o.LessonID] = append(f.observations[o.LessonID], o)
-	return nil
 }
 
 func (f *fakeLessonRepo) Observations(_ context.Context, _ learner.IdentityID, lessonID string) ([]storage.LessonObservation, error) {
