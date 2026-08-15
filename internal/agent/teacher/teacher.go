@@ -200,3 +200,123 @@ func (a *Agent) ReviewWriting(ctx context.Context, in ReviewInput) (correction.R
 	}
 	return result, resp, nil
 }
+
+// agenticPromptName/agenticPromptVersion name the teacher.agentic.v1
+// templates the agentic path below renders — a SEPARATE prompt from
+// promptName/promptVersion above, used only to drive the
+// investigate-the-learner's-history tool-calling turn, never to
+// produce corrections directly (see ReviewWritingAgentic's doc
+// comment on Rule 4).
+const (
+	agenticPromptName    = "teacher.agentic"
+	agenticPromptVersion = "v1"
+)
+
+// agenticPromptData mirrors exactly what
+// templates/teacher.agentic.v1.*.md range/index over.
+type agenticPromptData struct {
+	Context   string
+	Selection string
+}
+
+// AgenticRunInput/AgenticRunOutput/AgenticRunner are the minimal
+// tool-calling-loop capability ReviewWritingAgentic needs from
+// application/agentrun.Runner, restated here using only ports/ai +
+// domain types (never application/agentrun or internal/tools
+// directly) so this package's import list stays exactly ports/ai +
+// prompts + schemas + domain (Rule 3: agents never import
+// ports/storage or the application services directly, and Runner's
+// own package depends on both). The concrete *agentrun.Runner doesn't
+// implement this interface itself — the application layer that owns
+// both packages (application/feedback.Service) adapts it, the same
+// way it already adapts *teacher.Agent into whatever the feedback
+// pipeline needs.
+type AgenticRunner interface {
+	Run(ctx context.Context, in AgenticRunInput) (AgenticRunOutput, error)
+}
+
+// AgenticRunInput mirrors application/agentrun.RunInput field-for-
+// field (see that type's doc comment for what each field means) —
+// kept as a distinct type rather than a type alias so this package
+// never has to import application/agentrun to name it.
+type AgenticRunInput struct {
+	Agent, PromptName, PromptVersion, System string
+	Messages                                 []ai.ToolMessage
+	Identity                                 learner.IdentityID
+	SessionID                                *session.ID
+}
+
+// AgenticRunOutput mirrors application/agentrun.RunOutput field-for-
+// field, same reasoning as AgenticRunInput above.
+type AgenticRunOutput struct {
+	RunID string
+	Text  string
+	Turns int
+}
+
+// AgenticReview is what ReviewWritingAgentic returns: the SAME
+// correction.Result/ai.StructuredResponse shape ReviewWriting returns
+// (Both paths must produce equivalent output — see this package's
+// tests), plus RunID identifying the agent_runs trace the tool-calling
+// investigation left behind, for the caller to surface (the /ai/agents
+// trace viewer).
+type AgenticReview struct {
+	Result   correction.Result
+	Response ai.StructuredResponse
+	RunID    string
+}
+
+// ReviewWritingAgentic is Task 2's opt-in agentic path (PRD §27/§50,
+// APP_AI_AGENTICTEACHER): before producing corrections, it drives a
+// tool-calling conversation via runner that lets the model investigate
+// the learner's own history through whatever internal/tools.Registry
+// tools "teacher" is allowed to call (get_learning_priorities,
+// get_recent_errors, get_correction_history, ...) — instead of the
+// caller precomputing all of that context up front the way
+// RequestFeedback's RecentErrors does for the single-shot path.
+//
+// The tool-calling conversation's final turn is prose, not schema-
+// validated JSON — Rule 4 forbids ever returning that directly as
+// corrections. Instead its text is folded into in.RecentErrors as one
+// more human-readable line, and the corrections themselves still come
+// from ReviewWriting's existing schema-validated
+// teacher.feedback.v3 + correction_result.v2 structured-generation
+// call, completely unchanged. That's what makes both paths return the
+// identical correction.Result shape: the agentic path only changes
+// WHERE RecentErrors' content comes from (the model's own
+// investigation vs. a precomputed priority list), never how
+// corrections are produced.
+func (a *Agent) ReviewWritingAgentic(ctx context.Context, in ReviewInput, runner AgenticRunner) (AgenticReview, error) {
+	rendered, err := prompts.Render(agenticPromptName, agenticPromptVersion, agenticPromptData{
+		Context:   in.Context,
+		Selection: in.Selection,
+	})
+	if err != nil {
+		return AgenticReview{}, fmt.Errorf("teacher: render agentic prompt: %w", err)
+	}
+
+	sid := in.Session.ID
+	out, err := runner.Run(ctx, AgenticRunInput{
+		Agent:         agentName,
+		PromptName:    agenticPromptName,
+		PromptVersion: agenticPromptVersion,
+		System:        rendered.System,
+		Messages:      []ai.ToolMessage{{Role: "user", Text: rendered.User}},
+		Identity:      in.Identity,
+		SessionID:     &sid,
+	})
+	if err != nil {
+		return AgenticReview{RunID: out.RunID}, fmt.Errorf("teacher: agentic investigation: %w", err)
+	}
+
+	reviewIn := in
+	if out.Text != "" {
+		reviewIn.RecentErrors = append(append([]string{}, in.RecentErrors...), out.Text)
+	}
+
+	result, resp, err := a.ReviewWriting(ctx, reviewIn)
+	if err != nil {
+		return AgenticReview{RunID: out.RunID}, err
+	}
+	return AgenticReview{Result: result, Response: resp, RunID: out.RunID}, nil
+}

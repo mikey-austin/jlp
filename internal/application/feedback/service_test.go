@@ -532,7 +532,7 @@ func newTestHarnessWithGenerator(gen ai.StructuredGenerator) *testHarness {
 	// signature; ActivationCandidates never touches them.
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, events, grammarRepo, priorities, vocabRepo, time.Now)
 	t := teacher.New(gen)
-	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, teachingPlanner, vocabSvc, t, rec)
+	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, teachingPlanner, vocabSvc, t, rec, false, nil)
 	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events, priorities: priorities, vocab: vocabRepo}
 }
 

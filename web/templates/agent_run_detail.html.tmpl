@@ -1,0 +1,36 @@
+{{define "content"}}<section class="agent-run-detail">
+  <h1>{{.Run.Agent}} <span class="badge">{{.Run.Status}}</span></h1>
+  <p class="description">
+    {{.Run.PromptName}} {{.Run.PromptVersion}} ・ ターン数 {{.Run.Turns}} ・ 開始 {{.Run.StartedAt.Format "2006-01-02 15:04:05"}}{{if not .Run.EndedAt.IsZero}} ・ 終了 {{.Run.EndedAt.Format "2006-01-02 15:04:05"}} ({{.Run.Duration}}){{end}}
+  </p>
+  {{if eq .Run.Status "failed"}}<p class="empty">エラー: {{.Run.Error}}</p>{{end}}
+
+  <div class="card">
+    <h2>入力コンテキスト</h2>
+    <p class="agent-run-label">System</p>
+    <pre class="agent-run-text">{{.System}}</pre>
+    <p class="agent-run-label">Input</p>
+    <pre class="agent-run-text">{{.Input}}</pre>
+  </div>
+
+  <h2>ツール呼び出し</h2>
+  <div class="table-card">
+    <table>
+      <thead><tr><th>ツール</th><th>引数</th><th>結果</th><th>状態</th><th>所要時間 (ms)</th></tr></thead>
+      <tbody>
+        {{range .ToolCalls}}<tr>
+          <td>{{.ToolName}}</td>
+          <td><pre class="agent-run-text">{{.Arguments}}</pre></td>
+          <td><pre class="agent-run-text">{{.Result}}</pre></td>
+          <td>{{if .IsError}}<span class="badge">error</span>{{else}}<span class="badge">ok</span>{{end}}</td>
+          <td>{{.DurationMS}}</td>
+        </tr>{{else}}<tr><td colspan="5" class="empty">ツール呼び出しはありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h2>最終出力</h2>
+    {{if .Output}}<pre class="agent-run-text">{{.Output}}</pre>{{else}}<p class="empty">出力はありません</p>{{end}}
+  </div>
+</section>{{end}}

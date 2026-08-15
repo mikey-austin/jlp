@@ -1,13 +1,13 @@
 -- name: InsertAgentRun :exec
 INSERT INTO agent_runs (
     id, identity_id, session_id, agent, prompt_name, prompt_version,
-    status, turns, started_at
+    status, turns, started_at, system, input
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9);
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
 
 -- name: FinishAgentRun :execrows
 UPDATE agent_runs
-SET status = $3, error = $4, turns = $5, ended_at = $6
+SET status = $3, error = $4, output = $5, turns = $6, ended_at = $7
 WHERE id = $1 AND identity_id = $2;
 
 -- name: InsertToolCall :execrows
@@ -22,7 +22,7 @@ WHERE ar.id = $8 AND ar.identity_id = $9;
 
 -- name: ListAgentRuns :many
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
-       status, turns, started_at, ended_at, error
+       status, turns, started_at, ended_at, error, system, input, output
 FROM agent_runs
 WHERE identity_id = $1
 ORDER BY started_at DESC
@@ -30,7 +30,7 @@ LIMIT $2;
 
 -- name: GetAgentRun :one
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
-       status, turns, started_at, ended_at, error
+       status, turns, started_at, ended_at, error, system, input, output
 FROM agent_runs
 WHERE id = $1 AND identity_id = $2;
 

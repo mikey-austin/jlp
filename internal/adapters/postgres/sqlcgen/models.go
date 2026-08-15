@@ -20,6 +20,9 @@ type AgentRun struct {
 	StartedAt     pgtype.Timestamptz
 	EndedAt       pgtype.Timestamptz
 	Error         string
+	System        string
+	Input         string
+	Output        string
 }
 
 type AiRating struct {

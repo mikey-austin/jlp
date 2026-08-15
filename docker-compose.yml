@@ -30,6 +30,10 @@ services:
       APP_AI_OLLAMA_URL: ${APP_AI_OLLAMA_URL:-http://ollama:11434}
       APP_AI_OLLAMA_MODEL: ${APP_AI_OLLAMA_MODEL:-}
       APP_AI_ROUTES: ${APP_AI_ROUTES:-}
+      # Phase 4 Task 2's opt-in agentic teacher (PRD §27/§50): unset (the
+      # default) keeps Phase 1's single-shot structured-generation path —
+      # see internal/config.AI.AgenticTeacher's doc comment.
+      APP_AI_AGENTICTEACHER: ${APP_AI_AGENTICTEACHER:-}
       # Empty (the default) keeps the Anki review queue's AnkiConnect push
       # dormant — see internal/config.Anki's doc comment. TSV export needs
       # no configuration at all.

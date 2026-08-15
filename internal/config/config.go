@@ -55,6 +55,16 @@ type AI struct {
 	// constructible (e.g. a Task 12 CLI adapter, or ollama without a
 	// model) becomes a boot error.
 	Routes string
+	// AgenticTeacher opts into Phase 4 Task 2's agentic teacher path
+	// (PRD §27/§50, APP_AI_AGENTICTEACHER): when true,
+	// application/feedback.Service.RequestFeedback drives a
+	// tool-calling investigation (application/agentrun.Runner over
+	// internal/tools.Registry) before asking for corrections, instead
+	// of going straight to the single-shot structured-generation call.
+	// Defaults false — Go's bool zero value already is the "keep Phase
+	// 1's behaviour and cost unchanged" contract, same as
+	// Summary.Enabled's own doc comment explains for the same pattern.
+	AgenticTeacher bool
 }
 
 type Anthropic struct {
@@ -200,7 +210,7 @@ func Load() (Config, error) {
 	for _, key := range []string{"server.port", "server.baseurl", "database.url",
 		"auth.mode", "auth.static.id", "auth.static.displayname",
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
-		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes",
+		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes", "ai.agenticteacher",
 		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err

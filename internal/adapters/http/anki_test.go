@@ -121,7 +121,7 @@ func ankiTestServer(t *testing.T, connector appanki.AnkiConnector) (h http.Handl
 	vocabRepo := newFakeVocabRepo()
 	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
 	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, fakeGrammarRepo{}, fakePriorityRepo{}, vocabRepo, time.Now)
-	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec)
+	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec, false, nil)
 
 	cards = newFakeAnkiCardRepo()
 	ankiSvc := appanki.NewService(cards, feedbackRepo, agentanki.New(fakeai.New()), rec)
@@ -394,7 +394,7 @@ func gatedAnkiTestServer(t *testing.T) (h http.Handler, correctionID string, car
 	vocabRepo := newFakeVocabRepo()
 	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
 	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, fakeGrammarRepo{}, fakePriorityRepo{}, vocabRepo, time.Now)
-	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec)
+	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec, false, nil)
 
 	cards = newFakeAnkiCardRepo()
 	ankiSvc := appanki.NewService(cards, feedbackRepo, agentanki.New(fakeai.New()), rec)

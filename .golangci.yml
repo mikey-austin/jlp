@@ -31,7 +31,10 @@ linters:
         # internal/application/vocabulary/service_test.go,
         # internal/application/feedback/service_test.go,
         # internal/application/writing/service_test.go,
-        # internal/application/practice/service_test.go. Any other file
+        # internal/application/practice/service_test.go,
+        # internal/application/agentrun/runner_test.go (Phase 4 Task 2 —
+        # fakeai also implements ai.ToolCaller, injected the same way).
+        # Any other file
         # under internal/agent/** or internal/application/** that imports
         # a real adapter is still flagged.
         # agents-no-repos's third entry (Phase 4 Task 1) closes the same

@@ -32,6 +32,9 @@ func TestDefaults(t *testing.T) {
 	if cfg.AI.CodexCLI.Bin != "codex" {
 		t.Fatalf("AI.CodexCLI.Bin default = %q, want codex", cfg.AI.CodexCLI.Bin)
 	}
+	if cfg.AI.AgenticTeacher {
+		t.Fatalf("AI.AgenticTeacher default = true, want false (Phase 1's single-shot path stays default)")
+	}
 	// Regression: the default must be the loopback address only. A
 	// broad default like 172.16.0.0/12 would trust every private-network
 	// peer, re-opening the hairpin-NAT spoofing hole a non-compose
@@ -48,12 +51,16 @@ func TestEnvOverrides(t *testing.T) {
 	t.Setenv("APP_SERVER_PORT", "9999")
 	t.Setenv("APP_AI_PROVIDER", "anthropic")
 	t.Setenv("APP_AI_ANTHROPIC_APIKEY", "sk-test")
+	t.Setenv("APP_AI_AGENTICTEACHER", "true")
 	cfg, err := Load()
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Server.Port != 9999 || cfg.AI.Anthropic.APIKey != "sk-test" {
 		t.Fatalf("overrides not applied: %+v", cfg)
+	}
+	if !cfg.AI.AgenticTeacher {
+		t.Fatal("AI.AgenticTeacher = false, want true after APP_AI_AGENTICTEACHER=true")
 	}
 }
 

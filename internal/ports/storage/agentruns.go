@@ -22,6 +22,13 @@ type AgentRun struct {
 	Turns                            int
 	StartedAt, EndedAt               time.Time
 	Error                            string
+	// System/Input are the conversation's starting point, written once
+	// at Start (System is the rendered prompt's system text; Input is
+	// its opening user turn) — the /ai/agents trace viewer's "input
+	// context" section. Output is the model's final turn text, written
+	// once at Finish and only ever non-empty for a "completed" run: a
+	// "failed" run's Error already explains what happened instead.
+	System, Input, Output string
 }
 
 // ToolCall is one internal/tools.Registry.Invoke call made during an
@@ -48,11 +55,13 @@ type ToolCall struct {
 type AgentRunRepository interface {
 	// Start persists a newly begun run, Status "running".
 	Start(ctx context.Context, run AgentRun) error
-	// Finish sets runID's Status/Error/Turns/EndedAt — identity-scoped:
-	// a runID that exists but belongs to a different identity misses
-	// with ErrNotFound, matching every other identity-scoped write in
-	// this package.
-	Finish(ctx context.Context, identity learner.IdentityID, runID, status, errMsg string, turns int, endedAt time.Time) error
+	// Finish sets runID's Status/Error/Output/Turns/EndedAt —
+	// identity-scoped: a runID that exists but belongs to a different
+	// identity misses with ErrNotFound, matching every other
+	// identity-scoped write in this package. output is the model's
+	// final turn text (empty for a failed run — see AgentRun.Output's
+	// doc comment).
+	Finish(ctx context.Context, identity learner.IdentityID, runID, status, errMsg, output string, turns int, endedAt time.Time) error
 	// RecordToolCall persists c, scoped via a join to agent_runs: a
 	// c.AgentRunID that exists but belongs to a different identity — or
 	// doesn't exist at all — misses with ErrNotFound and writes nothing,

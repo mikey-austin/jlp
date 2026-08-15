@@ -551,6 +551,32 @@ p.empty {
   margin: 0 0 6px;
 }
 
+/* ============================== Agent-run trace (Phase 4 Task 2) ======== */
+/* /ai/agents and /ai/agents/{id} (PRD §27/§50): tool call
+ * arguments/results and the model's final output are plain,
+ * server-escaped text — never trusted HTML (see agentruns.go's doc
+ * comment) — so they're rendered inside <pre> and just need
+ * monospace/wrap styling, no design-system component of their own. */
+.agent-run-label {
+  margin: 14px 0 4px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-muted);
+}
+.agent-run-text {
+  margin: 0;
+  padding: 10px 12px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 280px;
+  overflow-y: auto;
+}
+
 /* ============================== Print (lesson guides) =================== */
 /* A lesson guide (PRD §18/§60) is meant to be printed or exported as a
  * PDF for a human tutor to read before a session. `.no-print` marks

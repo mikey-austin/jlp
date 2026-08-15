@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
+	"github.com/mikeyaustin/jlp/internal/application/agentrun"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
@@ -24,6 +25,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -64,6 +66,18 @@ type Service struct {
 	vocab      *appvocabulary.Service
 	teacher    *teacher.Agent
 	rec        *learning.Recorder
+	// agenticTeacher/runner back Task 2's opt-in agentic path
+	// (APP_AI_AGENTICTEACHER, PRD §27/§50): when agenticTeacher is
+	// true, RequestFeedback calls teacher.ReviewWritingAgentic (via the
+	// runnerAdapter below, which is what actually satisfies
+	// teacher.AgenticRunner — see that interface's own doc comment for
+	// why the adapter, not *agentrun.Runner itself, is what teacher.go
+	// depends on) instead of ReviewWriting. runner is nil whenever
+	// agenticTeacher is false; NewService's callers that never opt in
+	// (every test but this package's own agentic ones, and any Phase-1
+	// caller) pass (false, nil) and never touch it.
+	agenticTeacher bool
+	runner         *agentrun.Runner
 }
 
 // NewService wires the feedback pipeline. priorities feeds the Teacher
@@ -84,8 +98,32 @@ type Service struct {
 //
 // vocab.DetectProduction runs at the very end of every RequestFeedback
 // call — see that method's closing comment for why it's non-fatal.
-func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, plnr *planner.Planner, vocab *appvocabulary.Service, t *teacher.Agent, rec *learning.Recorder) *Service {
-	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, planner: plnr, vocab: vocab, teacher: t, rec: rec}
+func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, plnr *planner.Planner, vocab *appvocabulary.Service, t *teacher.Agent, rec *learning.Recorder, agenticTeacher bool, runner *agentrun.Runner) *Service {
+	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, planner: plnr, vocab: vocab, teacher: t, rec: rec, agenticTeacher: agenticTeacher, runner: runner}
+}
+
+// runnerAdapter adapts *agentrun.Runner to teacher.AgenticRunner: the
+// two packages' Run{Input,Output} types are field-for-field identical
+// on purpose (see teacher.AgenticRunInput/AgenticRunOutput's doc
+// comment) but are deliberately NOT the same named type, so
+// internal/agent/teacher never has to import application/agentrun
+// (Rule 3). This tiny translation is the seam that lets both sides
+// stay decoupled — it belongs here, not in either of the two packages
+// it bridges, because application/feedback is the one caller that
+// already depends on both.
+type runnerAdapter struct{ r *agentrun.Runner }
+
+func (a runnerAdapter) Run(ctx context.Context, in teacher.AgenticRunInput) (teacher.AgenticRunOutput, error) {
+	out, err := a.r.Run(ctx, agentrun.RunInput{
+		Agent:         in.Agent,
+		PromptName:    in.PromptName,
+		PromptVersion: in.PromptVersion,
+		System:        in.System,
+		Messages:      in.Messages,
+		Identity:      in.Identity,
+		SessionID:     in.SessionID,
+	})
+	return teacher.AgenticRunOutput{RunID: out.RunID, Text: out.Text, Turns: out.Turns}, err
 }
 
 // Request asks for AI feedback on a slice of a document. Start/End are
@@ -206,7 +244,7 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		return Feedback{}, fmt.Errorf("feedback: expressions to encourage: %w", err)
 	}
 
-	result, resp, err := s.teacher.ReviewWriting(ctx, teacher.ReviewInput{
+	reviewInput := teacher.ReviewInput{
 		Identity:               req.Identity,
 		Session:                sess,
 		Selection:              selectionText,
@@ -214,9 +252,27 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		RecentErrors:           recentErrors,
 		ConceptCandidates:      conceptCandidates,
 		ExpressionsToEncourage: expressionsToEncourage,
-	})
-	if err != nil {
-		return Feedback{}, err
+	}
+
+	var result correction.Result
+	var resp ai.StructuredResponse
+	// Task 2's opt-in agentic path (APP_AI_AGENTICTEACHER, PRD §27/§50):
+	// s.runner is only non-nil when agenticTeacher is true (see
+	// NewService's doc comment), so this branch is dead code — same
+	// behaviour and cost as before Phase 4 — for every caller that
+	// never opted in.
+	if s.agenticTeacher && s.runner != nil {
+		review, aerr := s.teacher.ReviewWritingAgentic(ctx, reviewInput, runnerAdapter{s.runner})
+		if aerr != nil {
+			return Feedback{}, aerr
+		}
+		result, resp = review.Result, review.Response
+	} else {
+		var terr error
+		result, resp, terr = s.teacher.ReviewWriting(ctx, reviewInput)
+		if terr != nil {
+			return Feedback{}, terr
+		}
 	}
 
 	feedbackID := uuid.New().String()

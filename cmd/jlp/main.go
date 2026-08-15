@@ -20,6 +20,7 @@ import (
 	agentlesson "github.com/mikeyaustin/jlp/internal/agent/lesson"
 	agentsummary "github.com/mikeyaustin/jlp/internal/agent/summary"
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
+	"github.com/mikeyaustin/jlp/internal/application/agentrun"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
@@ -35,6 +36,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
+	"github.com/mikeyaustin/jlp/internal/tools"
 )
 
 func main() {
@@ -117,6 +119,21 @@ func main() {
 			os.Exit(1)
 		}
 
+		// toolCaller is the ai.ToolCaller counterpart of aiGen (Phase 4
+		// Task 2, PRD §27/§29): buildToolCaller (cmd/jlp/ai.go) mirrors
+		// buildAIGenerator's per-provider observed construction, just
+		// over a narrower provider set (only fake/anthropic/ollama
+		// implement ai.ToolCaller — see that function's own doc
+		// comment). Always built, whether or not APP_AI_AGENTICTEACHER
+		// is set: it's cheap (no network call at construction) and the
+		// agent-run loop below needs it regardless of which teacher path
+		// ends up calling it.
+		toolCaller, err := buildToolCaller(cfg, aiRequestRepo)
+		if err != nil {
+			slog.Error("ai", "err", err)
+			os.Exit(1)
+		}
+
 		// The learner's personal vocabulary (Task 6, PRD §12): vocabSvc's
 		// Ingest backs POST /api/v1/vocabulary/events and the /vocabulary
 		// page's List (see httpx.Options.Vocabulary below); its
@@ -155,6 +172,45 @@ func main() {
 		// write a card from — the same repository instance, not a second
 		// construction of it.
 		feedbackRepo := postgres.NewFeedbackRepository(pool)
+
+		// The tool registry (Phase 4 Task 1/2, PRD §27-§29/§64): the
+		// ONLY route any agent has from a tool-calling conversation to
+		// real application state. Read-only tools whose dependencies
+		// already exist at this point in main are registered here;
+		// LearningTools (record_learning_event/create_exercise/
+		// create_lesson_plan/create_anki_card — all MUTATING) is
+		// registered further below, once practiceSvc/lessonSvc/ankiSvc
+		// exist — Register just adds to the catalog, so registering more
+		// tools into the SAME *tools.Registry instance after runner is
+		// already constructed is safe (DefsFor/Invoke only ever run at
+		// request time, never at construction time).
+		toolRegistry := tools.NewRegistry()
+		registerTools(toolRegistry, tools.SessionTools(sessionsSvc))
+		registerTools(toolRegistry, tools.LearnerTools(identities, obsRepo, feedbackRepo))
+		registerTools(toolRegistry, tools.WritingTools(writingSvc))
+		registerTools(toolRegistry, tools.VocabularyTools(vocabSvc))
+		registerTools(toolRegistry, tools.AnalyticsTools(prioRepo, grammarRepo))
+		// "teacher" (agentName in internal/agent/teacher/teacher.go) may
+		// only READ the learner's context to decide what to emphasize —
+		// never mutate it (that's what the single-shot path's own
+		// RequestFeedback/vocab.DetectProduction calls already do, on
+		// the application layer's own authority, not the model's).
+		toolRegistry.Allow("teacher",
+			"get_active_session", "get_session_context",
+			"get_learner_profile", "get_recent_errors", "get_correction_history",
+			"get_recent_writing",
+			"get_vocabulary_history", "search_vocabulary",
+			"get_learning_priorities", "get_grammar_history",
+		)
+
+		// agentRunRepo/runner back the Task 2 agent-run loop: every
+		// tool-calling conversation any agent drives (today: the
+		// agentic teacher, when APP_AI_AGENTICTEACHER=true) goes
+		// through this ONE Runner, so /ai/agents (httpx.Options.AgentRuns
+		// below) sees every run regardless of which agent produced it.
+		agentRunRepo := postgres.NewAgentRunRepository(pool)
+		runner := agentrun.NewRunner(toolCaller, toolRegistry, agentRunRepo, time.Now)
+
 		feedbackSvc := feedback.NewService(
 			postgres.NewSessionRepository(pool),
 			postgres.NewDocumentRepository(pool),
@@ -165,6 +221,8 @@ func main() {
 			vocabSvc,
 			teacherAgent,
 			recorder,
+			cfg.AI.AgenticTeacher,
+			runner,
 		)
 		analyticsSvc := analytics.NewService(postgres.NewAnalyticsRepository(pool))
 		aiRatingRepo := postgres.NewAIRatingRepository(pool)
@@ -204,6 +262,16 @@ func main() {
 		lessonAgent := agentlesson.New(aiGen)
 		lessonRepo := postgres.NewLessonRepository(pool)
 		lessonSvc := applessons.NewService(lessonRepo, prioRepo, teachingPlanner, feedbackRepo, obsRepo, lessonAgent, recorder)
+
+		// LearningTools (record_learning_event/create_exercise/
+		// create_lesson_plan/create_anki_card) is registered here, now
+		// that its dependencies (practiceSvc/lessonSvc/ankiSvc) all
+		// exist — into the SAME toolRegistry constructed above, before
+		// any request can reach it. No agent is Allow()ed to call these
+		// yet: they're MUTATING tools reserved for a future agent (a
+		// conversation tutor, Phase 4 Task 6) that acts on the
+		// learner's behalf rather than merely reviewing writing.
+		registerTools(toolRegistry, tools.LearningTools(recorder, practiceSvc, lessonSvc, ankiSvc))
 
 		// Weekly email summary (Phase 3 Task 5, PRD §21/§65): summarySvc
 		// is always constructed (cheap — no network call happens until
@@ -258,6 +326,7 @@ func main() {
 			AnkiConnectEnabled: cfg.Anki.ConnectURL != "",
 			Lessons:            lessonSvc,
 			LessonsRepo:        lessonRepo,
+			AgentRuns:          agentRunRepo,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {
@@ -321,5 +390,17 @@ func main() {
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)
+	}
+}
+
+// registerTools registers every tools.Tool in ts into reg — a small
+// helper purely because tools.Registry.Register takes one Tool at a
+// time while every internal/tools/*.go constructor
+// (SessionTools/LearnerTools/... ) returns a []Tool, and main's own
+// registration block above would otherwise repeat this same for loop
+// six times.
+func registerTools(reg *tools.Registry, ts []tools.Tool) {
+	for _, t := range ts {
+		reg.Register(t)
 	}
 }

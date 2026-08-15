@@ -52,6 +52,8 @@ func testAgentRun(identity learner.IdentityID, now time.Time) storage.AgentRun {
 		PromptVersion: "v1",
 		Status:        "running",
 		StartedAt:     now,
+		System:        "You are an agentic Japanese writing teacher.",
+		Input:         "What should I focus on next?",
 	}
 }
 
@@ -84,7 +86,7 @@ func TestAgentRunStartFinishListGetRoundTrips(t *testing.T) {
 	}
 
 	endedAt := now.Add(2 * time.Second)
-	if err := repo.Finish(ctx, identity, run.ID, "completed", "", 2, endedAt); err != nil {
+	if err := repo.Finish(ctx, identity, run.ID, "completed", "", "Focus on i-adjective-past.", 2, endedAt); err != nil {
 		t.Fatalf("Finish: %v", err)
 	}
 
@@ -108,6 +110,12 @@ func TestAgentRunStartFinishListGetRoundTrips(t *testing.T) {
 	}
 	if !gotRun.EndedAt.Equal(endedAt) {
 		t.Fatalf("Get() run.EndedAt = %v, want %v", gotRun.EndedAt, endedAt)
+	}
+	if gotRun.System != run.System || gotRun.Input != run.Input {
+		t.Fatalf("Get() run System/Input = %q/%q, want %q/%q", gotRun.System, gotRun.Input, run.System, run.Input)
+	}
+	if gotRun.Output != "Focus on i-adjective-past." {
+		t.Fatalf("Get() run.Output = %q, want the text Finish was called with", gotRun.Output)
 	}
 	if len(gotCalls) != 1 {
 		t.Fatalf("len(Get() calls) = %d, want 1", len(gotCalls))
@@ -144,7 +152,7 @@ func TestAgentRunFinishCrossIdentityMisses(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	err := repo.Finish(ctx, identityB, run.ID, "completed", "", 1, time.Now().UTC())
+	err := repo.Finish(ctx, identityB, run.ID, "completed", "", "", 1, time.Now().UTC())
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("Finish(wrong identity) err = %v, want storage.ErrNotFound", err)
 	}

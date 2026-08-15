@@ -47,10 +47,12 @@ func (r *AgentRunRepository) Start(ctx context.Context, run storage.AgentRun) er
 		Status:        run.Status,
 		Turns:         int32(run.Turns),
 		StartedAt:     pgtype.Timestamptz{Time: run.StartedAt, Valid: true},
+		System:        run.System,
+		Input:         run.Input,
 	})
 }
 
-func (r *AgentRunRepository) Finish(ctx context.Context, identity learner.IdentityID, runID, status, errMsg string, turns int, endedAt time.Time) error {
+func (r *AgentRunRepository) Finish(ctx context.Context, identity learner.IdentityID, runID, status, errMsg, output string, turns int, endedAt time.Time) error {
 	id, err := parseUUID(runID)
 	if err != nil {
 		return fmt.Errorf("agent run id: %w", err)
@@ -60,6 +62,7 @@ func (r *AgentRunRepository) Finish(ctx context.Context, identity learner.Identi
 		IdentityID: string(identity),
 		Status:     status,
 		Error:      errMsg,
+		Output:     output,
 		Turns:      int32(turns),
 		EndedAt:    pgtype.Timestamptz{Time: endedAt, Valid: true},
 	})
@@ -151,6 +154,9 @@ func fromAgentRunRow(row sqlcgen.AgentRun) storage.AgentRun {
 		Turns:         int(row.Turns),
 		StartedAt:     row.StartedAt.Time,
 		Error:         row.Error,
+		System:        row.System,
+		Input:         row.Input,
+		Output:        row.Output,
 	}
 	if row.SessionID.Valid {
 		sid := session.ID(uuid.UUID(row.SessionID.Bytes).String())

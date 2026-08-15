@@ -13,7 +13,7 @@ import (
 
 const finishAgentRun = `-- name: FinishAgentRun :execrows
 UPDATE agent_runs
-SET status = $3, error = $4, turns = $5, ended_at = $6
+SET status = $3, error = $4, output = $5, turns = $6, ended_at = $7
 WHERE id = $1 AND identity_id = $2
 `
 
@@ -22,6 +22,7 @@ type FinishAgentRunParams struct {
 	IdentityID string
 	Status     string
 	Error      string
+	Output     string
 	Turns      int32
 	EndedAt    pgtype.Timestamptz
 }
@@ -32,6 +33,7 @@ func (q *Queries) FinishAgentRun(ctx context.Context, arg FinishAgentRunParams) 
 		arg.IdentityID,
 		arg.Status,
 		arg.Error,
+		arg.Output,
 		arg.Turns,
 		arg.EndedAt,
 	)
@@ -43,7 +45,7 @@ func (q *Queries) FinishAgentRun(ctx context.Context, arg FinishAgentRunParams) 
 
 const getAgentRun = `-- name: GetAgentRun :one
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
-       status, turns, started_at, ended_at, error
+       status, turns, started_at, ended_at, error, system, input, output
 FROM agent_runs
 WHERE id = $1 AND identity_id = $2
 `
@@ -68,6 +70,9 @@ func (q *Queries) GetAgentRun(ctx context.Context, arg GetAgentRunParams) (Agent
 		&i.StartedAt,
 		&i.EndedAt,
 		&i.Error,
+		&i.System,
+		&i.Input,
+		&i.Output,
 	)
 	return i, err
 }
@@ -75,9 +80,9 @@ func (q *Queries) GetAgentRun(ctx context.Context, arg GetAgentRunParams) (Agent
 const insertAgentRun = `-- name: InsertAgentRun :exec
 INSERT INTO agent_runs (
     id, identity_id, session_id, agent, prompt_name, prompt_version,
-    status, turns, started_at
+    status, turns, started_at, system, input
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 `
 
 type InsertAgentRunParams struct {
@@ -90,6 +95,8 @@ type InsertAgentRunParams struct {
 	Status        string
 	Turns         int32
 	StartedAt     pgtype.Timestamptz
+	System        string
+	Input         string
 }
 
 func (q *Queries) InsertAgentRun(ctx context.Context, arg InsertAgentRunParams) error {
@@ -103,6 +110,8 @@ func (q *Queries) InsertAgentRun(ctx context.Context, arg InsertAgentRunParams) 
 		arg.Status,
 		arg.Turns,
 		arg.StartedAt,
+		arg.System,
+		arg.Input,
 	)
 	return err
 }
@@ -150,7 +159,7 @@ func (q *Queries) InsertToolCall(ctx context.Context, arg InsertToolCallParams) 
 
 const listAgentRuns = `-- name: ListAgentRuns :many
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
-       status, turns, started_at, ended_at, error
+       status, turns, started_at, ended_at, error, system, input, output
 FROM agent_runs
 WHERE identity_id = $1
 ORDER BY started_at DESC
@@ -183,6 +192,9 @@ func (q *Queries) ListAgentRuns(ctx context.Context, arg ListAgentRunsParams) ([
 			&i.StartedAt,
 			&i.EndedAt,
 			&i.Error,
+			&i.System,
+			&i.Input,
+			&i.Output,
 		); err != nil {
 			return nil, err
 		}

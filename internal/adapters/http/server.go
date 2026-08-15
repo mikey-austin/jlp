@@ -106,6 +106,13 @@ type Options struct {
 	// GET queries — the same "raw repository for a listing page,
 	// service for mutations" split AnkiCards/Anki above use.
 	LessonsRepo storage.LessonRepository
+	// AgentRuns backs the /ai/agents trace viewer (Phase 4 Task 2, PRD
+	// §27/§50): the same storage.AgentRunRepository instance
+	// application/agentrun.Runner writes through (see main.go), read
+	// back here for display — the same "raw repository for a
+	// read-only listing/detail page" split every other *Repo field in
+	// this struct already uses.
+	AgentRuns storage.AgentRunRepository
 }
 
 type Server struct {
@@ -184,6 +191,13 @@ func (s *Server) routes() http.Handler {
 		r.Post("/corrections/{id}/confidence", s.correctionConfidence)
 		r.Post("/documents/{id}", s.documentsSave)
 		r.Get("/ai", s.aiRequests)
+		// /ai/agents: Phase 4 Task 2's agent-run trace viewer (PRD
+		// §27/§50) — linked from /ai rather than a new top-level nav
+		// item (see layout.html.tmpl). Listed before /ai's own route
+		// only for readability; chi's routing has no literal-vs-wildcard
+		// ambiguity here since /ai has no {id} segment of its own.
+		r.Get("/ai/agents", s.agentRunsList)
+		r.Get("/ai/agents/{id}", s.agentRunsDetail)
 		r.Post("/ratings", s.ratingsCreate)
 		r.Get("/grammar", s.grammarList)
 		r.Get("/grammar/{slug}", s.grammarDetail)

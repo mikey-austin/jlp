@@ -2,6 +2,7 @@ package teacher_test
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -408,5 +409,121 @@ func TestReviewWritingFailsAfterRepairAndRetryExhausted(t *testing.T) {
 	}
 	if gen.calls != 2 {
 		t.Fatalf("gen.calls = %d, want 2 (initial call + one retry, then fail)", gen.calls)
+	}
+}
+
+// fakeAgenticRunner is a minimal teacher.AgenticRunner test double: it
+// implements the interface directly (no application/agentrun,
+// internal/tools, or storage imports needed — see AgenticRunner's own
+// doc comment on why it's shaped this way), so it can simulate
+// whatever a real tool-calling investigation might report back without
+// this test file needing agents-no-repos-forbidden imports.
+type fakeAgenticRunner struct {
+	out teacher.AgenticRunOutput
+	err error
+}
+
+func (f fakeAgenticRunner) Run(context.Context, teacher.AgenticRunInput) (teacher.AgenticRunOutput, error) {
+	if f.err != nil {
+		return teacher.AgenticRunOutput{}, f.err
+	}
+	return f.out, nil
+}
+
+// recordingGen wraps another ai.StructuredGenerator, keeping the last
+// request it saw — used to prove ReviewWritingAgentic actually folds
+// the tool-calling investigation's summary text into the final
+// structured-generation request, without depending on fakeai's
+// selection-substring pattern matching to observe it.
+type recordingGen struct {
+	inner   ai.StructuredGenerator
+	lastReq ai.StructuredRequest
+}
+
+func (r *recordingGen) GenerateStructured(ctx context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
+	r.lastReq = req
+	return r.inner.GenerateStructured(ctx, req)
+}
+
+// TestReviewWritingAgenticProducesEquivalentResultToSingleShot pins
+// the task brief's Step 2 requirement: over the SAME fakeai fixture,
+// the agentic path (tool investigation, then the same schema-validated
+// structured generation) and the single-shot path must return
+// equivalent correction.Result — the agentic wrapper changes where the
+// context comes from, never how corrections are produced.
+func TestReviewWritingAgenticProducesEquivalentResultToSingleShot(t *testing.T) {
+	agent := teacher.New(fakeai.New())
+	in := testReviewInput()
+
+	singleShot, _, err := agent.ReviewWriting(context.Background(), in)
+	if err != nil {
+		t.Fatalf("ReviewWriting returned error: %v", err)
+	}
+
+	runner := fakeAgenticRunner{out: teacher.AgenticRunOutput{
+		RunID: "run-1",
+		Text:  "Focus on i-adjective-past based on recent priorities.",
+		Turns: 2,
+	}}
+	agentic, err := agent.ReviewWritingAgentic(context.Background(), in, runner)
+	if err != nil {
+		t.Fatalf("ReviewWritingAgentic returned error: %v", err)
+	}
+
+	if agentic.RunID != "run-1" {
+		t.Errorf("RunID = %q, want run-1", agentic.RunID)
+	}
+	if agentic.Result.Original != singleShot.Original || agentic.Result.Corrected != singleShot.Corrected {
+		t.Fatalf("agentic Result = %+v, want it to match single-shot Result %+v on Original/Corrected", agentic.Result, singleShot)
+	}
+	if len(agentic.Result.Corrections) != len(singleShot.Corrections) {
+		t.Fatalf("len(agentic Corrections) = %d, want %d (same as single-shot)", len(agentic.Result.Corrections), len(singleShot.Corrections))
+	}
+	for i := range singleShot.Corrections {
+		a, s := agentic.Result.Corrections[i], singleShot.Corrections[i]
+		if a.Original != s.Original || a.Replacement != s.Replacement || a.Type != s.Type || a.Severity != s.Severity {
+			t.Fatalf("agentic Corrections[%d] = %+v, want it to match single-shot %+v", i, a, s)
+		}
+	}
+}
+
+// TestReviewWritingAgenticFoldsInvestigationIntoFinalPrompt proves the
+// gathered tool-conversation text actually reaches the final
+// structured-generation request (as an extra RecentErrors line) —
+// without this, "tools gather context" would be dead code that never
+// influenced anything the model sees.
+func TestReviewWritingAgenticFoldsInvestigationIntoFinalPrompt(t *testing.T) {
+	rec := &recordingGen{inner: fakeai.New()}
+	agent := teacher.New(rec)
+
+	runner := fakeAgenticRunner{out: teacher.AgenticRunOutput{
+		RunID: "run-2",
+		Text:  "The learner's top priority is i-adjective-past conjugation.",
+		Turns: 2,
+	}}
+	if _, err := agent.ReviewWritingAgentic(context.Background(), testReviewInput(), runner); err != nil {
+		t.Fatalf("ReviewWritingAgentic returned error: %v", err)
+	}
+
+	if !strings.Contains(rec.lastReq.User, "i-adjective-past conjugation") {
+		t.Errorf("final structured-generation User prompt = %q, want it to contain the tool investigation's summary", rec.lastReq.User)
+	}
+}
+
+// TestReviewWritingAgenticPropagatesRunnerError: a failed tool-calling
+// investigation (the underlying agent-run loop errored — e.g. MaxTurns
+// exhaustion) must fail ReviewWritingAgentic outright, never silently
+// fall back to reviewing with no context. The RunID from the failed
+// run is still returned so the caller can link to its trace.
+func TestReviewWritingAgenticPropagatesRunnerError(t *testing.T) {
+	agent := teacher.New(fakeai.New())
+	runner := fakeAgenticRunner{err: errors.New("agent run exceeded max turns")}
+
+	review, err := agent.ReviewWritingAgentic(context.Background(), testReviewInput(), runner)
+	if err == nil {
+		t.Fatal("ReviewWritingAgentic returned nil error, want the runner's failure surfaced")
+	}
+	if review.Result.Corrections != nil {
+		t.Errorf("Result = %+v, want zero value on error", review.Result)
 	}
 }
