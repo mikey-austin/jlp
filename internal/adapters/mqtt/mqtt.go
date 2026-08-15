@@ -41,6 +41,7 @@ import (
 	"time"
 
 	paho "github.com/eclipse/paho.mqtt.golang"
+	"github.com/google/uuid"
 
 	"github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
@@ -50,10 +51,16 @@ import (
 )
 
 const (
-	// clientID identifies this bridge's own connection to the broker,
+	// clientIDPrefix names this bridge's own connections to the broker,
 	// distinct from an external reading app or a `mosquitto_sub` tap
-	// connected to the same broker.
-	clientID = "jlp-mqtt-bridge"
+	// connected to the same broker. newPahoClient appends a random
+	// suffix per instance (see that function) — MQTT brokers disconnect
+	// whichever client already holds a given client ID the moment a
+	// second one connects with the same ID, so a fixed ID would make
+	// two Bridge instances against the same broker (e.g. the running
+	// app plus an ad-hoc `go run`/test connecting concurrently) fight
+	// each other for the connection instead of coexisting.
+	clientIDPrefix = "jlp-mqtt-bridge"
 	// qos is used for every publish and subscribe this bridge makes —
 	// QoS1 ("at least once"), matching the brief's exact requirement.
 	qos = 1
@@ -69,12 +76,25 @@ const (
 	// documents the expected shape rather than assuming it silently).
 	ingestCategory = "vocabulary"
 	ingestAction   = "ingest"
-	// connectTimeout bounds Start's initial Connect — without it, an
-	// unreachable broker would hang boot forever rather than failing
-	// fast the way every other cmd/jlp/main.go construction step does.
-	// Reconnection after a successful initial connect is unbounded,
-	// handled by AutoReconnect (see newPahoClient).
+	// connectTimeout bounds each individual initial-Connect attempt —
+	// without it, an unreachable broker would hang boot forever rather
+	// than failing fast the way every other cmd/jlp/main.go
+	// construction step does. Reconnection after a successful initial
+	// connect is unbounded, handled by AutoReconnect (see
+	// newPahoClient).
 	connectTimeout = 10 * time.Second
+	// initialConnectRetries/initialConnectBackoff bound Connect's own
+	// retry loop (see pahoClient.Connect): `make up-mqtt` starts
+	// mosquitto and the app together with no compose healthcheck
+	// ordering between them (mosquitto has no readiness probe compose
+	// can wait on), so the app's very first Connect attempt can
+	// legitimately race mosquitto's listener still coming up. Five
+	// tries at a one-second backoff (5s worst case) comfortably covers
+	// that startup race without turning a genuinely unreachable broker
+	// into a long hang — AutoReconnect (post-connect) has no bound at
+	// all, this initial-connect retry deliberately does.
+	initialConnectRetries = 5
+	initialConnectBackoff = time.Second
 )
 
 // mqttClient abstracts the paho.mqtt.golang client down to exactly
@@ -279,19 +299,52 @@ func newPahoClient(rawURL string) (mqttClient, error) {
 	if _, err := url.Parse(rawURL); err != nil {
 		return nil, fmt.Errorf("mqtt: invalid broker url %q: %w", rawURL, err)
 	}
+	// A random suffix per instance — see clientIDPrefix's doc comment —
+	// so this connection never fights another Bridge instance (or a
+	// stray previous run) for the same client ID.
+	id := clientIDPrefix + "-" + uuid.NewString()[:8]
 	opts := paho.NewClientOptions().
 		AddBroker(rawURL).
-		SetClientID(clientID).
+		SetClientID(id).
 		SetCleanSession(true).
 		SetAutoReconnect(true).
-		SetConnectTimeout(connectTimeout)
+		SetConnectTimeout(connectTimeout).
+		// Purely observability: without these, a broker outage after a
+		// successful Start produces zero log output even though
+		// AutoReconnect is silently handling it — see this package's
+		// own doc comment on failure semantics; staying connected
+		// should still be visible, not just staying non-fatal.
+		SetConnectionLostHandler(func(_ paho.Client, err error) {
+			slog.Warn("mqtt: connection lost, reconnecting", "err", err)
+		}).
+		SetOnConnectHandler(func(paho.Client) {
+			slog.Info("mqtt: connected", "broker", rawURL)
+		})
 	return &pahoClient{client: paho.NewClient(opts)}, nil
 }
 
+// Connect retries the INITIAL connection attempt up to
+// initialConnectRetries times (see that constant's doc comment for
+// why: `make up-mqtt` gives mosquitto no compose-level readiness
+// ordering against the app). Reconnection after a successful first
+// connect is paho's own AutoReconnect's job, not this loop's — this
+// only covers the narrow "broker isn't listening yet at the moment
+// Start runs" window.
 func (c *pahoClient) Connect() error {
-	token := c.client.Connect()
-	token.Wait()
-	return token.Error()
+	var lastErr error
+	for attempt := 1; attempt <= initialConnectRetries; attempt++ {
+		token := c.client.Connect()
+		token.Wait()
+		lastErr = token.Error()
+		if lastErr == nil {
+			return nil
+		}
+		if attempt < initialConnectRetries {
+			slog.Warn("mqtt: initial connect failed, retrying", "attempt", attempt, "err", lastErr)
+			time.Sleep(initialConnectBackoff)
+		}
+	}
+	return lastErr
 }
 
 func (c *pahoClient) Publish(topic string, payload []byte) error {
