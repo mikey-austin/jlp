@@ -127,7 +127,19 @@ func TestRecordOutcomeIntervalTable(t *testing.T) {
 		outcome outcome
 		wantIdx map[int]int // startIdx -> wantIdx
 	}{
-		{outcome{"failure", false, 0}, map[int]int{-1: 0, 0: 0, 1: 0, 2: 0, 3: 1, 4: 2, 5: 3}},
+		// Failure drops two steps regardless of confidence — the brief is
+		// explicit that confidence only modifies SUCCESS transitions
+		// ("confidence 1–2 on a success... confidence 5 advances two
+		// steps"); a failure's own confidence, however reported, changes
+		// nothing. Pinned at every confidence value 0..5, not just 0, so
+		// a mutation that makes the failure branch confidence-sensitive
+		// (e.g. dropping only ONE step at confidence >= 4) fails here.
+		{outcome{"failure/confidence-0", false, 0}, map[int]int{-1: 0, 0: 0, 1: 0, 2: 0, 3: 1, 4: 2, 5: 3}},
+		{outcome{"failure/confidence-1", false, 1}, map[int]int{-1: 0, 0: 0, 1: 0, 2: 0, 3: 1, 4: 2, 5: 3}},
+		{outcome{"failure/confidence-2", false, 2}, map[int]int{-1: 0, 0: 0, 1: 0, 2: 0, 3: 1, 4: 2, 5: 3}},
+		{outcome{"failure/confidence-3", false, 3}, map[int]int{-1: 0, 0: 0, 1: 0, 2: 0, 3: 1, 4: 2, 5: 3}},
+		{outcome{"failure/confidence-4", false, 4}, map[int]int{-1: 0, 0: 0, 1: 0, 2: 0, 3: 1, 4: 2, 5: 3}},
+		{outcome{"failure/confidence-5", false, 5}, map[int]int{-1: 0, 0: 0, 1: 0, 2: 0, 3: 1, 4: 2, 5: 3}},
 		{outcome{"success/no-confidence", true, 0}, map[int]int{-1: 0, 0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 5}},
 		{outcome{"success/confidence-3", true, 3}, map[int]int{-1: 0, 0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 5}},
 		{outcome{"success/confidence-4", true, 4}, map[int]int{-1: 0, 0: 1, 1: 2, 2: 3, 3: 4, 4: 5, 5: 5}},

@@ -556,8 +556,17 @@ func (f *fakeRetrievalRepo) Upsert(context.Context, storage.RetrievalItem) error
 func (f *fakeRetrievalRepo) Get(context.Context, learner.IdentityID, string, string) (storage.RetrievalItem, error) {
 	panic("not used by feedback service tests")
 }
-func (f *fakeRetrievalRepo) Due(context.Context, learner.IdentityID, time.Time, int) ([]storage.RetrievalItem, error) {
-	return f.due, nil
+
+// Due truncates to limit (mirroring the real postgres adapter's
+// LIMIT): a fake that ignored limit would make dueExpressionsScanLimit's
+// actual value untestable, since dueExpressionItems never re-truncates
+// what Due returns.
+func (f *fakeRetrievalRepo) Due(_ context.Context, _ learner.IdentityID, _ time.Time, limit int) ([]storage.RetrievalItem, error) {
+	out := f.due
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 func (f *fakeRetrievalRepo) List(context.Context, learner.IdentityID, int) ([]storage.RetrievalItem, error) {
 	panic("not used by feedback service tests")
@@ -1504,6 +1513,44 @@ func TestRequestFeedbackExpressionsToEncourageDueExpressionDeduplicated(t *testi
 	}
 }
 
+// TestRequestFeedbackExpressionsToEncourageFindsDueExpressionBehindConcepts
+// pins dueExpressionsScanLimit's actual value: the due queue's five
+// most-due items are all concept-type (grammar due for review, PRD
+// §54's OTHER due surface — see practice.Service.dueConcept), with the
+// due expression only 6th. A scan capped at 5 (the pre-fix value) would
+// see nothing but concepts and never notice the expression — this test
+// fails under that reversion.
+func TestRequestFeedbackExpressionsToEncourageFindsDueExpressionBehindConcepts(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.vocab.allItems = []vocabulary.Item{
+		{Expression: "積もる", Reading: "つもる", Meaning: "to pile up", Kind: vocabulary.KindExpression},
+	}
+	h.retrieval.due = []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "concept-1"},
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "concept-2"},
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "concept-3"},
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "concept-4"},
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "concept-5"},
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "積もる"},
+	}
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+
+	if !strings.Contains(gen.lastReq.User, "積もる (つもる) — to pile up") {
+		t.Fatalf("rendered prompt missing the due expression (6th in the queue, behind 5 due concepts): %q", gen.lastReq.User)
+	}
+}
+
 // TestRequestFeedbackNoActivationCandidatesOmitsEncourageSection: an
 // identity with no activation candidates yet must render a prompt with
 // no ExpressionsToEncourage section at all (the v2 template's
@@ -1789,6 +1836,43 @@ func TestRetryCorrectionCorrectFlipsStatusAndRecordsIndependentEvent(t *testing.
 	for _, ev := range h.events.events {
 		if ev.Type == event.TypeCorrectionAccepted {
 			t.Fatalf("unexpectedly recorded a correction.accepted event alongside correction.retried: %+v", ev)
+		}
+	}
+}
+
+// TestRetryCorrectionEventCarriesResolvedConcepts pins the producer
+// side of the correction.retried -> spaced-review contract (Phase 4
+// Task 7, PRD §54): the recorded event's Evidence["concepts"] must
+// actually contain the correction's resolved concept slug(s) —
+// application/retrieval.Consumer schedules spaced review from exactly
+// this key (see handleCorrectionRetried's own doc comment on why it
+// reads Evidence instead of re-querying GetCorrectionConcepts itself).
+// Without this test, deleting the "concepts" entry from RetryCorrection's
+// Evidence map compiles and leaves every other suite green — the whole
+// correction-retry half of spaced retrieval would go silently dead.
+func TestRetryCorrectionEventCarriesResolvedConcepts(t *testing.T) {
+	h := newTestHarness()
+	cv := socraticFeedback(t, h) // fakeai tags this sentence i-adjective-past (resolved)
+
+	if _, err := h.svc.RetryCorrection(context.Background(), testIdentity, cv.ID, cv.Replacement); err != nil {
+		t.Fatalf("RetryCorrection returned error: %v", err)
+	}
+
+	last := h.events.events[len(h.events.events)-1]
+	if last.Type != event.TypeCorrectionRetried {
+		t.Fatalf("event Type = %q, want %q", last.Type, event.TypeCorrectionRetried)
+	}
+	got, ok := last.Evidence["concepts"].([]string)
+	if !ok {
+		t.Fatalf("Evidence[concepts] = %#v (type %T), want a []string", last.Evidence["concepts"], last.Evidence["concepts"])
+	}
+	want := []string{"i-adjective-past"}
+	if len(got) != len(want) {
+		t.Fatalf("Evidence[concepts] = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("Evidence[concepts] = %v, want %v", got, want)
 		}
 	}
 }

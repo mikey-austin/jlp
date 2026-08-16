@@ -550,8 +550,18 @@ func (f *fakeRetrievalRepoForPractice) Upsert(context.Context, storage.Retrieval
 func (f *fakeRetrievalRepoForPractice) Get(context.Context, learner.IdentityID, string, string) (storage.RetrievalItem, error) {
 	panic("not used by practice service tests")
 }
-func (f *fakeRetrievalRepoForPractice) Due(context.Context, learner.IdentityID, time.Time, int) ([]storage.RetrievalItem, error) {
-	return f.due, nil
+
+// Due truncates to limit (mirroring the real postgres adapter's
+// LIMIT — see storage.RetrievalRepository.Due's doc comment): a fake
+// that ignored limit would make dueSubjectsScanLimit's actual value
+// untestable, since dueConcept's own loop never re-truncates what Due
+// returns.
+func (f *fakeRetrievalRepoForPractice) Due(_ context.Context, _ learner.IdentityID, _ time.Time, limit int) ([]storage.RetrievalItem, error) {
+	out := f.due
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
 }
 func (f *fakeRetrievalRepoForPractice) List(context.Context, learner.IdentityID, int) ([]storage.RetrievalItem, error) {
 	panic("not used by practice service tests")
@@ -649,5 +659,42 @@ func TestStartFallsBackToPlannerWhenDueConceptSlugIsStale(t *testing.T) {
 	}
 	if ex.ConceptSlug != "i-adjective-past" {
 		t.Fatalf("ConceptSlug = %q, want the planner's top concept %q (stale due slug must be skipped, not fatal)", ex.ConceptSlug, "i-adjective-past")
+	}
+}
+
+// TestStartFindsDueConceptBehindLeadingExpressionItems pins
+// dueSubjectsScanLimit's actual value (not just its existence): the due
+// queue's four MOST-due items are all expression-type (vocabulary due
+// for review), with the concept only 5th — dueConcept must still find
+// it. A scan capped at 1 (the pre-fix value) would see only the first
+// expression item, conclude nothing concept-type is due, and fall back
+// to the planner instead — this test fails under that reversion.
+func TestStartFindsDueConceptBehindLeadingExpressionItems(t *testing.T) {
+	grammarRepo := &fakeGrammarRepo{bySlug: map[string]grammar.Concept{"te-form": {Slug: "te-form", Name: "て-form", JLPTLevel: 5}, "i-adjective-past": iAdjectivePastConcept}}
+	prios := &fakePriorityRepo{top: []storage.Priority{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "i-adjective-past", Score: 7.5},
+	}}
+	retrievalRepo := &fakeRetrievalRepoForPractice{due: []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "expr-1"},
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "expr-2"},
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "expr-3"},
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "expr-4"},
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "te-form"},
+	}}
+	sched := appretrieval.NewScheduler(retrievalRepo, time.Now)
+
+	repo := newFakeExerciseRepo()
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
+	agent := drill.New(fakeai.New())
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
+
+	ex, err := svc.Start(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if ex.ConceptSlug != "te-form" {
+		t.Fatalf("ConceptSlug = %q, want the DUE concept %q (5th in the queue, behind 4 due expressions) — the planner's top concept must NOT win here", ex.ConceptSlug, "te-form")
 	}
 }

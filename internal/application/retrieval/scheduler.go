@@ -45,16 +45,23 @@ type Scheduler struct {
 
 	// subjectLocks serializes RecordOutcome's read-then-write (Get,
 	// compute the next step, Upsert) per (identity, subjectType,
-	// subject): two outcomes for the SAME subject that race — e.g. a
+	// subject), WITHIN THIS PROCESS ONLY (see RecordOutcome's own doc
+	// comment for the storage-layer caveat that follows from that):
+	// two outcomes for the SAME subject that race — e.g. a
 	// quiz.answered and a correction.retried event for the same concept
-	// dispatched from two concurrent requests — would otherwise both
-	// Get the same pre-update state and Upsert from it, silently losing
-	// whichever write landed second (its Successes/Failures increment
-	// and step advance would be computed from stale data and overwrite
-	// the other's). Different subjects never contend: this is a
-	// per-key lock, not a single scheduler-wide one, the same
-	// per-identity granularity application/learnermodel.Updater's own
-	// recomputeLocks uses for its analogous read-then-write race.
+	// dispatched from two concurrent requests on this instance — would
+	// otherwise both Get the same pre-update state and Upsert from it,
+	// silently losing whichever write landed second (its Successes/
+	// Failures increment and step advance would be computed from stale
+	// data and overwrite the other's). Different subjects never
+	// contend: this is a per-key lock, not a single scheduler-wide one,
+	// the same per-identity granularity application/learnermodel.
+	// Updater's own recomputeLocks uses for its analogous read-then-
+	// write race. One *sync.Mutex is retained per subject for the
+	// process's lifetime (never evicted) — negligible at this app's
+	// scale (a learner's distinct concepts/expressions number in the
+	// hundreds, not millions), but a future high-cardinality subject
+	// space would want an eviction policy here.
 	subjectLocks sync.Map // string (subjectLockKey) -> *sync.Mutex
 }
 
@@ -86,10 +93,20 @@ func (s *Scheduler) lockSubject(key string) *sync.Mutex {
 // RecordOutcome folds one success/failure outcome for
 // (identity, subjectType, subject) into its retrieval schedule and
 // upserts the result. Serialized per (identity, subjectType, subject)
-// via subjectLocks (see that field's doc comment) — its own Get, then
-// compute, then Upsert is NOT atomic at the storage layer, so two
-// concurrent calls for the SAME subject must never interleave. The
-// interval policy (PRD §54 inputs: previous
+// via subjectLocks (see that field's doc comment) — but that lock is
+// an IN-PROCESS sync.Mutex, so the guarantee it gives is "no two calls
+// for the same subject interleave WITHIN THIS PROCESS", not a storage-
+// layer guarantee: db/queries/retrieval.sql's UpsertRetrievalItem
+// writes Successes/Failures/Interval as absolute values (an
+// ON CONFLICT DO UPDATE SET, not a relative increment), so a second
+// OS process — a horizontally-scaled replica, a future background
+// worker, an admin backfill script — racing this same subject would
+// still silently lose an update exactly the way subjectLocks prevents
+// within one process. Safe for today's single-instance deployment;
+// would need either a SQL-side relative UPDATE (successes =
+// retrieval_items.successes + 1) or optimistic concurrency (a
+// version/last_seen guard on the UPDATE) to be safe if this process is
+// ever scaled beyond one instance. The interval policy (PRD §54 inputs: previous
 // success/failure, elapsed time via the base table, production
 // frequency via Successes/Failures, confidence, importance left to a
 // future task) is entirely deterministic, keyed off the item's CURRENT
