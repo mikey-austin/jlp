@@ -412,13 +412,32 @@ const server = createServer(async (req, res) => {
   }
 });
 
+// A few retries with backoff at startup only: in compose, this
+// container's `depends_on: [app]` guarantees ordering ("started"), not
+// readiness — app can still be mid-boot when this fires. Retrying here
+// means a plain `make a2a-chat` usually lands on a connected page
+// instead of one the operator has to manually hit "Connect" on. Not
+// repeated later — a target that's genuinely down should surface as
+// an error, not retry forever on every page load.
+async function connectWithRetry(url, attempts = 5, delayMs = 1500) {
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      const card = await connect(url);
+      console.log(`connected: ${card.name} v${card.version}`);
+      return;
+    } catch (err) {
+      state.error = describeError(err);
+      if (i === attempts) {
+        console.warn(`initial connect failed after ${attempts} attempts (will retry from the UI): ${state.error.message}`);
+        return;
+      }
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
 server.listen(PORT, () => {
   console.log(`a2a-chat listening on :${PORT}`);
   console.log(`default agent: ${DEFAULT_AGENT_URL}`);
-  connect(DEFAULT_AGENT_URL)
-    .then((card) => console.log(`connected: ${card.name} v${card.version}`))
-    .catch((err) => {
-      state.error = describeError(err);
-      console.warn(`initial connect failed (will retry from the UI): ${state.error.message}`);
-    });
+  connectWithRetry(DEFAULT_AGENT_URL);
 });
