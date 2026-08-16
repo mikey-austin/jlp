@@ -1,5 +1,8 @@
 {{define "content"}}<section class="sessions">
-  <h1>セッション</h1>
+  <div class="sessions__header">
+    <h1>セッション</h1>
+    <button type="button" id="new-session-trigger" class="btn" aria-haspopup="dialog" aria-controls="session-modal">新しいセッション</button>
+  </div>
   <div class="table-card">
     <table>
       <thead><tr><th>タイトル</th><th>目的</th><th>更新</th></tr></thead>
@@ -9,54 +12,62 @@
     </table>
   </div>
 
-  <h2>新規セッション</h2>
-  <form method="post" action="/sessions" class="session-form">
-    <label class="field">タイトル
-      <input class="input" type="text" name="title" required>
-    </label>
-    <label class="field">目的
-      <select class="select" name="purpose">
-        <option value="Blog post">Blog post</option>
-        <option value="Message to friend">Message to friend</option>
-        <option value="Diary">Diary</option>
-        <option value="Formal email">Formal email</option>
-        <option value="Casual conversation practice">Casual conversation practice</option>
-        <option value="Business Japanese">Business Japanese</option>
-        <option value="Creative writing">Creative writing</option>
-        <option value="JLPT practice">JLPT practice</option>
-        <option value="Tutor preparation">Tutor preparation</option>
-      </select>
-    </label>
-    <label class="field">Teacher mode
-      <select class="select" name="teacher_mode">
-        <option value="teacher">teacher</option>
-        <option value="strict-corrector">strict-corrector</option>
-        <option value="naturalness-coach">naturalness-coach</option>
-        <option value="socratic">socratic</option>
-      </select>
-    </label>
-    <label class="field">Explanation language
-      <select class="select" name="explanation_language">
-        <option value="ja">ja</option>
-        <option value="en">en</option>
-        <option value="both" selected>both</option>
-      </select>
-    </label>
-    <label class="field">Strictness
-      <select class="select" name="strictness">
-        <option value="lenient">lenient</option>
-        <option value="balanced" selected>balanced</option>
-        <option value="strict">strict</option>
-      </select>
-    </label>
-    <label class="field">会話の訂正タイミング
-      <select class="select" name="feedback_timing">
-        <option value="end" selected>end — 会話の最後にまとめて表示（会話が途切れません）</option>
-        <option value="delayed">delayed — 数ターンごとにまとめて表示</option>
-        <option value="immediate">immediate — 発言ごとにすぐ表示</option>
-      </select>
-      <span class="hint">おすすめは「end」です。対話中に訂正が割り込まないよう、デフォルトになっています。</span>
-    </label>
-    <button type="submit" class="btn">作成</button>
-  </form>
+  <dialog id="session-modal" class="modal" aria-labelledby="session-modal-title"{{if .FormError}} data-reopen{{end}}>
+    <div class="modal__panel">
+      <div class="modal__header">
+        <h2 id="session-modal-title">新規セッション</h2>
+        <button type="button" class="modal__close" data-modal-close aria-label="閉じる"><span aria-hidden="true">&times;</span></button>
+      </div>
+      {{if .FormError}}<p class="error" role="alert">{{.FormError}}</p>{{end}}
+      <form method="post" action="/sessions" class="session-form">
+        <label class="field">タイトル
+          <input class="input" type="text" name="title" required autofocus value="{{.FormValues.Title}}">
+        </label>
+        <label class="field">目的
+          <select class="select" name="purpose">
+            <option value="Blog post"{{if eq .FormValues.Purpose "Blog post"}} selected{{end}}>Blog post</option>
+            <option value="Message to friend"{{if eq .FormValues.Purpose "Message to friend"}} selected{{end}}>Message to friend</option>
+            <option value="Diary"{{if eq .FormValues.Purpose "Diary"}} selected{{end}}>Diary</option>
+            <option value="Formal email"{{if eq .FormValues.Purpose "Formal email"}} selected{{end}}>Formal email</option>
+            <option value="Casual conversation practice"{{if eq .FormValues.Purpose "Casual conversation practice"}} selected{{end}}>Casual conversation practice</option>
+            <option value="Business Japanese"{{if eq .FormValues.Purpose "Business Japanese"}} selected{{end}}>Business Japanese</option>
+            <option value="Creative writing"{{if eq .FormValues.Purpose "Creative writing"}} selected{{end}}>Creative writing</option>
+            <option value="JLPT practice"{{if eq .FormValues.Purpose "JLPT practice"}} selected{{end}}>JLPT practice</option>
+            <option value="Tutor preparation"{{if eq .FormValues.Purpose "Tutor preparation"}} selected{{end}}>Tutor preparation</option>
+          </select>
+        </label>
+        <label class="field">Teacher mode
+          <select class="select" name="teacher_mode">
+            <option value="teacher"{{if eq .FormValues.TeacherMode "teacher"}} selected{{end}}>teacher</option>
+            <option value="strict-corrector"{{if eq .FormValues.TeacherMode "strict-corrector"}} selected{{end}}>strict-corrector</option>
+            <option value="naturalness-coach"{{if eq .FormValues.TeacherMode "naturalness-coach"}} selected{{end}}>naturalness-coach</option>
+            <option value="socratic"{{if eq .FormValues.TeacherMode "socratic"}} selected{{end}}>socratic</option>
+          </select>
+        </label>
+        <label class="field">Explanation language
+          <select class="select" name="explanation_language">
+            <option value="ja"{{if eq .FormValues.ExplanationLanguage "ja"}} selected{{end}}>ja</option>
+            <option value="en"{{if eq .FormValues.ExplanationLanguage "en"}} selected{{end}}>en</option>
+            <option value="both"{{if eq .FormValues.ExplanationLanguage "both"}} selected{{end}}>both</option>
+          </select>
+        </label>
+        <label class="field">Strictness
+          <select class="select" name="strictness">
+            <option value="lenient"{{if eq .FormValues.Strictness "lenient"}} selected{{end}}>lenient</option>
+            <option value="balanced"{{if eq .FormValues.Strictness "balanced"}} selected{{end}}>balanced</option>
+            <option value="strict"{{if eq .FormValues.Strictness "strict"}} selected{{end}}>strict</option>
+          </select>
+        </label>
+        <label class="field">会話の訂正タイミング
+          <select class="select" name="feedback_timing">
+            <option value="end"{{if eq .FormValues.FeedbackTiming "end"}} selected{{end}}>end — 会話の最後にまとめて表示（会話が途切れません）</option>
+            <option value="delayed"{{if eq .FormValues.FeedbackTiming "delayed"}} selected{{end}}>delayed — 数ターンごとにまとめて表示</option>
+            <option value="immediate"{{if eq .FormValues.FeedbackTiming "immediate"}} selected{{end}}>immediate — 発言ごとにすぐ表示</option>
+          </select>
+          <span class="hint">おすすめは「end」です。対話中に訂正が割り込まないよう、デフォルトになっています。</span>
+        </label>
+        <button type="submit" class="btn">作成</button>
+      </form>
+    </div>
+  </dialog>
 </section>{{end}}

@@ -148,3 +148,49 @@ document.addEventListener("click", function (evt) {
   }
   show(saved === "conversation" ? "conversation" : "feedback");
 })();
+
+// New-session modal (sessions.html.tmpl): opened from #new-session-trigger,
+// a native <dialog> so showModal() supplies the focus trap and Esc-to-close
+// for free — nothing here reimplements either. What IS implemented:
+// - backdrop click: a click landing on #session-modal itself (not a
+//   descendant) is by construction a click outside .modal__panel, since
+//   the dialog carries no padding of its own (components.css) — the
+//   well-known idiom for "click outside a <dialog> closes it".
+// - focus returning to the trigger: the dialog's native "close" event
+//   fires for Esc, dialog.close(), AND a backdrop click alike, so one
+//   listener covers all three closing paths.
+// - reopening with the learner's input intact: POST /sessions
+//   (sessionsCreate, internal/adapters/http/sessions.go) re-renders this
+//   same page on a validation failure with the dialog carrying
+//   data-reopen and the submitted values preserved — showModal() here
+//   just needs to notice that attribute on load and open, so the error
+//   is never a silently-closed modal with the learner's input gone.
+(function () {
+  "use strict";
+  var dialog = document.getElementById("session-modal");
+  var trigger = document.getElementById("new-session-trigger");
+  if (!dialog || !trigger) return;
+
+  trigger.addEventListener("click", function () {
+    dialog.showModal();
+  });
+
+  var closeBtn = dialog.querySelector("[data-modal-close]");
+  if (closeBtn) {
+    closeBtn.addEventListener("click", function () {
+      dialog.close();
+    });
+  }
+
+  dialog.addEventListener("click", function (evt) {
+    if (evt.target === dialog) dialog.close();
+  });
+
+  dialog.addEventListener("close", function () {
+    trigger.focus();
+  });
+
+  if (dialog.hasAttribute("data-reopen")) {
+    dialog.showModal();
+  }
+})();

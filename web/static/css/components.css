@@ -212,6 +212,80 @@ p.hint {
   box-shadow: var(--shadow-sm);
 }
 
+/* ============================== Modal =================================== */
+
+/* .modal is a native <dialog> — showModal() (app.js) gives it a real
+ * focus trap and Esc-to-close for free, so nothing here reimplements
+ * either. The element itself carries NO padding/background/border: the
+ * UA stylesheet's own dialog chrome is reset to nothing so the dialog's
+ * box is exactly its visible content's box, which is what makes the
+ * "click outside closes" idiom in app.js work (a click that lands on
+ * .modal itself, rather than a descendant, is by definition a click on
+ * empty space around .modal__panel — i.e. the backdrop). All the
+ * card-like appearance (surface, border, radius, padding) lives on the
+ * inner .modal__panel instead, exactly the same split .table-card uses
+ * for its own scroll-container-vs-content reasons. */
+.modal {
+  border: none;
+  padding: 0;
+  background: transparent;
+  color: inherit;
+  width: calc(100% - var(--gutter) * 2);
+  max-width: 560px;
+  border-radius: 16px;
+}
+.modal::backdrop {
+  /* No raw colour: --fg mixed toward transparent, same technique the
+   * topbar's own translucent background (below) already uses. */
+  background: color-mix(in oklab, var(--fg) 45%, transparent);
+}
+.modal__panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  box-shadow: var(--shadow-lg);
+  padding: var(--space-5);
+  max-height: min(85vh, 720px);
+  overflow-y: auto;
+}
+.modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.modal__header h2 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 700;
+}
+.modal__close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: var(--tap);
+  height: var(--tap);
+  border-radius: 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--fg-muted);
+  font-size: var(--text-xl);
+  line-height: 1;
+  cursor: pointer;
+}
+.modal__close:hover {
+  color: var(--fg);
+  background: var(--surface-2);
+}
+
+/* At 390px the dialog is effectively full-width within the gutter
+ * (calc(100% - gutter*2) above, resolved against the viewport since a
+ * <dialog> shown via showModal() sizes against the initial containing
+ * block); .modal__panel's own overflow-y keeps a tall form scrollable
+ * rather than clipped when the viewport is short. */
+
 /* ============================== Badges ================================= */
 
 .badge {

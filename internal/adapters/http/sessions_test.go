@@ -322,6 +322,83 @@ func TestSessionsCreateEmptyTitleReturnsBadRequest(t *testing.T) {
 	}
 }
 
+// TestSessionsPageRendersTriggerAndModal: the new-session form must live
+// inside the <dialog id="session-modal"> the "新しいセッション" button
+// opens — nothing below the list any more (Task NS).
+func TestSessionsPageRendersTriggerAndModal(t *testing.T) {
+	srv := NewServer(testOptionsWithSessions())
+	h := srv.HandlerForTest()
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `id="new-session-trigger"`) {
+		t.Fatalf("missing new-session trigger button: %s", body)
+	}
+	if !strings.Contains(body, `aria-controls="session-modal"`) {
+		t.Fatalf("trigger missing aria-controls=session-modal: %s", body)
+	}
+	dialogIdx := strings.Index(body, `<dialog id="session-modal"`)
+	formIdx := strings.Index(body, `action="/sessions"`)
+	if dialogIdx == -1 {
+		t.Fatalf("missing <dialog id=\"session-modal\">: %s", body)
+	}
+	if formIdx == -1 || formIdx < dialogIdx {
+		t.Fatalf("form must be inside the dialog: dialogIdx=%d formIdx=%d body=%s", dialogIdx, formIdx, body)
+	}
+}
+
+// TestSessionsCreateEmptyTitleReopensModalWithErrorAndPreservedValues
+// pins the brief's core requirement: a rejected submission must not
+// dump the learner back to a closed modal with their input gone. The
+// re-rendered page must carry data-reopen (picked up by app.js to
+// re-showModal()), the error text, and every field exactly as typed.
+func TestSessionsCreateEmptyTitleReopensModalWithErrorAndPreservedValues(t *testing.T) {
+	srv := NewServer(testOptionsWithSessions())
+	h := srv.HandlerForTest()
+
+	form := url.Values{}
+	form.Set("title", "")
+	form.Set("purpose", "Diary")
+	form.Set("teacher_mode", "socratic")
+	form.Set("explanation_language", "en")
+	form.Set("strictness", "strict")
+	form.Set("feedback_timing", "immediate")
+	req := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, `<dialog id="session-modal"`) || !strings.Contains(body, "data-reopen") {
+		t.Fatalf("dialog missing data-reopen marker: %s", body)
+	}
+	if !strings.Contains(body, `class="error" role="alert"`) {
+		t.Fatalf("missing visible error message: %s", body)
+	}
+	for _, want := range []string{
+		`value="Diary" selected`,
+		`value="socratic" selected`,
+		`value="en" selected`,
+		`value="strict" selected`,
+		`value="immediate" selected`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("preserved form value %q not found: %s", want, body)
+		}
+	}
+	// The list stays rendered behind the modal, not replaced by it.
+	if !strings.Contains(body, "<table>") {
+		t.Fatalf("session list missing from reopened page: %s", body)
+	}
+}
+
 // TestSessionsCreateRepositoryErrorReturns500AndHidesDetail: a
 // repository failure unrelated to validation (e.g. a database error)
 // must surface as a generic 500, and the response body must never leak

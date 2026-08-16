@@ -78,6 +78,24 @@ main p.description {
 
 /* ============================== Forms ================================== */
 
+/* .sessions__header: the "新しいセッション" trigger button sits beside
+ * the page's own <h1>, not below it — main h1's page-rhythm bottom
+ * margin (app.css, shared across every page) moves onto this row
+ * instead so the two don't stack their spacing. flex-wrap lets the
+ * button drop under the heading rather than overflow at 320px, where
+ * "セッション" plus the button's label are wider than the column. */
+.sessions__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin: 0 0 var(--space-5);
+}
+.sessions__header h1 {
+  margin: 0;
+}
+
 .session-form {
   display: flex;
   flex-direction: column;
