@@ -99,6 +99,22 @@ const (
 	// fidelity.
 	TypeTutorLessonCreated   Type = "tutor.lesson.created"
 	TypeTutorLessonCompleted Type = "tutor.lesson.completed"
+
+	// The two Phase 4 Task 6 conversation tutor events (PRD §17.4):
+	// TypeConversationTurn fires once per application/conversation.
+	// Service.Say call, Evidence carrying {"position":…, "corrections":…}
+	// — corrections found this turn are NOT separately re-recorded under
+	// their own conversation event type; they reuse
+	// TypeCorrectionPresented/TypeHintShown, the SAME two event types
+	// application/feedback.Service.RequestFeedback records for writing
+	// corrections, so a downstream consumer (the learner model,
+	// statistics) never has to know whether a correction came from a
+	// document review or a conversation turn to react to it.
+	// TypeConversationSummarised fires once per Service.Summarise call,
+	// Evidence carrying {"turns":…, "corrections":…} — the end-of-
+	// conversation digest PRD §17.4's "end" feedback timing releases.
+	TypeConversationTurn       Type = "conversation.turn"
+	TypeConversationSummarised Type = "conversation.summarised"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

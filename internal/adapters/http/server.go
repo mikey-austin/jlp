@@ -12,6 +12,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
+	appconversation "github.com/mikeyaustin/jlp/internal/application/conversation"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
@@ -128,6 +129,11 @@ type Options struct {
 	// its own copy of config.Config just to read one string; only read
 	// when A2A above is non-nil.
 	A2APath string
+	// Conversation drives the workspace's conversation pane (Phase 4
+	// Task 6, PRD §17.4): free-form dialogue turns and the
+	// end-of-conversation digest, governed by the session's
+	// session.Profile.FeedbackTiming.
+	Conversation *appconversation.Service
 }
 
 type Server struct {
@@ -197,6 +203,13 @@ func (s *Server) routes() http.Handler {
 		r.Get("/sessions/{id}", s.sessionsWorkspace)
 		r.Get("/sessions/{id}/activity", s.sessionsActivity)
 		r.Post("/sessions/{id}/feedback", s.feedbackRequest)
+		// Phase 4 Task 6: the conversation tutor (PRD §17.4) — a
+		// message-posting form in the session pane, and the
+		// end-of-conversation digest button. Listed right after
+		// /sessions/{id}/feedback since both are the same workspace
+		// page's two review surfaces.
+		r.Post("/sessions/{id}/conversation", s.conversationSay)
+		r.Post("/sessions/{id}/conversation/summary", s.conversationSummarise)
 		r.Post("/corrections/{id}/status", s.correctionStatus)
 		// retry/reveal/confidence: Phase 2 Task 8's active recall +
 		// confidence tracking (PRD §9/§53) — see feedback.go's handler

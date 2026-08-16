@@ -38,6 +38,7 @@ func (s *Server) sessionsCreate(w http.ResponseWriter, r *http.Request) {
 		TeacherMode:         r.FormValue("teacher_mode"),
 		ExplanationLanguage: r.FormValue("explanation_language"),
 		Strictness:          r.FormValue("strictness"),
+		FeedbackTiming:      r.FormValue("feedback_timing"),
 	}
 	sess, err := s.opts.Sessions.Create(r.Context(), ident.ID, r.FormValue("title"), r.FormValue("purpose"), profile)
 	if err != nil {
@@ -71,12 +72,40 @@ func (s *Server) sessionsWorkspace(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load document", http.StatusInternalServerError)
 		return
 	}
+
+	history, err := s.opts.Conversation.History(r.Context(), ident.ID, sess.ID)
+	if err != nil {
+		http.Error(w, "could not load conversation", http.StatusInternalServerError)
+		return
+	}
+	turns := make([]conversationTurnView, 0, len(history))
+	for _, t := range history {
+		turns = append(turns, toConversationTurnView(t))
+	}
+
 	Render(w, r, "workspace", map[string]any{
-		"Title":    sess.Title,
-		"Identity": ident,
-		"Session":  sess,
-		"Document": doc,
+		"Title":              sess.Title,
+		"Identity":           ident,
+		"Session":            sess,
+		"Document":           doc,
+		"ConversationTurns":  turns,
+		"FeedbackTimingCopy": feedbackTimingCopy(sess.Profile.FeedbackTiming),
 	})
+}
+
+// feedbackTimingCopy is the UI explainer PRD §17.4 asks for: every
+// session's conversation pane says WHY corrections are (or aren't)
+// showing up as they type, not just what the current setting's label
+// is.
+func feedbackTimingCopy(timing string) string {
+	switch timing {
+	case "immediate":
+		return "訂正はすぐに表示されます。"
+	case "delayed":
+		return "会話が途切れないよう、訂正は数ターンごとにまとめて表示されます。"
+	default: // "end"
+		return "会話が途切れないよう、訂正は会話の最後にまとめて表示されます（「会話をまとめる」ボタン）。"
+	}
 }
 
 // sessionsActivity renders the last 10 learning events for the session,

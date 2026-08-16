@@ -43,6 +43,14 @@ func (s *Service) Create(ctx context.Context, identity learner.IdentityID, title
 	if p.Strictness == "" {
 		p.Strictness = "balanced"
 	}
+	if p.FeedbackTiming == "" {
+		// PRD §17.4: dialogue shouldn't be constantly interrupted by
+		// correction UI — "end" (nothing shown until the conversation
+		// tutor's Summarise digest) is the default every new session
+		// gets unless the learner explicitly opts into "immediate" or
+		// "delayed" at creation time.
+		p.FeedbackTiming = "end"
+	}
 
 	now := time.Now().UTC()
 	sess := session.Session{

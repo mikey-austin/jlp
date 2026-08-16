@@ -16,6 +16,21 @@
       </div>
       <div id="feedback-results"></div>
     </section>
+    <section id="conversation-pane" class="card">
+      <h2>会話練習</h2>
+      <p class="hint">{{.FeedbackTimingCopy}}</p>
+      <div id="conversation-transcript">{{range .ConversationTurns}}{{template "conversation_turn" .}}{{end}}</div>
+      <form id="conversation-form" class="conv-form" hx-post="/sessions/{{.Session.ID}}/conversation"
+            hx-target="#conversation-transcript" hx-swap="beforeend"
+            hx-on::after-request="if(event.detail.successful) this.reset()">
+        <input class="input" type="text" name="text" placeholder="日本語でメッセージを送ってください…" required autocomplete="off">
+        <button type="submit" class="btn btn--sm">送信</button>
+      </form>
+      <form hx-post="/sessions/{{.Session.ID}}/conversation/summary" hx-target="#conversation-digest" hx-swap="innerHTML">
+        <button type="submit" class="btn btn--secondary btn--sm">会話をまとめる</button>
+      </form>
+      <div id="conversation-digest"></div>
+    </section>
   </div>
   <aside id="context-pane" class="card">
     <h2>{{.Session.Title}}</h2>

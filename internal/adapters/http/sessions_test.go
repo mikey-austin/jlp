@@ -11,8 +11,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/fakeai" //nolint:depguard // fakeai is a port-shaped test double injected via agentconversation.New(ai.StructuredGenerator); PRD §75 Rule 3 forbids agents reaching real adapters, not fakes constructed in tests
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	agentconversation "github.com/mikeyaustin/jlp/internal/agent/conversation"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
+	appconversation "github.com/mikeyaustin/jlp/internal/application/conversation"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -179,9 +182,55 @@ func (f *fakeEventRepo) ListAll(_ context.Context, identity learner.IdentityID) 
 	return out, nil
 }
 
+// fakeConversationRepo is a minimal in-memory storage.ConversationRepository
+// for HTTP-layer tests — the workspace GET handler calls
+// Conversation.History on every render, so any test reaching
+// sessionsWorkspace needs a non-nil, non-panicking one wired in (see
+// testOptionsWithSessions below), even though no test in this file
+// exercises the conversation pane's own POST routes directly (see
+// conversation_test.go for those).
+type fakeConversationRepo struct {
+	byConvID  map[string]learner.IdentityID
+	bySession map[string]string
+	turns     map[string][]storage.ConversationTurn
+}
+
+func newFakeConversationRepo() *fakeConversationRepo {
+	return &fakeConversationRepo{byConvID: map[string]learner.IdentityID{}, bySession: map[string]string{}, turns: map[string][]storage.ConversationTurn{}}
+}
+
+func (f *fakeConversationRepo) GetOrCreateForSession(_ context.Context, identity learner.IdentityID, sid session.ID) (string, bool, error) {
+	if id, ok := f.bySession[string(sid)]; ok {
+		if f.byConvID[id] != identity {
+			return "", false, storage.ErrNotFound
+		}
+		return id, false, nil
+	}
+	id := "conv-" + string(sid)
+	f.byConvID[id] = identity
+	f.bySession[string(sid)] = id
+	return id, true, nil
+}
+
+func (f *fakeConversationRepo) InsertTurn(_ context.Context, identity learner.IdentityID, conversationID string, turn storage.ConversationTurn) error {
+	if f.byConvID[conversationID] != identity {
+		return storage.ErrNotFound
+	}
+	f.turns[conversationID] = append(f.turns[conversationID], turn)
+	return nil
+}
+
+func (f *fakeConversationRepo) ListTurns(_ context.Context, identity learner.IdentityID, conversationID string) ([]storage.ConversationTurn, error) {
+	if f.byConvID[conversationID] != identity {
+		return nil, storage.ErrNotFound
+	}
+	return f.turns[conversationID], nil
+}
+
 func testOptionsWithSessions() Options {
 	opts := testOptions()
-	opts.Sessions = sessions.NewService(newFakeSessionRepo())
+	sessRepo := newFakeSessionRepo()
+	opts.Sessions = sessions.NewService(sessRepo)
 	events := newFakeEventRepo()
 	rec := learning.NewRecorder(events, inprocbus.New())
 	opts.Writing = appwriting.NewService(newFakeDocRepo(), rec)
@@ -190,6 +239,11 @@ func testOptionsWithSessions() Options {
 	// content (TestHomeRenders et al.) override this with their own
 	// fakeAnalyticsRepo.
 	opts.Analytics = analytics.NewService(fakeAnalyticsRepo{})
+	// The workspace GET route (sessionsWorkspace) reads
+	// Conversation.History on every render (Phase 4 Task 6) — wired
+	// over the SAME sessRepo opts.Sessions uses, so a session created
+	// through opts.Sessions is visible to it.
+	opts.Conversation = appconversation.NewService(newFakeConversationRepo(), sessRepo, agentconversation.New(fakeai.New()), nil, rec)
 	return opts
 }
 

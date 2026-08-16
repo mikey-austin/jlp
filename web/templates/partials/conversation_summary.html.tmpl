@@ -1,0 +1,7 @@
+{{define "conversation_summary"}}
+<div class="conv-summary card">
+  <h3>会話のまとめ（{{.Turns}}ターン）</h3>
+  {{if not .Cards}}<p class="all-good">問題は見つかりませんでした。よく話せています！</p>
+  {{else}}<div class="cards">{{range .Cards}}{{template "correction_card" .}}{{end}}</div>{{end}}
+</div>
+{{end}}

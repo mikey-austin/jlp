@@ -67,6 +67,12 @@ func TestCreateAppliesDefaultsAndGeneratesID(t *testing.T) {
 	if got.Profile.Strictness != "balanced" {
 		t.Fatalf("Strictness = %q, want %q", got.Profile.Strictness, "balanced")
 	}
+	// PRD §17.4: a new session defaults to "end" feedback timing — the
+	// conversation tutor withholds corrections entirely until
+	// Summarise, never interrupting the dialogue — not "immediate".
+	if got.Profile.FeedbackTiming != "end" {
+		t.Fatalf("FeedbackTiming = %q, want %q", got.Profile.FeedbackTiming, "end")
+	}
 }
 
 func TestCreateExplicitProfileValuesAreNotOverridden(t *testing.T) {
@@ -76,6 +82,7 @@ func TestCreateExplicitProfileValuesAreNotOverridden(t *testing.T) {
 		TeacherMode:         "strict-corrector",
 		ExplanationLanguage: "ja",
 		Strictness:          "strict",
+		FeedbackTiming:      "immediate",
 	})
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
@@ -88,6 +95,9 @@ func TestCreateExplicitProfileValuesAreNotOverridden(t *testing.T) {
 	}
 	if got.Profile.Strictness != "strict" {
 		t.Fatalf("Strictness = %q, want %q", got.Profile.Strictness, "strict")
+	}
+	if got.Profile.FeedbackTiming != "immediate" {
+		t.Fatalf("FeedbackTiming = %q, want %q", got.Profile.FeedbackTiming, "immediate")
 	}
 }
 

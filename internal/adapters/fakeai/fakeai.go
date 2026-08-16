@@ -60,6 +60,16 @@ const (
 	// schemas above.
 	schemaWeeklySummaryV1 = "weekly_summary.v1"
 
+	// schemaConversationTurnV1 backs internal/agent/conversation (Phase 4
+	// Task 6, PRD §17.4): UNLIKE the fixed-canned schemas above, this one
+	// IS pattern-matched against the rendered prompt — the same
+	// iAdjectivePastRules/を行きます substring rules schemaV1/schemaV2
+	// match below — so a conversation turn that repeats one of the
+	// teacher fixture's known mistakes gets the same corrections a
+	// writing review would, keeping every fake-provider fixture in this
+	// file checkable against one consistent mistake.
+	schemaConversationTurnV1 = "conversation_turn.v1"
+
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
@@ -85,13 +95,14 @@ const (
 // GenerateStructured's guard reads as one membership test rather than
 // an OR chain that grows every time a schema is added.
 var supportedSchemas = map[string]bool{
-	schemaV1:              true,
-	schemaV2:              true,
-	schemaExerciseV1:      true,
-	schemaExerciseEvalV1:  true,
-	schemaAnkiCardV1:      true,
-	schemaLessonPlanV1:    true,
-	schemaWeeklySummaryV1: true,
+	schemaV1:                 true,
+	schemaV2:                 true,
+	schemaExerciseV1:         true,
+	schemaExerciseEvalV1:     true,
+	schemaAnkiCardV1:         true,
+	schemaLessonPlanV1:       true,
+	schemaWeeklySummaryV1:    true,
+	schemaConversationTurnV1: true,
 }
 
 type explanation struct {
@@ -258,6 +269,39 @@ var weeklySummaryFixture = cannedWeeklySummary{
 	Challenge: "次の作文で「それはそれとして」を一度使ってみましょう。",
 }
 
+// conversationTurnResponse mirrors schemas/defs/conversation_turn.v1.json
+// field-for-field. Corrections reuses the same `correction` type
+// schemaV2's own items use — schemaV2's item shape and this schema's
+// item shape are field-for-field identical (see schemas/defs/
+// conversation_turn.v1.json) — so matchedCorrections below can back
+// both without a second, parallel correction type.
+type conversationTurnResponse struct {
+	Reply       string       `json:"reply"`
+	ReplyEN     string       `json:"reply_en,omitempty"`
+	Corrections []correction `json:"corrections,omitempty"`
+	Followup    string       `json:"followup,omitempty"`
+}
+
+// conversationReplyClean/conversationReplyCorrected are the fake
+// provider's two canned conversational replies (Phase 4 Task 6's Step 1
+// pin): which one comes back depends on whether the learner's latest
+// message matched one of matchedCorrections' rules below — a message
+// with no known mistake gets conversationReplyClean, one that does gets
+// conversationReplyCorrected — mirroring schemaV1/schemaV2's own "same
+// mistake catalog drives the response" pattern.
+var (
+	conversationReplyClean = conversationTurnResponse{
+		Reply:    "そうですか、いいですね！",
+		ReplyEN:  "I see, that's nice!",
+		Followup: "他に何かありましたか？",
+	}
+	conversationReplyCorrected = conversationTurnResponse{
+		Reply:    "なるほど、教えてくれてありがとうございます。",
+		ReplyEN:  "I see, thanks for telling me.",
+		Followup: "それについてもっと聞かせてください。",
+	}
+)
+
 // freeProductionEval is the fake provider's one canned drill evaluation.
 var freeProductionEval = cannedExerciseEval{
 	Correct: true,
@@ -314,7 +358,7 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 
 	if req.SchemaName != "" && !supportedSchemas[req.SchemaName] {
 		return ai.StructuredResponse{Provider: provider, Model: model},
-			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1, schemaAnkiCardV1, schemaLessonPlanV1, schemaWeeklySummaryV1)
+			fmt.Errorf("fakeai: schema %q not supported (only %q, %q, %q, %q, %q, %q, %q, %q)", req.SchemaName, schemaV1, schemaV2, schemaExerciseV1, schemaExerciseEvalV1, schemaAnkiCardV1, schemaLessonPlanV1, schemaWeeklySummaryV1, schemaConversationTurnV1)
 	}
 
 	// exercise.v1/exercise_eval.v1 (internal/agent/drill) and
@@ -333,6 +377,8 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 		return g.respond(start, req, iAdjectivePastLessonPlan)
 	case schemaWeeklySummaryV1:
 		return g.respond(start, req, weeklySummaryFixture)
+	case schemaConversationTurnV1:
+		return g.respondConversationTurn(start, req)
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own
@@ -342,27 +388,7 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 	// non-socratic session must still come back hint-less).
 	socratic := req.SchemaName == schemaV2 && strings.Contains(req.User, socraticMarker)
 
-	result := correctionResult{Corrections: []correction{}}
-	for _, adj := range iAdjectivePastRules {
-		if c, ok := iAdjectivePastCorrection(adj, req.User); ok {
-			c.Hint = hintFor(socratic, iAdjectivePastHint)
-			result.Corrections = append(result.Corrections, c)
-		}
-	}
-	if strings.Contains(req.User, "を行きます") {
-		result.Corrections = append(result.Corrections, correction{
-			Original:    "を",
-			Replacement: "に",
-			Type:        "particle",
-			Severity:    "incorrect",
-			Explanation: explanation{
-				JA: "移動を表す「行きます」は目的地に「に」を使います。「を」は使いません。",
-				EN: "行きます (\"to go\") marks its destination with に, not を.",
-			},
-			Concepts: []string{"particle-ni-direction"},
-			Hint:     hintFor(socratic, particleHint),
-		})
-	}
+	result := correctionResult{Corrections: matchedCorrections(req.User, socratic)}
 
 	payload, err := json.Marshal(result)
 	if err != nil {
@@ -402,6 +428,95 @@ func (g *generator) respond(start time.Time, req ai.StructuredRequest, payload a
 		OutputTokens: runeCount(string(raw)),
 		Latency:      time.Since(start),
 	}, nil
+}
+
+// matchedCorrections scans text (a rendered prompt's User half) for
+// every known-mistake pattern the fake provider recognizes —
+// iAdjectivePastRules and the を行きます particle mistake, the SAME two
+// rules the correction_result.v1/v2 path below has always matched —
+// and returns one correction per match, hint-attached per socratic's
+// same hintFor gate. Shared by that path AND
+// respondConversationTurn below, so the two capabilities can never
+// drift on what counts as a "known mistake" or how its explanation is
+// worded. Always returns a non-nil (possibly empty) slice, since
+// correction_result's own schema requires "corrections" to be an array,
+// never null.
+func matchedCorrections(text string, socratic bool) []correction {
+	cs := []correction{}
+	for _, adj := range iAdjectivePastRules {
+		if c, ok := iAdjectivePastCorrection(adj, text); ok {
+			c.Hint = hintFor(socratic, iAdjectivePastHint)
+			cs = append(cs, c)
+		}
+	}
+	if strings.Contains(text, "を行きます") {
+		cs = append(cs, correction{
+			Original:    "を",
+			Replacement: "に",
+			Type:        "particle",
+			Severity:    "incorrect",
+			Explanation: explanation{
+				JA: "移動を表す「行きます」は目的地に「に」を使います。「を」は使いません。",
+				EN: "行きます (\"to go\") marks its destination with に, not を.",
+			},
+			Concepts: []string{"particle-ni-direction"},
+			Hint:     hintFor(socratic, particleHint),
+		})
+	}
+	return cs
+}
+
+// learnerSaidMarker is the exact line
+// templates/conversation.turn.v1.user.md renders immediately before the
+// learner's new message this turn ("The learner just said:\n{{.Message}}").
+// respondConversationTurn below anchors on it to isolate JUST this
+// turn's message from the rest of the rendered prompt — critically,
+// from the "Conversation so far:" history section rendered ABOVE it,
+// which quotes every prior turn's learner text verbatim. Without this,
+// matchedCorrections would re-detect the SAME known mistake in a prior
+// turn's quoted history on every subsequent turn, double- (then triple-,
+// quadruple-...) counting it as the conversation grows.
+const learnerSaidMarker = "The learner just said:\n"
+
+// currentMessage extracts the single line of learner text
+// learnerSaidMarker introduces from a rendered conversation.turn.v1
+// User prompt — see that constant's doc comment for why this must be
+// scoped to just this turn's message. Falls back to the whole string
+// when the marker isn't found (defensive only; the real template
+// always renders it).
+func currentMessage(user string) string {
+	idx := strings.Index(user, learnerSaidMarker)
+	if idx == -1 {
+		return user
+	}
+	rest := user[idx+len(learnerSaidMarker):]
+	if nl := strings.Index(rest, "\n"); nl != -1 {
+		return rest[:nl]
+	}
+	return rest
+}
+
+// respondConversationTurn is the fake provider's conversation_turn.v1
+// path (Phase 4 Task 6, PRD §17.4): matchedCorrections finds whatever
+// known mistakes the learner's latest message (currentMessage, isolated
+// from the rest of the prompt — see its own doc comment) contains,
+// using the SAME socraticMarker detection schemaV2's own hint-attachment
+// uses; the canned reply is conversationReplyCorrected when any were
+// found, conversationReplyClean otherwise. Corrections is left nil
+// (omitted from the JSON, via its own omitempty tag) rather than an
+// empty slice when there are none — unlike correction_result.v1/v2,
+// conversation_turn.v1's own schema does NOT require "corrections" to
+// be present at all.
+func (g *generator) respondConversationTurn(start time.Time, req ai.StructuredRequest) (ai.StructuredResponse, error) {
+	socratic := strings.Contains(req.User, socraticMarker)
+	corrections := matchedCorrections(currentMessage(req.User), socratic)
+
+	payload := conversationReplyClean
+	if len(corrections) > 0 {
+		payload = conversationReplyCorrected
+		payload.Corrections = corrections
+	}
+	return g.respond(start, req, payload)
 }
 
 // iAdjectivePastCorrection reports the deterministic correction for

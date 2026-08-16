@@ -126,6 +126,10 @@ textarea:focus-visible,
   font-weight: 500;
   color: var(--fg);
 }
+.field .hint {
+  font-weight: 400;
+  color: var(--fg-muted);
+}
 
 .input,
 .select,
@@ -860,4 +864,69 @@ textarea:focus-visible,
 }
 .activity-list time {
   font-family: "JetBrains Mono", monospace;
+}
+
+/* ===== Conversation tutor (Phase 4 Task 6, PRD §17.4) ==================
+ * #conversation-pane's transcript (.conv-turn per exchange) and the
+ * end-of-conversation digest (.conv-summary, the "conversation_summary"
+ * partial) — correction cards inside either reuse .correction/.chip/
+ * etc. above verbatim via the shared correction_card partial, so
+ * nothing here restyles a correction card itself. */
+
+#conversation-pane .hint {
+  color: var(--fg-subtle);
+  font-size: var(--text-sm);
+  margin: 0 0 var(--space-3);
+}
+.conv-turn {
+  padding: var(--space-3) 0;
+  border-bottom: 1px solid var(--border);
+}
+.conv-turn:last-child {
+  border-bottom: none;
+}
+.conv-msg {
+  margin: 0 0 var(--space-2);
+  line-height: 1.6;
+}
+.conv-who {
+  display: inline-block;
+  min-width: 3.5em;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+  margin-right: var(--space-2);
+}
+.conv-msg-en,
+.conv-followup {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+.conv-followup {
+  font-style: italic;
+}
+.conv-withheld {
+  font-style: italic;
+}
+.conv-form {
+  display: flex;
+  gap: var(--space-2);
+  margin: var(--space-3) 0;
+}
+.conv-form .input {
+  flex: 1;
+  min-width: 0;
+}
+.conv-summary {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+}
+
+@media (max-width: 640px) {
+  .conv-form {
+    flex-wrap: wrap;
+  }
+  .conv-form .input {
+    flex-basis: 100%;
+  }
 }

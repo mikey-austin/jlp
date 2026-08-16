@@ -72,6 +72,27 @@ type AnkiCard struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type Conversation struct {
+	ID         pgtype.UUID
+	SessionID  pgtype.UUID
+	IdentityID string
+	CreatedAt  pgtype.Timestamptz
+	UpdatedAt  pgtype.Timestamptz
+}
+
+type ConversationTurn struct {
+	ID             pgtype.UUID
+	ConversationID pgtype.UUID
+	Position       int32
+	LearnerText    string
+	Reply          string
+	ReplyEn        string
+	Followup       string
+	Corrections    []byte
+	AiRequestID    pgtype.UUID
+	CreatedAt      pgtype.Timestamptz
+}
+
 type Correction struct {
 	ID                pgtype.UUID
 	FeedbackRequestID pgtype.UUID

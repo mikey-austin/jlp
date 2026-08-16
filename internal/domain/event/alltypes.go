@@ -38,5 +38,7 @@ func AllTypes() []Type {
 		TypeVocabularyImported,
 		TypeTutorLessonCreated,
 		TypeTutorLessonCompleted,
+		TypeConversationTurn,
+		TypeConversationSummarised,
 	}
 }

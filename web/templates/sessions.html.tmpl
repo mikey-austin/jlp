@@ -49,6 +49,14 @@
         <option value="strict">strict</option>
       </select>
     </label>
+    <label class="field">会話の訂正タイミング
+      <select class="select" name="feedback_timing">
+        <option value="end" selected>end — 会話の最後にまとめて表示（会話が途切れません）</option>
+        <option value="delayed">delayed — 数ターンごとにまとめて表示</option>
+        <option value="immediate">immediate — 発言ごとにすぐ表示</option>
+      </select>
+      <span class="hint">おすすめは「end」です。対話中に訂正が割り込まないよう、デフォルトになっています。</span>
+    </label>
     <button type="submit" class="btn">作成</button>
   </form>
 </section>{{end}}

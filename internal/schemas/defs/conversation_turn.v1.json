@@ -1,0 +1,39 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ConversationTurnV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["reply"],
+  "properties": {
+    "reply": { "type": "string", "minLength": 1 },
+    "reply_en": { "type": "string" },
+    "corrections": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["original", "replacement", "type", "severity", "explanation"],
+        "properties": {
+          "original":    { "type": "string", "minLength": 1 },
+          "replacement": { "type": "string" },
+          "type": { "enum": ["grammar","particle","conjugation","word-order","vocabulary","collocation","register","politeness","naturalness","ambiguity","punctuation","spelling","kanji","style"] },
+          "severity": { "enum": ["incorrect","unnatural","less-natural","style","optional","excellent-alternative"] },
+          "explanation": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ja", "en"],
+            "properties": { "ja": { "type": "string" }, "en": { "type": "string" } }
+          },
+          "concepts": { "type": "array", "items": { "type": "string" } },
+          "hint": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["ja", "en"],
+            "properties": { "ja": { "type": "string" }, "en": { "type": "string" } }
+          }
+        }
+      }
+    },
+    "followup": { "type": "string" }
+  }
+}

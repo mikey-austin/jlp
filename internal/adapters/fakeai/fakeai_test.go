@@ -309,3 +309,111 @@ func TestFakeAdapterSchemaV1StillSupported(t *testing.T) {
 		t.Fatalf("Hint = %+v, want nil for a v1 schema request even when the prompt mentions socratic", got.Corrections[0].Hint)
 	}
 }
+
+// conversationTurnResult mirrors schemas/defs/conversation_turn.v1.json
+// field-for-field — this test file's own DTO, kept separate from
+// wantResult (correction_result's own shape) since conversation_turn.v1
+// wraps the same corrections array inside a reply/reply_en/followup
+// envelope.
+type conversationTurnResult struct {
+	Reply       string           `json:"reply"`
+	ReplyEN     string           `json:"reply_en"`
+	Corrections []wantCorrection `json:"corrections"`
+	Followup    string           `json:"followup"`
+}
+
+func generateConversationTurn(t *testing.T, teacherMode, user string) (ai.StructuredResponse, conversationTurnResult) {
+	t.Helper()
+	gen := New()
+	req := ai.StructuredRequest{
+		PromptName:    "conversation.turn",
+		PromptVersion: "v1",
+		System:        "system prompt",
+		User:          "Teacher mode: " + teacherMode + "\n\nSession purpose: Casual conversation practice\n\nThe learner just said:\n" + user + "\n",
+		SchemaName:    "conversation_turn.v1",
+		Agent:         "conversation",
+	}
+	resp, err := gen.GenerateStructured(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStructured returned error: %v", err)
+	}
+	if err := schemas.Validate("conversation_turn.v1", resp.JSON); err != nil {
+		t.Fatalf("response JSON failed schema validation: %v\nJSON: %s", err, resp.JSON)
+	}
+	var got conversationTurnResult
+	if err := json.Unmarshal(resp.JSON, &got); err != nil {
+		t.Fatalf("unmarshal response JSON: %v", err)
+	}
+	return resp, got
+}
+
+// TestFakeAdapterConversationTurnCleanMessageHasNoCorrections pins the
+// Phase 4 Task 6 fixture: a message with no known mistake gets a reply
+// and no corrections.
+func TestFakeAdapterConversationTurnCleanMessageHasNoCorrections(t *testing.T) {
+	_, got := generateConversationTurn(t, "teacher", "今日はいい天気ですね。")
+	if got.Reply == "" {
+		t.Fatal("Reply is empty")
+	}
+	if len(got.Corrections) != 0 {
+		t.Fatalf("Corrections = %+v, want none", got.Corrections)
+	}
+}
+
+// TestFakeAdapterConversationTurnKnownMistakeYieldsCorrection pins the
+// same i-adjective-past fixture every other schema in this file keys
+// off of, now reached through conversation_turn.v1.
+func TestFakeAdapterConversationTurnKnownMistakeYieldsCorrection(t *testing.T) {
+	_, got := generateConversationTurn(t, "teacher", "昨日の映画はとても面白いでした。")
+	if len(got.Corrections) != 1 {
+		t.Fatalf("Corrections = %+v, want exactly 1", got.Corrections)
+	}
+	if got.Corrections[0].Original != "面白いでした" || got.Corrections[0].Replacement != "面白かったです" {
+		t.Fatalf("Corrections[0] = %+v, want 面白いでした -> 面白かったです", got.Corrections[0])
+	}
+	if got.Corrections[0].Hint != nil {
+		t.Fatalf("Hint = %+v, want nil in non-socratic teacher mode", got.Corrections[0].Hint)
+	}
+}
+
+// TestFakeAdapterConversationTurnSocraticAttachesHint mirrors
+// TestFakeAdapterSocraticModeAttachesHint for the conversation_turn.v1
+// path.
+func TestFakeAdapterConversationTurnSocraticAttachesHint(t *testing.T) {
+	_, got := generateConversationTurn(t, "socratic", "昨日の映画はとても面白いでした。")
+	if len(got.Corrections) != 1 {
+		t.Fatalf("Corrections = %+v, want exactly 1", got.Corrections)
+	}
+	if got.Corrections[0].Hint == nil {
+		t.Fatal("Hint is nil, want a socratic hint attached")
+	}
+}
+
+// TestFakeAdapterConversationTurnHistoryDoesNotDoubleCount pins the
+// bug fix in currentMessage: a prior turn's mistake, quoted verbatim in
+// the "Conversation so far:" history section, must NOT be re-detected
+// as a fresh correction on a later turn whose own new message is clean.
+func TestFakeAdapterConversationTurnHistoryDoesNotDoubleCount(t *testing.T) {
+	gen := New()
+	req := ai.StructuredRequest{
+		PromptName:    "conversation.turn",
+		PromptVersion: "v1",
+		System:        "system prompt",
+		User: "Teacher mode: teacher\n\nSession purpose: Casual conversation practice\n\n" +
+			"Conversation so far:\n学習者: 昨日の映画はとても面白いでした。\nあなた: なるほど、教えてくれてありがとうございます。\n\n" +
+			"The learner just said:\n映画について話しましょう。\n",
+		SchemaName: "conversation_turn.v1",
+		Agent:      "conversation",
+	}
+	resp, err := gen.GenerateStructured(context.Background(), req)
+	if err != nil {
+		t.Fatalf("GenerateStructured returned error: %v", err)
+	}
+	var got conversationTurnResult
+	if err := json.Unmarshal(resp.JSON, &got); err != nil {
+		t.Fatalf("unmarshal response JSON: %v", err)
+	}
+	if len(got.Corrections) != 0 {
+		t.Fatalf("Corrections = %+v, want none (the mistake belongs to the quoted history, not this turn's own message)", got.Corrections)
+	}
+}

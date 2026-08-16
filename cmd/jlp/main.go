@@ -20,6 +20,7 @@ import (
 	smtpadapter "github.com/mikeyaustin/jlp/internal/adapters/smtp"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
 	agentanki "github.com/mikeyaustin/jlp/internal/agent/anki"
+	agentconversation "github.com/mikeyaustin/jlp/internal/agent/conversation"
 	"github.com/mikeyaustin/jlp/internal/agent/drill"
 	agentlesson "github.com/mikeyaustin/jlp/internal/agent/lesson"
 	agentsummary "github.com/mikeyaustin/jlp/internal/agent/summary"
@@ -28,6 +29,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
 	appchannel "github.com/mikeyaustin/jlp/internal/application/channel"
+	appconversation "github.com/mikeyaustin/jlp/internal/application/conversation"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
@@ -255,6 +257,21 @@ func main() {
 		drillAgent := drill.New(aiGen)
 		practiceSvc := practice.NewService(postgres.NewExerciseRepository(pool), drillAgent, teachingPlanner, grammarRepo, recorder)
 
+		// The conversation tutor (Phase 4 Task 6, PRD §17.4): a free-form
+		// dialogue alternative to the writing/feedback pane, in the same
+		// session workspace. conversationAgent goes through the same
+		// always-observed aiGen every other agent uses; conversationSvc
+		// reuses vocabSvc (DetectProduction — a conversation turn feeds
+		// the learner model exactly like a writing review does) and
+		// recorder, the same shared instances feedbackSvc's/practiceSvc's
+		// construction above already established. It takes its own
+		// postgres.NewSessionRepository(pool) rather than sessionsSvc
+		// (the application-layer service) — the same "a storage
+		// repository, not the sibling application service" choice
+		// feedbackSvc's own first two constructor args already make.
+		conversationAgent := agentconversation.New(aiGen)
+		conversationSvc := appconversation.NewService(postgres.NewConversationRepository(pool), postgres.NewSessionRepository(pool), conversationAgent, vocabSvc, recorder)
+
 		// Channel port + Slack Socket Mode adapter (Phase 4 Task 4, PRD
 		// §20/§20.1): channelSvc composes the SAME sessions/feedback/
 		// practice services every other JLP surface already uses — a
@@ -414,6 +431,7 @@ func main() {
 			AgentRuns:          agentRunRepo,
 			A2A:                a2aServer,
 			A2APath:            cfg.A2A.Path,
+			Conversation:       conversationSvc,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {
