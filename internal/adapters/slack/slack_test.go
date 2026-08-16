@@ -183,6 +183,15 @@ func TestStartThreadsReplyUnderExistingThreadTS(t *testing.T) {
 
 // TestStartSkipsBlankText: a system/edit event with empty text must
 // never reach handle, and never produce a reply.
+// TestStartSkipsBlankText: a system/edit event with empty text must
+// never reach handle, and never produce a reply. The negative claim
+// ("handle was not called") needs a real completion signal for
+// "handleEvent finished deciding," not a fixed sleep — a sleep proves
+// only that nothing had happened YET at that arbitrary moment, not that
+// nothing was ever going to. a.onHandleEventDone (test-only seam, see
+// its own doc comment on Adapter) fires exactly once, from handleEvent's
+// own defer chain, after it has fully finished (including any panic
+// recovery) — the test blocks on that instead.
 func TestStartSkipsBlankText(t *testing.T) {
 	ft := newFakeTransport()
 	a := newAdapter(ft)
@@ -192,15 +201,21 @@ func TestStartSkipsBlankText(t *testing.T) {
 		return channels.Outbound{}, nil
 	}
 
+	done := make(chan struct{}, 1)
+	a.onHandleEventDone = func() { done <- struct{}{} }
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	go func() { _ = a.Start(ctx, handle) }()
 
-	var acked atomic.Bool
-	ft.events <- Event{UserID: "U1", ChannelID: "C1", Text: "   ", ack: func() { acked.Store(true) }}
+	ft.events <- Event{UserID: "U1", ChannelID: "C1", Text: "   "}
 
-	waitFor(t, func() bool { return acked.Load() })
-	time.Sleep(20 * time.Millisecond) // give a wrongly-dispatched handle call a chance to happen
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleEvent did not signal completion within the timeout")
+	}
+
 	if handleCalled.Load() {
 		t.Fatal("handle was called for a blank-text event")
 	}
@@ -443,5 +458,62 @@ func TestHandleEventsAPIIgnoresUnexpectedPayloadShape(t *testing.T) {
 	case ev := <-tr.events:
 		t.Fatalf("expected nothing forwarded for a malformed payload, got %+v", ev)
 	default:
+	}
+}
+
+// TestConsumeRecoversPanicAndKeepsProcessAlive pins the review's I1
+// follow-up: socketModeTransport.consume — spawned as its own goroutine
+// by Run, decoding real untrusted Slack payloads via
+// handleSocketEvent/handleEventsAPI — must not let a panic anywhere in
+// that path crash the whole process. main.go's own recover (around the
+// Start goroutine) is goroutine-local and does NOT cover consume, a
+// CHILD goroutine Run spawns separately; this is the gap the original
+// fix round's recover (on dispatch/handleEvent only) missed.
+//
+// handleSocketEvent/handleEventsAPI's own type assertions are already
+// comma-ok safe, so there's no genuinely malformed Slack payload to
+// synthesize a real panic from today — t.onSocketEvent (a test-only
+// seam, see socketModeTransport's own doc comment) injects one
+// directly, the same technique TestStartRecoversPanicInHandleAndKeepsDispatching
+// uses for handleEvent's externally-injectable handle callback.
+//
+// Like that earlier test, passing at all is part of the proof: an
+// unrecovered panic in a spawned goroutine crashes the entire test
+// binary, so there is no way for a test to survive one and report
+// FAIL — the crash itself, captured against the pre-fix code, IS the
+// RED evidence (see the report).
+func TestConsumeRecoversPanicAndKeepsProcessAlive(t *testing.T) {
+	handler := &capturingHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(prev)
+
+	tr := newSocketModeTransport("xapp-test", "xoxb-test")
+	tr.onSocketEvent = func(socketmode.Event) { panic("boom: socket event handling exploded") }
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() {
+		tr.consume(ctx)
+		close(done)
+	}()
+
+	tr.client.Events <- socketmode.Event{Type: socketmode.EventTypeHello}
+
+	select {
+	case <-done:
+		// consume returned after recovering — this goroutine's own event
+		// loop ends (a panic can't resume execution past itself), but
+		// the PROCESS survives, which is the actual requirement.
+	case <-time.After(2 * time.Second):
+		t.Fatal("consume did not return after the injected panic within the timeout")
+	}
+
+	if _, ok := <-tr.events; ok {
+		t.Fatal("expected tr.events to be closed after consume returns (even via its panic-recovery path)")
+	}
+	if !handler.hasMessageContaining("panic") {
+		t.Fatalf("expected a log message about the panic, got messages: %v", handler.messages)
 	}
 }

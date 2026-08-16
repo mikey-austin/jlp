@@ -81,6 +81,16 @@ type transport interface {
 // Adapter implements ports/channels.Channel over Slack Socket Mode.
 type Adapter struct {
 	transport transport
+	// onHandleEventDone, when non-nil, is called at the very end of
+	// every handleEvent invocation — after any panic has already been
+	// recovered (see handleEvent's defer ordering) — on every return
+	// path: blank text, a handle error, a Send failure, or the happy
+	// path. This is a test-only seam (see slack_test.go's
+	// TestStartSkipsBlankText): it gives a test a REAL completion
+	// signal for "handleEvent finished deciding what to do with this
+	// event," instead of inferring completion from a fixed sleep, which
+	// proves nothing about ordering. Never set outside a test.
+	onHandleEventDone func()
 }
 
 // New builds a production Adapter dialing Slack with appToken (the
@@ -163,6 +173,16 @@ func (a *Adapter) dispatch(ctx context.Context, handle func(ctx context.Context,
 // Invoke already use elsewhere in this codebase for the identical
 // reason.
 func (a *Adapter) handleEvent(ctx context.Context, ev Event, handle func(ctx context.Context, in channels.Inbound) (channels.Outbound, error)) {
+	// Registered FIRST so it runs LAST (defers are LIFO): the recover
+	// defer below always gets first crack at a panic, and
+	// onHandleEventDone only fires once handleEvent has truly finished —
+	// including having already recovered from a panic, if there was
+	// one — never before.
+	defer func() {
+		if a.onHandleEventDone != nil {
+			a.onHandleEventDone()
+		}
+	}()
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("slack: handling an inbound event panicked", "panic", r, "stack", string(debug.Stack()))
@@ -234,6 +254,16 @@ type socketModeTransport struct {
 	client *socketmode.Client
 	web    *goslack.Client
 	events chan Event
+	// onSocketEvent is consume's own per-event handler — always
+	// t.handleSocketEvent in production (wired below by
+	// newSocketModeTransport). Overridable ONLY by this package's own
+	// tests (TestConsumeRecoversPanicAndKeepsProcessAlive), which inject
+	// a panic here directly: handleSocketEvent/handleEventsAPI's own
+	// type assertions are already comma-ok safe, so there is no
+	// naturally-occurring malformed Slack payload to synthesize a real
+	// panic from — this seam is the same idea as Adapter.
+	// onHandleEventDone above, applied to consume's recover instead.
+	onSocketEvent func(socketmode.Event)
 }
 
 // newSocketModeTransport never dials anything — nothing is attempted
@@ -241,7 +271,9 @@ type socketModeTransport struct {
 func newSocketModeTransport(appToken, botToken string) *socketModeTransport {
 	web := goslack.New(botToken, goslack.OptionAppLevelToken(appToken))
 	client := socketmode.New(web)
-	return &socketModeTransport{client: client, web: web, events: make(chan Event, 32)}
+	t := &socketModeTransport{client: client, web: web, events: make(chan Event, 32)}
+	t.onSocketEvent = t.handleSocketEvent
+	return t
 }
 
 func (t *socketModeTransport) Events() <-chan Event { return t.events }
@@ -272,8 +304,24 @@ func (t *socketModeTransport) Run(ctx context.Context) error {
 // Every unrecognized or malformed payload is logged and dropped, never
 // panics — this defensiveness is what lets Start's contract ("never
 // returns except on a fatal setup failure") actually hold.
+//
+// consume is spawned as its own goroutine by Run (go t.consume(ctx)),
+// separate from — and NOT covered by — cmd/jlp/main.go's recover around
+// the Start goroutine, or Adapter.dispatch/handleEvent's own recovers:
+// each spawned goroutine's panic protection is strictly local to itself
+// in Go, so this loop needs its own. It decodes real, untrusted Slack
+// payloads via onSocketEvent (handleSocketEvent/handleEventsAPI in
+// production) — an unrecovered panic here would crash the entire
+// process exactly like an unrecovered one in handleEvent would (see
+// that method's own doc comment for the full reasoning; this is the
+// same class of gap, just in the OTHER goroutine the adapter spawns).
 func (t *socketModeTransport) consume(ctx context.Context) {
 	defer close(t.events)
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("slack: consume loop panicked", "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
 	for {
 		select {
 		case <-ctx.Done():
@@ -282,7 +330,7 @@ func (t *socketModeTransport) consume(ctx context.Context) {
 			if !ok {
 				return
 			}
-			t.handleSocketEvent(evt)
+			t.onSocketEvent(evt)
 		}
 	}
 }
