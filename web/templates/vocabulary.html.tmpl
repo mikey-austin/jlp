@@ -6,19 +6,19 @@
     <a href="/vocabulary?filter=produced"{{if eq .Filter "produced"}} class="active"{{end}}>使えた</a>
     <a href="/vocabulary?filter=activate"{{if eq .Filter "activate"}} class="active"{{end}}>活性化候補</a>
   </nav>
-  <div class="table-card">
+  <div class="table-card table-card--stack">
     <table>
       <thead><tr><th>表現</th><th>読み方</th><th>意味</th><th>English</th><th>タグ</th><th>種類</th><th>検索回数</th><th>使用</th></tr></thead>
       <tbody>
         {{range .Items}}<tr>
-          <td>{{.Expression}}</td>
-          <td>{{.Reading}}</td>
-          <td>{{.Meaning}}</td>
-          <td>{{if .MeaningEN}}{{.MeaningEN}}{{end}}</td>
-          <td>{{if .TagsJoined}}{{.TagsJoined}}{{end}}</td>
-          <td><span class="badge badge--type">{{.KindLabel}}</span></td>
-          <td>{{.Lookups}}</td>
-          <td>✓{{.SuccessfulProductions}} ✗{{.FailedProductions}}</td>
+          <td data-label="表現">{{.Expression}}</td>
+          <td data-label="読み方">{{.Reading}}</td>
+          <td data-label="意味">{{.Meaning}}</td>
+          <td data-label="English">{{if .MeaningEN}}{{.MeaningEN}}{{end}}</td>
+          <td data-label="タグ">{{if .TagsJoined}}{{.TagsJoined}}{{end}}</td>
+          <td data-label="種類"><span class="badge badge--type">{{.KindLabel}}</span></td>
+          <td data-label="検索回数">{{.Lookups}}</td>
+          <td data-label="使用">✓{{.SuccessfulProductions}} ✗{{.FailedProductions}}</td>
         </tr>{{else}}<tr><td colspan="8">語彙がありません</td></tr>{{end}}
       </tbody>
     </table>

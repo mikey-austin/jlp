@@ -1,14 +1,14 @@
 {{define "content"}}<section class="grammar">
   <h1>文法</h1>
-  <div class="table-card">
+  <div class="table-card table-card--stack">
     <table>
       <thead><tr><th>名前</th><th>JLPT</th><th>遭遇回数</th><th>最終確認</th></tr></thead>
       <tbody>
         {{range .Concepts}}<tr>
-          <td><a href="/grammar/{{.Slug}}">{{.Name}}</a></td>
-          <td><span class="badge badge--jlpt badge--jlpt-{{.JLPTChip | lower}}">{{.JLPTChip}}</span></td>
-          <td>{{.Encounters}}</td>
-          <td>{{if .Encounters}}{{.LastSeen.Format "2006-01-02"}}{{else}}未遭遇{{end}}</td>
+          <td data-label="名前"><a href="/grammar/{{.Slug}}">{{.Name}}</a></td>
+          <td data-label="JLPT"><span class="badge badge--jlpt badge--jlpt-{{.JLPTChip | lower}}">{{.JLPTChip}}</span></td>
+          <td data-label="遭遇回数">{{.Encounters}}</td>
+          <td data-label="最終確認">{{if .Encounters}}{{.LastSeen.Format "2006-01-02"}}{{else}}未遭遇{{end}}</td>
         </tr>{{else}}<tr><td colspan="4">文法コンセプトがありません</td></tr>{{end}}
       </tbody>
     </table>

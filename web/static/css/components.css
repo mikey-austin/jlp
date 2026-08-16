@@ -354,10 +354,92 @@ textarea:focus-visible,
  * container instead keeps rows one line tall (~50px) and moves the
  * cost to a horizontal swipe, which is now possible. min-width keeps a
  * narrow table filling the card rather than floating in it. */
-@media (max-width: 640px) {
+/* The band between the stack breakpoint and the desktop layout is where a
+ * wide table gets squeezed worst: at 820px /vocabulary's eight columns
+ * wrapped into 8-character ribbons and every row stood 273px tall. Letting
+ * the table take its natural width inside the scroll container keeps rows
+ * one line high and pays for it with a horizontal swipe, which the card
+ * now supports. Applies right up to the desktop breakpoint, not just to
+ * phones — tablets suffered from this most. */
+@media (max-width: 1024px) {
   .table-card table {
     width: max-content;
     min-width: 100%;
+  }
+}
+
+/* --- Stacked data tables (.table-card--stack) ---------------------------
+ * Horizontal scrolling rescued the clipped columns, but on the widest
+ * tables it is still tiring: /vocabulary's eight columns needed ~4.1
+ * screens of swipe at 390px, /learner's priorities 3.75, /ai's request
+ * log 3.1. Past roughly four columns a phone reader is better served by
+ * one row per card with each value labelled.
+ *
+ * Opt-in per table (>= 4 columns) rather than global: a two- or
+ * three-column table already fits, and stacking it would only cost
+ * density. The label comes from each cell's data-label attribute, so one
+ * markup serves both layouts — no JS, no duplicated template branch.
+ *
+ * Trade-off worth naming: `display: block` drops native table semantics
+ * at phone widths, so the header/cell association is no longer conveyed
+ * structurally. The column label moves into the cell itself, which keeps
+ * it present in both the visual order and the DOM; desktop keeps the
+ * real table intact. */
+@media (max-width: 640px) {
+  .table-card--stack {
+    overflow-x: hidden;
+  }
+  .table-card--stack table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .table-card--stack thead {
+    display: none;
+  }
+  .table-card--stack tbody,
+  .table-card--stack tr,
+  .table-card--stack td {
+    display: block;
+    width: auto;
+  }
+  .table-card--stack tr {
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--border);
+  }
+  .table-card--stack tr:last-child {
+    border-bottom: none;
+  }
+  .table-card--stack td {
+    display: flex;
+    gap: var(--space-4);
+    align-items: baseline;
+    justify-content: space-between;
+    padding: var(--space-1) 0;
+    border: none;
+    text-align: right;
+    /* .ai-table pins its cells to nowrap for the desktop layout; stacked
+     * cells must be free to wrap or long values overflow the card. */
+    white-space: normal;
+  }
+  .table-card--stack td::before {
+    content: attr(data-label);
+    flex: 0 0 auto;
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
+    text-align: left;
+  }
+  /* A cell with no value would render as a lonely label. */
+  .table-card--stack td:empty {
+    display: none;
+  }
+  /* The empty-state row spans the table and carries no column of its own. */
+  .table-card--stack td[colspan] {
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .table-card--stack td[colspan]::before {
+    content: none;
   }
 }
 .table-card thead tr {

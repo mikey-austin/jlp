@@ -2,18 +2,18 @@
   <h1>エージェント実行トレース</h1>
   <p class="description">Agent-run loop の各実行（PRD §27/§50）。ツール呼び出しの内容は <a href="/ai">AIダッシュボード</a> から確認できます。</p>
 
-  <div class="table-card">
+  <div class="table-card table-card--stack">
     <table>
       <thead><tr><th>Agent</th><th>Prompt</th><th>状態</th><th>ターン数</th><th>所要時間</th><th>開始</th><th></th></tr></thead>
       <tbody>
         {{range .Runs}}<tr>
-          <td>{{.Agent}}</td>
-          <td>{{.PromptName}} {{.PromptVersion}}</td>
-          <td><span class="badge">{{.Status}}</span></td>
-          <td>{{.Turns}}</td>
-          <td>{{if .EndedAt.IsZero}}—{{else}}{{.Duration}}{{end}}</td>
-          <td>{{.StartedAt.Format "2006-01-02 15:04:05"}}</td>
-          <td><a href="/ai/agents/{{.ID}}" class="chip">開く</a></td>
+          <td data-label="Agent">{{.Agent}}</td>
+          <td data-label="Prompt">{{.PromptName}} {{.PromptVersion}}</td>
+          <td data-label="状態"><span class="badge">{{.Status}}</span></td>
+          <td data-label="ターン数">{{.Turns}}</td>
+          <td data-label="所要時間">{{if .EndedAt.IsZero}}—{{else}}{{.Duration}}{{end}}</td>
+          <td data-label="開始">{{.StartedAt.Format "2006-01-02 15:04:05"}}</td>
+          <td data-label=""><a href="/ai/agents/{{.ID}}" class="chip">開く</a></td>
         </tr>{{else}}<tr><td colspan="7" class="empty">まだエージェント実行がありません</td></tr>{{end}}
       </tbody>
     </table>
