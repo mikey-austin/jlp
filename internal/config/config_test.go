@@ -874,3 +874,38 @@ func TestParseAllowFromRejectsDuplicateKey(t *testing.T) {
 		t.Fatal("expected an error for a duplicate \"<channel>:<external id>\" key, even with the same identity repeated")
 	}
 }
+
+// TestSpeechDefaultsEmpty pins Speech's "empty ⇒ dormant" contract
+// (Phase 4 Task 8, PRD §66): neither field has a default, so an
+// operator who sets nothing gets both fields empty, exactly like
+// MQTT.URL/Anki.ConnectURL above.
+func TestSpeechDefaultsEmpty(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Speech.STTURL != "" || cfg.Speech.TTSURL != "" {
+		t.Fatalf("Speech defaults = %+v, want both fields empty", cfg.Speech)
+	}
+}
+
+// TestSpeechEnvOverridesAreIndependent pins the APP_SPEECH_STTURL/
+// APP_SPEECH_TTSURL env var names exactly as documented, and that
+// (unlike Signal's RPCURL/Number) either can be set without the
+// other — STT and TTS are independently dormant, not a paired
+// all-or-nothing config.
+func TestSpeechEnvOverridesAreIndependent(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_SPEECH_STTURL", "http://whisper:8080")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Speech.STTURL != "http://whisper:8080" {
+		t.Fatalf("Speech.STTURL = %q, want http://whisper:8080", cfg.Speech.STTURL)
+	}
+	if cfg.Speech.TTSURL != "" {
+		t.Fatalf("Speech.TTSURL = %q, want empty (unset, independent of STTURL)", cfg.Speech.TTSURL)
+	}
+}

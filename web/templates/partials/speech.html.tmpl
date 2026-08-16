@@ -1,0 +1,17 @@
+{{/* Phase 4 Task 8 (PRD §66): the record button + status line for the
+     conversation pane's speech-to-text control, factored into its own
+     partial the same way conversation_turn/correction_card are —
+     web/templates/workspace.html.tmpl includes it right after
+     #conversation-form. No template data of its own: record.js (via
+     the #record-btn/#record-status ids — JS hooks only, never styling
+     hooks, per this codebase's design system convention) does all the
+     wiring; data-transcribe-url points it at POST /speech/transcribe
+     without hardcoding the route a second time in JS. */}}
+{{define "speech_record"}}
+<button type="button" id="record-btn" class="btn btn--secondary btn--sm"
+        data-transcribe-url="/speech/transcribe"
+        aria-label="音声を録音してテキストに変換">🎙 録音</button>
+{{end}}
+{{define "speech_status"}}
+<p id="record-status" class="hint" aria-live="polite" hidden></p>
+{{end}}

@@ -204,6 +204,7 @@ func TestTopicForEveryAllTypesEntry(t *testing.T) {
 		event.TypeTutorLessonCompleted:        "tutor",
 		event.TypeConversationTurn:            "conversation",
 		event.TypeConversationSummarised:      "conversation",
+		event.TypeSpeechTranscribed:           "speech",
 	}
 
 	all := event.AllTypes()

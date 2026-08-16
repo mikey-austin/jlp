@@ -40,5 +40,6 @@ func AllTypes() []Type {
 		TypeTutorLessonCompleted,
 		TypeConversationTurn,
 		TypeConversationSummarised,
+		TypeSpeechTranscribed,
 	}
 }

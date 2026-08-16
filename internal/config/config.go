@@ -23,6 +23,7 @@ type Config struct {
 	Slack    Slack
 	Signal   Signal
 	Channels Channels
+	Speech   Speech
 }
 
 type Server struct {
@@ -384,6 +385,31 @@ type Signal struct {
 	Number string
 }
 
+// Speech configures Phase 4 Task 8's STT/TTS capability (PRD §66):
+// STTURL and TTSURL are each independently dormant-unless-configured,
+// the same "empty ⇒ absent" contract as MQTT.URL/Anki.ConnectURL/
+// Signal.RPCURL above — an operator who sets neither gets zero HTTP
+// calls to either sidecar, ever, and POST /speech/transcribe answers
+// 503 rather than panicking or silently no-opping (see
+// application/speech.Service's ErrNotConfigured).
+//
+// STTURL points at a local whisper.cpp `whisper-server` instance
+// (docker-compose.yml's "speech" profile pins the exact image —
+// ghcr.io/ggml-org/whisper.cpp — and the `--convert` flag that lets it
+// accept a browser MediaRecorder's webm/opus blobs directly). TTSURL
+// points at a local VOICEVOX Engine instance — a real, working
+// Japanese speech synthesizer, not a stub (see internal/adapters/tts's
+// package doc comment for why this task did NOT give TTS the
+// dormant-shell treatment WhatsApp got in Task 5: a working local
+// engine turned out to be available, so building a non-functional
+// stub instead would have been the dishonest choice). Task 8's own
+// HTTP route only ever calls STTURL's recognizer — TTSURL exists,
+// tested, and wireable, but nothing in this task's UI calls Speak yet.
+type Speech struct {
+	STTURL string
+	TTSURL string
+}
+
 // Channels configures the transport-agnostic channel port (Phase 4 Task
 // 4, PRD §20/§20.1) application/channel.Service composes on top of the
 // existing sessions/feedback/practice application services.
@@ -537,7 +563,8 @@ func Load() (Config, error) {
 		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url",
 		"a2a.enabled", "a2a.path",
 		"slack.apptoken", "slack.bottoken", "slack.smokechannel",
-		"signal.rpcurl", "signal.number", "channels.allowfrom"} {
+		"signal.rpcurl", "signal.number", "channels.allowfrom",
+		"speech.stturl", "speech.ttsurl"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}

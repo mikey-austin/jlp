@@ -339,8 +339,8 @@ func TestStaticServiceWorkerHasServiceWorkerAllowedHeader(t *testing.T) {
 	if got := rec.Header().Get("Service-Worker-Allowed"); got != "/" {
 		t.Fatalf("Service-Worker-Allowed = %q, want \"/\"", got)
 	}
-	if !strings.Contains(rec.Body.String(), "jlp-shell-v2") {
-		t.Fatalf("sw.js body missing cache name jlp-shell-v2: %s", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), "jlp-shell-v3") {
+		t.Fatalf("sw.js body missing cache name jlp-shell-v3: %s", rec.Body.String())
 	}
 }
 

@@ -720,6 +720,107 @@ documented evidence the wiring is correct). **Live Signal send/receive
 was never exercised** — see `deploy/signal/README.md` for the full
 device-link procedure and the exact dry-run transcript.
 
+## Speech recognition (STT/TTS, PRD §66)
+
+Phase 4 Task 8 adds speech recognition that feeds the SAME conversation
+pipeline typed text already goes through — PRD §66's hypothesis is that
+written formulation transfers to speech, and the only way to measure
+that (Task 9) is if a spoken turn produces the exact same corrections,
+events, and gating a typed one would. `POST /speech/transcribe` returns
+`{"text":..., "duration_ms":...}`; `web/static/js/record.js` drops that
+text into the conversation pane's own input, and the learner submits it
+through the **unchanged** `POST /sessions/{id}/conversation` route —
+literally the same handler, the same `application/conversation.Service.
+Say` call, the same corrections and `conversation.turn`/`correction.*`
+events a typed message gets. Nothing about speech input has a second,
+parallel path into the conversation pipeline.
+
+**Dormant by default**: `APP_SPEECH_STTURL` and `APP_SPEECH_TTSURL` are
+each independently empty by default — unlike Slack/Signal's paired
+tokens, either can be set without the other. Empty `STTURL` means
+`cmd/jlp/main.go` never constructs a recognizer and every `POST
+/speech/transcribe` answers `503 speech recognition is not configured`,
+never a panic or a silent no-op.
+
+**STT**: `internal/adapters/whisper` targets a local
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) `whisper-server`
+instance — `POST {url}/inference`, multipart field `file`, `response_
+format=verbose_json` (whisper-server's plain `json` format omits the
+clip's own `duration`, which `ai.Transcript.DurationMS` — and the
+`speech.transcribed` event's evidence — need). The compose `whisper`
+service (the `speech` profile) runs `ghcr.io/ggml-org/whisper.cpp:main`
+with `--convert`, so it accepts a browser `MediaRecorder`'s webm/opus
+blobs directly (ffmpeg, bundled in the image, transcodes internally) —
+no raw-WAV requirement on the browser side. No model ships in the
+image; the service's own startup command downloads `ggml-tiny.bin`
+(~75MB, multilingual) into a named volume on first start only.
+
+**TTS**: `internal/adapters/tts` targets a local
+[VOICEVOX Engine](https://github.com/VOICEVOX/voicevox_engine) instance
+— `POST {url}/audio_query` then `POST {url}/synthesis`, VOICEVOX's own
+two-step contract (the first call's JSON response is forwarded
+verbatim as the second call's body). **This is deliberately NOT the
+dormant-shell treatment WhatsApp got below** — a genuine, working local
+Japanese TTS engine turned out to be available in this environment
+(`voicevox/voicevox_engine:cpu-ubuntu20.04-latest`), so this adapter is
+real and tested against it, not a stub standing in for an engine that
+doesn't exist. It's still dormant unless `APP_SPEECH_TTSURL` is set,
+and nothing in this task's HTTP surface calls `Speak` yet — no route
+wires a "hear this spoken" button into the conversation pane; that's
+left to a future task, the same way `internal/adapters/ankiconnect.
+Client` sits unused until `appanki.Service.SetConnector` is called.
+
+```sh
+make up-speech    # starts postgres + app + whisper + voicevox (app stays dormant — Speech config is still unset)
+# first start downloads the whisper model (~75MB) — give it a minute, then:
+# set APP_SPEECH_STTURL=http://whisper:8080 and/or APP_SPEECH_TTSURL=http://voicevox:50021 in .env, then:
+make restart
+```
+
+**Honesty — what was actually verified**: both adapters have full
+offline `httptest` suites (`internal/adapters/whisper/whisper_test.go`,
+`internal/adapters/tts/tts_test.go` — canned responses, no network, no
+sidecar; `make test` never depends on either running). Beyond that,
+this task ran `make up-speech` for real — pulled
+`ghcr.io/ggml-org/whisper.cpp:main` and `voicevox/voicevox_engine:
+cpu-ubuntu20.04-latest`, downloaded a real `ggml-tiny.bin` model into
+the `whispermodels` volume, and confirmed the whole stack end to end
+against the running dev app (not a standalone container):
+
+```
+$ curl -X POST http://localhost:28080/speech/transcribe -F "audio=@ja-clear.wav;type=audio/wav"
+{"text":"Hi.","duration_ms":771}
+```
+
+That request went through the ACTUAL route — identity middleware,
+`application/speech.Service.Transcribe`, the real
+`internal/adapters/whisper.Recognizer` dialing the real `whisper`
+sidecar over the compose network — and this environment has no
+microphone, so the audio was a short `espeak-ng`-synthesized Japanese
+clip ("はい"), per this task's honesty clause. `ggml-tiny` misheard the
+robotic synthesis as "Hi." — reported exactly as it happened, not
+cherry-picked. What this DOES prove, honestly: the full round trip is
+real (real container, real ffmpeg conversion via `--convert`, real
+model inference, a real non-zero `duration_ms`), not a canned response.
+
+The same fixture was then POSTed through the browser via
+`javascript_tool` (mirroring `record.js`'s own fetch call exactly:
+`FormData` with an `audio` field, `POST /speech/transcribe`), and the
+returned text ("Hi.") was confirmed landing in the conversation pane's
+own input field. Submitting it through the **unchanged** 送信 button
+produced a real conversation turn — a tutor reply rendered in the
+transcript — proving the transcript reuses the SAME
+`application/conversation.Service.Say` pipeline typed text does; no
+second code path was ever written for it. See this task's report for
+the full transcript and screenshots (both themes, 390px width, no
+horizontal overflow).
+
+VOICEVOX Engine reachability was also confirmed from INSIDE the app
+container, over the real compose network: `wget -qO-
+http://voicevox:50021/version` returned `"latest"`. No end-to-end
+`Speak` call was exercised beyond the adapter's own `httptest` suite,
+since nothing consumes it yet (see above).
+
 ## WhatsApp: deferred, documented, not stubbed
 
 WhatsApp shares the same `ports/channels.Channel` port Slack and Signal

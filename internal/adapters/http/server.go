@@ -18,6 +18,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appsettings "github.com/mikeyaustin/jlp/internal/application/settings"
+	appspeech "github.com/mikeyaustin/jlp/internal/application/speech"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
@@ -164,6 +165,13 @@ type Options struct {
 	// values these are, verbatim.
 	AIProviders       []string
 	AIDefaultProvider string
+	// Speech drives POST /speech/transcribe (Phase 4 Task 8, PRD §66):
+	// always non-nil (main.go constructs it unconditionally), but its
+	// own internal recognizer may be nil when config.Speech.STTURL is
+	// unset — see application/speech.Service's "recognizer may be nil"
+	// doc comment and ErrNotConfigured, which speechTranscribe maps to
+	// a 503.
+	Speech *appspeech.Service
 }
 
 type Server struct {
@@ -244,6 +252,14 @@ func (s *Server) routes() http.Handler {
 		// page's two review surfaces.
 		r.Post("/sessions/{id}/conversation", s.conversationSay)
 		r.Post("/sessions/{id}/conversation/summary", s.conversationSummarise)
+		// Phase 4 Task 8: speech recognition feeding the SAME
+		// conversation pipeline above — deliberately flat (no {id}
+		// session scoping), matching the brief's literal route.
+		// record.js posts here, drops the transcript into the
+		// conversation form's own input, and the learner submits it
+		// through the unchanged /sessions/{id}/conversation route just
+		// above — see speech.go's package doc comment for why.
+		r.Post("/speech/transcribe", s.speechTranscribe)
 		r.Post("/corrections/{id}/status", s.correctionStatus)
 		// retry/reveal/confidence: Phase 2 Task 8's active recall +
 		// confidence tracking (PRD §9/§53) — see feedback.go's handler

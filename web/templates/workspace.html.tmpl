@@ -44,8 +44,18 @@
               hx-disabled-elt="find input, find button"
               hx-on::after-request="if(event.detail.successful) this.reset()">
           <input class="input" type="text" name="text" placeholder="日本語でメッセージを送ってください…" required autocomplete="off">
+          {{/* record.js wires this up via MediaRecorder, posts to its
+               data-transcribe-url, then drops the returned text into
+               the ↑ input above — the SAME field 送信 posts through
+               the unchanged conversation route — and never submits on
+               its own. Progressively enhanced: record.js hides it
+               entirely when the browser has no MediaRecorder/
+               getUserMedia support, so typed input always works
+               regardless. */}}
+          {{template "speech_record" .}}
           <button type="submit" class="btn btn--sm">送信</button>
         </form>
+        {{template "speech_status" .}}
         <form hx-post="/sessions/{{.Session.ID}}/conversation/summary" hx-target="#conversation-digest" hx-swap="innerHTML">
           <button type="submit" class="btn btn--secondary btn--sm">会話をまとめる</button>
         </form>

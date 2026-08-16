@@ -1,9 +1,10 @@
 // JLP PWA shell service worker.
 //
-// Cache name is versioned: jlp-shell-v2. Bump the suffix whenever the
+// Cache name is versioned: jlp-shell-v3. Bump the suffix whenever the
 // precached shell assets below change so the activate handler evicts
 // the stale cache on the next load (later tasks must respect this).
-const CACHE_NAME = "jlp-shell-v2";
+// v3: Phase 4 Task 8 adds record.js.
+const CACHE_NAME = "jlp-shell-v3";
 
 const PRECACHE_URLS = [
   "/offline",
@@ -22,6 +23,7 @@ const PRECACHE_URLS = [
   "/static/js/alpine.min.js",
   "/static/js/theme.js",
   "/static/js/app.js",
+  "/static/js/record.js",
   "/static/manifest.webmanifest",
   "/static/icons/icon.svg",
 ];

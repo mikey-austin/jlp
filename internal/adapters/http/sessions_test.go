@@ -303,6 +303,15 @@ func TestSessionsCreateThenListShowsNewSession(t *testing.T) {
 	if !strings.Contains(recWorkspace.Body.String(), "旅行について書く") {
 		t.Fatalf("workspace body missing session title: %s", recWorkspace.Body.String())
 	}
+	// Phase 4 Task 8 (PRD §66): the conversation pane's record button —
+	// record.js finds it by id and reads data-transcribe-url to know
+	// where to POST, so both must be present in the rendered markup.
+	if !strings.Contains(recWorkspace.Body.String(), `id="record-btn"`) {
+		t.Fatalf("workspace body missing the speech record button: %s", recWorkspace.Body.String())
+	}
+	if !strings.Contains(recWorkspace.Body.String(), `data-transcribe-url="/speech/transcribe"`) {
+		t.Fatalf("workspace body missing the record button's transcribe URL: %s", recWorkspace.Body.String())
+	}
 }
 
 func TestSessionsCreateEmptyTitleReturnsBadRequest(t *testing.T) {

@@ -1,0 +1,107 @@
+// Package speech is the application-layer speech-recognition pipeline
+// (Phase 4 Task 8, PRD §66): Service.Transcribe is the ONE place a
+// recorded clip becomes text plus a durable speech.transcribed event —
+// the HTTP handler (internal/adapters/http/speech.go) is decode/
+// encode plumbing around it, the same "thin adapter, real logic here"
+// split every other application service in this codebase already
+// follows (application/vocabulary.Service.Ingest, application/
+// conversation.Service.Say, ...).
+//
+// This package deliberately does NOT drive the transcript into
+// application/conversation.Service.Say itself — pipeline reuse (the
+// whole point of Task 8: PRD §66's hypothesis that written formulation
+// transfers to speech only holds if speech goes through the exact SAME
+// conversation/correction pipeline typed text does) happens one layer
+// up, in the browser: record.js drops the returned text into the
+// conversation pane's own input and the learner submits it through the
+// UNCHANGED POST /sessions/{id}/conversation route — literally the
+// same handler, same appconversation.Service.Say call, same
+// corrections, same events a typed message gets. Wiring Transcribe to
+// call Say directly here would build a SECOND, parallel path into the
+// conversation pipeline instead of reusing the one that already
+// exists — exactly what the task brief warns against.
+package speech
+
+import (
+	"context"
+	"errors"
+	"fmt"
+
+	"github.com/google/uuid"
+
+	"github.com/mikeyaustin/jlp/internal/application/learning"
+	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
+)
+
+// ErrNotConfigured is returned by Transcribe when Service was
+// constructed with a nil ai.SpeechRecognizer — main.go only ever
+// constructs a real one when config.Speech.STTURL is set (see that
+// field's own doc comment), so this is the "dormant unless
+// configured" contract's caller-matchable half: the HTTP handler maps
+// this, specifically, to a 503 with a clear message, never a panic or
+// a silent no-op (the task brief's explicit requirement).
+var ErrNotConfigured = errors.New("speech: recognition is not configured")
+
+// Transcript is what Transcribe returns — a package-local copy of
+// ports/ai.Transcript's two fields, kept separate so this package's
+// public API doesn't leak the port type directly (the same "own DTO,
+// don't re-export the port's" convention application/conversation.Turn
+// follows relative to the domain types it wraps).
+type Transcript struct {
+	Text       string
+	DurationMS int
+}
+
+// Service wraps an ai.SpeechRecognizer with identity scoping and event
+// recording. recognizer may be nil — see ErrNotConfigured — exactly
+// like application/anki.Service's connector field starts nil until
+// SetConnector is called; here there's no setter, since main.go always
+// knows at construction time whether config.Speech.STTURL was set.
+type Service struct {
+	recognizer ai.SpeechRecognizer
+	rec        *learning.Recorder
+}
+
+// NewService wires the speech pipeline. recognizer nil means STT is
+// dormant — every Transcribe call returns ErrNotConfigured and nothing
+// is ever recorded.
+func NewService(recognizer ai.SpeechRecognizer, rec *learning.Recorder) *Service {
+	return &Service{recognizer: recognizer, rec: rec}
+}
+
+// Transcribe runs audio (mime is its declared Content-Type) through
+// the configured recognizer and records ONE speech.transcribed event
+// carrying duration/mime/length evidence (see that event Type's own
+// doc comment in domain/event) — only once the recognizer has actually
+// succeeded, mirroring application/conversation.Service.Say's own
+// "record only what really happened" ordering. identity is whichever
+// caller's audio this is; the resulting event (and, once the caller
+// feeds the returned text back through the conversation pipeline, the
+// conversation.turn/correction.* events that follow) are scoped to it.
+func (s *Service) Transcribe(ctx context.Context, identity learner.IdentityID, audio []byte, mime string) (Transcript, error) {
+	if s.recognizer == nil {
+		return Transcript{}, ErrNotConfigured
+	}
+
+	t, err := s.recognizer.Transcribe(ctx, audio, mime)
+	if err != nil {
+		return Transcript{}, fmt.Errorf("speech: transcribe: %w", err)
+	}
+
+	if err := s.rec.Record(ctx, event.LearningEvent{
+		IdentityID: identity,
+		Type:       event.TypeSpeechTranscribed,
+		Subject:    uuid.NewString(),
+		Evidence: map[string]any{
+			"duration_ms": t.DurationMS,
+			"mime":        mime,
+			"chars":       len([]rune(t.Text)),
+		},
+	}); err != nil {
+		return Transcript{}, fmt.Errorf("speech: record %s: %w", event.TypeSpeechTranscribed, err)
+	}
+
+	return Transcript{Text: t.Text, DurationMS: t.DurationMS}, nil
+}

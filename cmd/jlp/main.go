@@ -22,6 +22,7 @@ import (
 	slackadapter "github.com/mikeyaustin/jlp/internal/adapters/slack"
 	smtpadapter "github.com/mikeyaustin/jlp/internal/adapters/smtp"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
+	whisperadapter "github.com/mikeyaustin/jlp/internal/adapters/whisper"
 	agentanki "github.com/mikeyaustin/jlp/internal/agent/anki"
 	agentconversation "github.com/mikeyaustin/jlp/internal/agent/conversation"
 	"github.com/mikeyaustin/jlp/internal/agent/drill"
@@ -42,6 +43,7 @@ import (
 	appretrieval "github.com/mikeyaustin/jlp/internal/application/retrieval"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appsettings "github.com/mikeyaustin/jlp/internal/application/settings"
+	appspeech "github.com/mikeyaustin/jlp/internal/application/speech"
 	appsummary "github.com/mikeyaustin/jlp/internal/application/summary"
 	"github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -335,6 +337,36 @@ func main() {
 		conversationAgent := agentconversation.New(aiGen)
 		conversationSvc := appconversation.NewService(postgres.NewConversationRepository(pool), postgres.NewSessionRepository(pool), conversationAgent, vocabSvc, recorder, grammarRepo)
 
+		// Speech recognition (Phase 4 Task 8, PRD §66): recognizer stays
+		// nil — and appspeech.Service.Transcribe always returns
+		// ErrNotConfigured — unless APP_SPEECH_STTURL is set, matching
+		// every other optional integration's dormant-unless-configured
+		// contract (config.Speech's own doc comment). whisperadapter.New
+		// never dials out at construction (same never-fails contract as
+		// ollamaadapter.New/ankiconnect.New), so it's safe to construct
+		// unconditionally the moment the URL is non-empty, before the
+		// sidecar (docker-compose.yml's "speech" profile) has necessarily
+		// even started. speechSvc itself is always constructed — a nil
+		// recognizer inside it IS the dormant state — mirroring
+		// channelSvc's own "always build the service, only conditionally
+		// drive it" shape just below.
+		var recognizer ai.SpeechRecognizer
+		if cfg.Speech.STTURL != "" {
+			recognizer = whisperadapter.New(cfg.Speech.STTURL)
+		}
+		speechSvc := appspeech.NewService(recognizer, recorder)
+		// Deliberately NOT constructing an internal/adapters/tts.
+		// Synthesizer here even when APP_SPEECH_TTSURL is set: nothing in
+		// this task's HTTP surface calls ai.SpeechSynthesizer.Speak yet
+		// (only POST /speech/transcribe is wired — see server.go's
+		// routes()), so building one now would be main.go wiring dead
+		// code, not "dormant unless configured" like recognizer above.
+		// The adapter itself is real and tested (internal/adapters/tts,
+		// against a genuine local VOICEVOX Engine — see that package's
+		// doc comment for why this differs from a stub), and
+		// ttsadapter.New(cfg.Speech.TTSURL, speaker) is exactly what a
+		// future task wires in the moment it adds a consumer.
+
 		// Channel port + Slack Socket Mode adapter (Phase 4 Task 4, PRD
 		// §20/§20.1): channelSvc composes the SAME sessions/feedback/
 		// practice services every other JLP surface already uses — a
@@ -496,6 +528,7 @@ func main() {
 			A2A:                a2aServer,
 			A2APath:            cfg.A2A.Path,
 			Conversation:       conversationSvc,
+			Speech:             speechSvc,
 			Settings:           settingsSvc,
 			AIProviders:        aiProviders,
 			AIDefaultProvider:  aiDefaultProvider,

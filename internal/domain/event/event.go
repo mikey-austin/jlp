@@ -115,6 +115,22 @@ const (
 	// conversation digest PRD §17.4's "end" feedback timing releases.
 	TypeConversationTurn       Type = "conversation.turn"
 	TypeConversationSummarised Type = "conversation.summarised"
+
+	// TypeSpeechTranscribed fires once per successful POST
+	// /speech/transcribe call (Phase 4 Task 8, PRD §66): Subject is a
+	// freshly generated id (there is no natural row to key it by — the
+	// transcript itself is never persisted on its own; it flows
+	// straight into whatever the caller does with it next, typically
+	// application/conversation.Service.Say over the SAME conversation
+	// pipeline typed text already goes through), and Evidence carries
+	// {"duration_ms":…, "mime":…, "chars":…} — the clip's own length
+	// (from ai.Transcript.DurationMS, NOT how long transcription took),
+	// the uploaded audio's declared Content-Type, and the transcript's
+	// rune length. This is deliberately a session-less event
+	// (SessionID nil) like TypeVocabularyImported: recording speech is
+	// scoped to the identity that spoke, not to whichever session's
+	// conversation pane happened to be open.
+	TypeSpeechTranscribed Type = "speech.transcribed"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner
