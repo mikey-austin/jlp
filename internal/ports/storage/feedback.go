@@ -83,6 +83,43 @@ func (c CorrectionRecord) IsGated() bool {
 	return correction.IsGated(c.HasHint(), c.Status, c.Revealed)
 }
 
+// FeedbackSummary is one row of a session's feedback history (Phase 4
+// Task W item 2) — the workspace's right-hand history list, which
+// replaces the old activity feed: enough to render one row (a
+// timestamp, an excerpt of what was reviewed, how many corrections
+// came back, and which provider/model served it) without pulling every
+// correction's full detail. Provider/Model are "" when AIRequestID was
+// never set on the underlying feedback_requests row (a fakeai-backed
+// review outside the observability decorator — see
+// FeedbackRecord.AIRequestID's doc comment), exactly like
+// FeedbackDetail below.
+type FeedbackSummary struct {
+	ID              string
+	SelectionText   string
+	CorrectionCount int
+	Provider        string
+	Model           string
+	CreatedAt       time.Time
+}
+
+// FeedbackDetail is one feedback_requests row plus the ai_requests
+// provenance the workspace's history detail view needs (Phase 4 Task W
+// items 2/3, GetFeedback below): clicking an older history row must
+// show the SAME "which provider/model actually served it" the fresh
+// result does (feedback.Service.RequestFeedback reads that straight off
+// ai.StructuredResponse; a historical read has no response in memory,
+// so it comes from the ai_requests row instead, joined by
+// FeedbackRecord.AIRequestID). Provider/Model are "" under the same
+// "never observed" condition as FeedbackSummary above.
+type FeedbackDetail struct {
+	ID            string
+	SelectionText string
+	CorrectedText string
+	Provider      string
+	Model         string
+	CreatedAt     time.Time
+}
+
 // ConceptTag is one grammar-concept tag a correction carries (Phase 2
 // Task 2). Resolved reports whether Slug was found in the
 // GrammarRepository catalog at tag-time — an unknown slug is still
@@ -168,4 +205,27 @@ type FeedbackRepository interface {
 	// regardless of whether the learner has since accepted, rejected, or
 	// not yet responded to it.
 	RecentCorrections(ctx context.Context, identity learner.IdentityID, limit int) ([]CorrectionRecord, error)
+	// ListForSession returns identity's feedback history for sessionID,
+	// most-recent-first (Phase 4 Task W item 2) — identity-scoped like
+	// every other read here, via the same identity_id column every other
+	// method in this file filters by. A sessionID that exists but
+	// belongs to another identity returns an EMPTY slice, not
+	// ErrNotFound: this is a list, not a single-resource lookup, and
+	// "no rows matched this identity" is indistinguishable from "no
+	// feedback yet" — exactly RecentCorrections' own empty-vs-error
+	// convention for the same reason.
+	ListForSession(ctx context.Context, identity learner.IdentityID, sessionID session.ID) ([]FeedbackSummary, error)
+	// GetFeedback returns feedbackID's own FeedbackDetail and every one
+	// of its corrections, ordered by Position (Phase 4 Task W items
+	// 2/3): the workspace history list's "click a row, load it into the
+	// bottom pane" GET. Identity-scoped via the same feedback_requests
+	// join UpdateCorrectionStatus/GetCorrection use — a feedbackID that
+	// exists but belongs to another identity misses with ErrNotFound,
+	// exactly like an unknown one. The returned CorrectionRecords are
+	// NOT separately identity-checked (their feedback_request_id is
+	// already proven to belong to identity by this same call), matching
+	// InsertFeedback's own "the parent row is the authorization
+	// boundary" precedent — callers must not skip straight to a
+	// correction-level query with an unverified feedbackID.
+	GetFeedback(ctx context.Context, identity learner.IdentityID, feedbackID string) (FeedbackDetail, []CorrectionRecord, error)
 }

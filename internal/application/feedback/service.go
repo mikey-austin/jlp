@@ -137,6 +137,14 @@ type Request struct {
 	DocumentID writing.DocumentID
 	Start, End int
 	Text       string
+	// ProviderOverride, when non-empty, asks the AI generator to
+	// dispatch this request to exactly the named provider — Phase 4
+	// Task W item 5's workspace adapter-override dropdown. Threaded
+	// straight through to ai.StructuredRequest.ProviderOverride (via
+	// teacher.ReviewInput); see that field's own doc comment for the
+	// no-fallback contract airouter enforces on it. Empty (every caller
+	// before this field existed) leaves routing untouched.
+	ProviderOverride string
 }
 
 // CorrectionView is a correction.Correction with the pipeline's added
@@ -165,6 +173,17 @@ type Feedback struct {
 	Diff        []diff.Segment
 	Corrections []CorrectionView
 	AIRequestID string
+	// Provider/Model name which AI provider/model actually served this
+	// review (Phase 4 Task W item 1) — NOT necessarily the one the
+	// caller requested via Request.ProviderOverride (or the workspace
+	// dropdown's default): a route can fail over, so the two can
+	// differ. RequestFeedback populates these straight from
+	// ai.StructuredResponse.Provider/Model (the same response that
+	// produced this Feedback); GetFeedback (a historical read, with no
+	// StructuredResponse in memory) populates them from the joined
+	// ai_requests row instead — see storage.FeedbackDetail.
+	Provider string
+	Model    string
 }
 
 // RequestFeedback authorizes req against the caller's session and
@@ -252,6 +271,7 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		RecentErrors:           recentErrors,
 		ConceptCandidates:      conceptCandidates,
 		ExpressionsToEncourage: expressionsToEncourage,
+		ProviderOverride:       req.ProviderOverride,
 	}
 
 	var result correction.Result
@@ -454,6 +474,58 @@ func (s *Service) RequestFeedback(ctx context.Context, req Request) (Feedback, e
 		Diff:        diff.Runes(result.Original, result.Corrected),
 		Corrections: views,
 		AIRequestID: resp.RequestID,
+		Provider:    resp.Provider,
+		Model:       resp.Model,
+	}, nil
+}
+
+// ListForSession returns identity's feedback history for sessionID,
+// most-recent-first (Phase 4 Task W item 2) — the workspace's
+// right-hand history list. A thin passthrough: repo.ListForSession is
+// already identity-scoped (see storage.FeedbackRepository's doc
+// comment), and reading a list back isn't itself a learning event, so
+// there's no authorization or event-recording work for this method to
+// add.
+func (s *Service) ListForSession(ctx context.Context, identity learner.IdentityID, sessionID session.ID) ([]storage.FeedbackSummary, error) {
+	return s.repo.ListForSession(ctx, identity, sessionID)
+}
+
+// GetFeedback reconstructs a previously-requested Feedback from storage
+// (Phase 4 Task W items 2/3): clicking an older history row loads it
+// into the workspace's bottom pane exactly as if it had just been
+// requested — including, load-bearingly, the SAME socratic gate: each
+// correction goes through correctionViewFromRecord, the identical
+// helper SetCorrectionStatus/RetryCorrection/RevealCorrection already
+// use, which builds CorrectionView.HasHint()/Status/Revealed straight
+// off the stored CorrectionRecord — never a summary that drops those
+// fields and lets a gated correction's Replacement leak through a
+// history read that a fresh request would have withheld. Like
+// RequestFeedback's own event-recording, a Recorder failure would be a
+// hard error elsewhere in this file, but there IS no event to record
+// here: viewing history isn't itself a new learning event.
+func (s *Service) GetFeedback(ctx context.Context, identity learner.IdentityID, feedbackID string) (Feedback, error) {
+	detail, corrRecords, err := s.repo.GetFeedback(ctx, identity, feedbackID)
+	if err != nil {
+		return Feedback{}, err
+	}
+
+	views := make([]CorrectionView, 0, len(corrRecords))
+	for _, rec := range corrRecords {
+		concepts, err := s.repo.GetCorrectionConcepts(ctx, rec.ID)
+		if err != nil {
+			return Feedback{}, fmt.Errorf("feedback: get correction concepts: %w", err)
+		}
+		views = append(views, correctionViewFromRecord(rec, concepts))
+	}
+
+	return Feedback{
+		ID:          detail.ID,
+		Original:    detail.SelectionText,
+		Corrected:   detail.CorrectedText,
+		Diff:        diff.Runes(detail.SelectionText, detail.CorrectedText),
+		Corrections: views,
+		Provider:    detail.Provider,
+		Model:       detail.Model,
 	}, nil
 }
 

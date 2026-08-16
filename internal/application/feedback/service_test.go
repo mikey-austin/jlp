@@ -17,6 +17,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
+	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
@@ -252,6 +253,49 @@ func (f *fakeFeedbackRepo) GetCorrection(_ context.Context, identity learner.Ide
 
 func (f *fakeFeedbackRepo) RecentCorrections(context.Context, learner.IdentityID, int) ([]storage.CorrectionRecord, error) {
 	panic("not used by feedback service tests")
+}
+
+// ListForSession mirrors the real query's identity+session scope
+// (Phase 4 Task W item 2): a session that exists but belongs to
+// another identity yields an empty slice, matching
+// storage.FeedbackRepository's documented "list, not a lookup" miss
+// shape.
+func (f *fakeFeedbackRepo) ListForSession(_ context.Context, identity learner.IdentityID, sessionID session.ID) ([]storage.FeedbackSummary, error) {
+	var out []storage.FeedbackSummary
+	for _, fb := range f.feedback {
+		if fb.IdentityID != identity || fb.SessionID != sessionID {
+			continue
+		}
+		count := 0
+		for _, c := range f.corrections {
+			if c.FeedbackID == fb.ID {
+				count++
+			}
+		}
+		out = append(out, storage.FeedbackSummary{
+			ID: fb.ID, SelectionText: fb.SelectionText, CorrectionCount: count, CreatedAt: fb.CreatedAt,
+		})
+	}
+	return out, nil
+}
+
+// GetFeedback mirrors the real query's identity-scoped join, same
+// "not yours"/"not found" collapse as UpdateCorrectionStatus.
+func (f *fakeFeedbackRepo) GetFeedback(_ context.Context, identity learner.IdentityID, feedbackID string) (storage.FeedbackDetail, []storage.CorrectionRecord, error) {
+	fb, ok := f.feedback[feedbackID]
+	if !ok || fb.IdentityID != identity {
+		return storage.FeedbackDetail{}, nil, storage.ErrNotFound
+	}
+	var corrections []storage.CorrectionRecord
+	for _, c := range f.corrections {
+		if c.FeedbackID == fb.ID {
+			c.SessionID = fb.SessionID
+			corrections = append(corrections, c)
+		}
+	}
+	return storage.FeedbackDetail{
+		ID: fb.ID, SelectionText: fb.SelectionText, CorrectedText: fb.CorrectedText,
+	}, corrections, nil
 }
 
 // conceptRow is one persisted (correction, slug, resolved) tuple,
@@ -989,6 +1033,40 @@ func TestRequestFeedbackRecentErrorsReachRenderedPrompt(t *testing.T) {
 	}
 }
 
+// TestRequestFeedbackProviderOverrideReachesGeneratedRequest pins Phase
+// 4 Task W item 5's plumbing: Request.ProviderOverride must reach the
+// generated ai.StructuredRequest.ProviderOverride verbatim (via
+// teacher.ReviewInput — see teacher.go's ReviewWriting) so airouter can
+// actually honor it. It also pins item 1's "which provider/model
+// actually served it" requirement: the returned Feedback.Provider/Model
+// come straight from the generator's own response, not from the
+// requested override.
+func TestRequestFeedbackProviderOverrideReachesGeneratedRequest(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	fb, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+		ProviderOverride: "agycli",
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+	if gen.lastReq.ProviderOverride != "agycli" {
+		t.Fatalf("generated request ProviderOverride = %q, want agycli", gen.lastReq.ProviderOverride)
+	}
+	// capturingGen answers with Provider "stub"/Model "stub-1" regardless
+	// of what was requested — Feedback.Provider/Model must reflect THAT
+	// (what actually served it), not the "agycli" that was asked for.
+	if fb.Provider != "stub" || fb.Model != "stub-1" {
+		t.Fatalf("Feedback.Provider/Model = %q/%q, want stub/stub-1 (what the generator actually reported, not the requested override)", fb.Provider, fb.Model)
+	}
+}
+
 // TestRequestFeedbackNoPrioritiesOmitsRecentErrorsSection: an identity
 // with no priorities yet must render a prompt with no RecentErrors
 // section at all (the v2 template's {{if .RecentErrors}} guard), not an
@@ -1446,6 +1524,55 @@ func TestRequestFeedbackSocraticEmitsHintShownEvent(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected a hint.shown event, found none: %+v", h.events.events)
+	}
+}
+
+// TestGetFeedbackPreservesSocraticGate pins this task's stated
+// recurring hazard: GetFeedback (Phase 4 Task W items 2/3 — loading a
+// past review from the workspace's feedback-history list) must
+// reconstruct EXACTLY the same gated CorrectionView a fresh
+// RequestFeedback would — the hint still shown, the answer still
+// withheld — never a summary that drops HasHint/Status/Revealed and
+// lets a re-rendered older correction leak its answer where a fresh
+// request would have withheld it. correction.IsGated (not a re-derived
+// HasHint()&&Status=="presented"&&!Revealed) is the predicate asserted
+// here, matching every other caller in the codebase.
+func TestGetFeedbackPreservesSocraticGate(t *testing.T) {
+	h := newTestHarness()
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testSocraticProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	fresh, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+
+	got, err := h.svc.GetFeedback(context.Background(), testIdentity, fresh.ID)
+	if err != nil {
+		t.Fatalf("GetFeedback returned error: %v", err)
+	}
+	if len(got.Corrections) != 1 {
+		t.Fatalf("len(Corrections) = %d, want 1: %+v", len(got.Corrections), got.Corrections)
+	}
+	cv := got.Corrections[0]
+	if !cv.HasHint() {
+		t.Fatal("HasHint() = false, want true (fakeai attaches a hint in socratic mode)")
+	}
+	if cv.Status != "presented" || cv.Revealed {
+		t.Fatalf("Status/Revealed = %q/%v, want presented/false", cv.Status, cv.Revealed)
+	}
+	if !correction.IsGated(cv.HasHint(), cv.Status, cv.Revealed) {
+		t.Fatal("correction.IsGated = false, want true — a history read must still withhold this correction's answer")
+	}
+
+	// Cross-identity: a different identity's GetFeedback misses with
+	// ErrNotFound, same as every other identity-scoped read.
+	if _, err := h.svc.GetFeedback(context.Background(), "someone-else", fresh.ID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("GetFeedback(cross-identity) err = %v, want storage.ErrNotFound", err)
 	}
 }
 

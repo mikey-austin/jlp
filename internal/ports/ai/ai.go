@@ -30,6 +30,18 @@ type StructuredRequest struct {
 	IdentityID    learner.IdentityID
 	SessionID     *session.ID
 	Agent         string // "teacher"
+	// ProviderOverride, when non-empty, asks airouter to dispatch this
+	// request to EXACTLY the named provider — no PromptName-based chain
+	// lookup, no fallback to a next chain member on failure (Phase 4
+	// Task W's workspace adapter-override dropdown: "an explicit
+	// override does not fall back," see airouter's own doc comment).
+	// Empty (the default, and every caller before this field existed)
+	// leaves routing exactly as before: airouter.router picks a chain by
+	// PromptName and falls through it on error. Only airouter's router
+	// reads this field — every leaf ai.StructuredGenerator (fakeai,
+	// anthropic, ollama, clicmd, agycli) IS already a specific provider,
+	// so the field is meaningless to them and they ignore it.
+	ProviderOverride string
 }
 
 // StructuredResponse is a generator's answer: JSON validated against

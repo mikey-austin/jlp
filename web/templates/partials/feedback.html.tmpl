@@ -1,5 +1,12 @@
 {{define "feedback"}}
-<div class="feedback" data-ai-request="{{.AIRequestID}}">
+<div class="feedback" data-ai-request="{{.AIRequestID}}" data-feedback-id="{{.ID}}">
+  {{/* Phase 4 Task W item 1: which provider/model ACTUALLY served this
+       review — not necessarily what was requested (a route can fail
+       over — see feedback.Feedback.Provider's doc comment). Both empty
+       for a fakeai-backed review outside the observability decorator
+       (every test, offline dev), so the badge is omitted entirely
+       rather than showing a bare " / ". */}}
+  {{if or .Provider .Model}}<p class="feedback-served-by badge badge--type">{{.Provider}} / {{.Model}}</p>{{end}}
   {{if not .Cards}}<p class="all-good">問題は見つかりませんでした。よく書けています！</p>{{else}}
   {{/* HasGatedCard (Phase 2 Task 8): suppress this whole-selection diff
        when any card below is still hiding its own answer behind a

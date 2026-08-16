@@ -31,7 +31,27 @@ import (
 type router struct {
 	routes   map[string][]ai.StructuredGenerator
 	fallback []ai.StructuredGenerator
+	// byName is every provider New was given, keyed by its provider
+	// name (e.g. "ollama", "agycli") — how GenerateStructured resolves
+	// an explicit req.ProviderOverride (Phase 4 Task W item 5) without
+	// needing routes/fallback to already name that provider for
+	// req.PromptName. nil (every caller before this field existed) is
+	// equivalent to "no provider is a valid override target" — a
+	// request naming one then always fails with ErrUnknownProvider,
+	// never silently falls through to routes/fallback.
+	byName map[string]ai.StructuredGenerator
 }
+
+// ErrUnknownProvider is returned (wrapped, naming the requested
+// provider) when req.ProviderOverride doesn't match any entry in the
+// byName map New was given — Phase 4 Task W item 5's "reject an
+// unknown/unconfigured provider" requirement. The HTTP handler already
+// validates a submitted override against the same constructible-
+// provider list before ever constructing the request (a 400, not this
+// error, is what a stale form actually surfaces to the browser) — this
+// is the router's own last-resort guard for any OTHER caller that
+// skips that check.
+var ErrUnknownProvider = errors.New("airouter: unknown or unconfigured provider")
 
 // New returns an ai.StructuredGenerator that selects a chain by
 // req.PromptName (exact match against routes), falling back to
@@ -40,11 +60,36 @@ type router struct {
 // member that errors is logged and the next is tried. If every member
 // of the selected chain fails (or the chain is empty), GenerateStructured
 // returns a joined error naming every provider that was tried.
-func New(routes map[string][]ai.StructuredGenerator, fallback []ai.StructuredGenerator) ai.StructuredGenerator {
-	return &router{routes: routes, fallback: fallback}
+//
+// byName is the full set of providers New may dispatch to when a
+// request carries an explicit req.ProviderOverride (Phase 4 Task W
+// item 5) — normally the SAME map buildAIGenerator already built
+// before assembling routes/fallback from it, keyed by provider name.
+// It plays no part in ordinary (non-overridden) routing.
+func New(routes map[string][]ai.StructuredGenerator, fallback []ai.StructuredGenerator, byName map[string]ai.StructuredGenerator) ai.StructuredGenerator {
+	return &router{routes: routes, fallback: fallback, byName: byName}
 }
 
 func (r *router) GenerateStructured(ctx context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
+	// An explicit override is dispatched to EXACTLY that provider, once,
+	// with no fallback on failure — the whole point of an operator
+	// picking a specific adapter is defeated if a failure there silently
+	// answers from a different one instead (see req.ProviderOverride's
+	// own doc comment). This check runs before any routes/PromptName
+	// lookup, so an override always wins regardless of what (if
+	// anything) is configured for req.PromptName.
+	if req.ProviderOverride != "" {
+		gen, ok := r.byName[req.ProviderOverride]
+		if !ok {
+			return ai.StructuredResponse{}, fmt.Errorf("%w: %q", ErrUnknownProvider, req.ProviderOverride)
+		}
+		resp, err := gen.GenerateStructured(ctx, req)
+		if err != nil {
+			return ai.StructuredResponse{}, fmt.Errorf("%s: %w", req.ProviderOverride, err)
+		}
+		return resp, nil
+	}
+
 	chain, routed := r.routes[req.PromptName]
 	if !routed {
 		chain = r.fallback

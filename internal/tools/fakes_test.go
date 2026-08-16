@@ -253,6 +253,12 @@ func (f *fakeFeedbackRepo) RevealCorrection(context.Context, learner.IdentityID,
 func (f *fakeFeedbackRepo) RecordConfidence(context.Context, learner.IdentityID, string, int) (storage.CorrectionRecord, error) {
 	return storage.CorrectionRecord{}, nil
 }
+func (f *fakeFeedbackRepo) ListForSession(context.Context, learner.IdentityID, session.ID) ([]storage.FeedbackSummary, error) {
+	return nil, nil
+}
+func (f *fakeFeedbackRepo) GetFeedback(context.Context, learner.IdentityID, string) (storage.FeedbackDetail, []storage.CorrectionRecord, error) {
+	return storage.FeedbackDetail{}, nil, nil
+}
 func (f *fakeFeedbackRepo) GetCorrection(_ context.Context, identity learner.IdentityID, correctionID string) (storage.CorrectionRecord, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

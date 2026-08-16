@@ -161,6 +161,12 @@ func (f *fakeFeedbackRepo) RecentCorrections(_ context.Context, _ learner.Identi
 	}
 	return f.recent, nil
 }
+func (f *fakeFeedbackRepo) ListForSession(context.Context, learner.IdentityID, session.ID) ([]storage.FeedbackSummary, error) {
+	panic("not used by lessons service tests")
+}
+func (f *fakeFeedbackRepo) GetFeedback(context.Context, learner.IdentityID, string) (storage.FeedbackDetail, []storage.CorrectionRecord, error) {
+	panic("not used by lessons service tests")
+}
 
 // fakeVocabRepo backs the *planner.Planner's ActivationCandidates —
 // mirrors planner_test.go's own fake.

@@ -78,6 +78,7 @@ func TestReviewWritingThroughRouterOverFakeIsUnaffected(t *testing.T) {
 	routed := airouter.New(
 		map[string][]ai.StructuredGenerator{"teacher.feedback": {fakeai.New()}},
 		[]ai.StructuredGenerator{fakeai.New()},
+		nil,
 	)
 	agent := teacher.New(routed)
 

@@ -2,8 +2,10 @@ package httpx
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 
@@ -67,6 +69,13 @@ type feedbackView struct {
 	DiffSpans                            []diffSpanView
 	Cards                                []correctionCardView
 	HasGatedCard                         bool
+	// Provider/Model name which AI provider/model actually served this
+	// review (Phase 4 Task W item 1) — copied verbatim from
+	// feedback.Feedback.Provider/Model; see that field's own doc
+	// comment for why it can differ from whatever the caller requested.
+	// Both "" for a fakeai-backed review outside the observability
+	// decorator (every test, offline dev).
+	Provider, Model string
 }
 
 // toDiffSpans maps a rune-level diff onto the CSS classes the diff
@@ -142,7 +151,136 @@ func toFeedbackView(fb feedback.Feedback) feedbackView {
 		DiffSpans:    toDiffSpans(fb.Diff),
 		Cards:        cards,
 		HasGatedCard: gated,
+		Provider:     fb.Provider,
+		Model:        fb.Model,
 	}
+}
+
+// historyExcerptRunes caps how much of a history row's reviewed
+// selection is shown before an ellipsis — enough to recognize which
+// review this was without the right-hand pane growing to fit an entire
+// paragraph.
+const historyExcerptRunes = 40
+
+func excerptRunes(s string, maxRunes int) string {
+	r := []rune(s)
+	if len(r) <= maxRunes {
+		return s
+	}
+	return string(r[:maxRunes]) + "…"
+}
+
+// feedbackHistoryItemView is one row of the workspace's feedback
+// history list (Phase 4 Task W item 2): a timestamp, a short excerpt of
+// what was reviewed, how many corrections came back, and the
+// provider/model badge — Active marks whichever row is currently shown
+// in #feedback-results (see feedback_history.html.tmpl's is-active
+// class), server-computed only for the SSR initial render and the
+// POST's own OOB refresh (a client-side click on an older row updates
+// this purely in the DOM — see app.js — since a GET to load it doesn't
+// itself re-render the whole list).
+type feedbackHistoryItemView struct {
+	ID              string
+	Excerpt         string
+	CorrectionCount int
+	Provider, Model string
+	CreatedAt       time.Time
+	Active          bool
+}
+
+// feedbackHistoryView is the "feedback_history" partial's data: SessionID
+// for building each row's link, OOB (true only when this partial is
+// appended after a POST's "feedback" partial as an htmx out-of-band
+// swap — Phase 4 Task W item 3) controls whether the root element
+// carries hx-swap-oob, and Items is the list itself, newest first.
+type feedbackHistoryView struct {
+	SessionID string
+	OOB       bool
+	Items     []feedbackHistoryItemView
+}
+
+// toFeedbackHistoryView maps a session's []storage.FeedbackSummary onto
+// the history list's view, marking activeID's row (if present) Active.
+func toFeedbackHistoryView(sessionID session.ID, activeID string, items []storage.FeedbackSummary, oob bool) feedbackHistoryView {
+	out := make([]feedbackHistoryItemView, 0, len(items))
+	for _, it := range items {
+		out = append(out, feedbackHistoryItemView{
+			ID:              it.ID,
+			Excerpt:         excerptRunes(it.SelectionText, historyExcerptRunes),
+			CorrectionCount: it.CorrectionCount,
+			Provider:        it.Provider,
+			Model:           it.Model,
+			CreatedAt:       it.CreatedAt,
+			Active:          activeID != "" && it.ID == activeID,
+		})
+	}
+	return feedbackHistoryView{SessionID: string(sessionID), OOB: oob, Items: out}
+}
+
+// aiProviderLabels maps a constructible provider name to the
+// workspace dropdown's display label (Phase 4 Task W item 5) — the SAME
+// four real-provider names/labels application/settings.Service's own
+// providers catalog uses (that page's persistent overrides are a
+// DIFFERENT concept from this per-request override, but there's no
+// reason to show an operator two different labels for the same
+// provider across the app), plus "fake" for the rare case it's genuinely
+// the configured default (every non-integration test, `jlp eval`) —
+// see cmd/jlp/ai.go's aiProviderPriority doc comment for why "fake"
+// isn't normally offered as a choice.
+var aiProviderLabels = map[string]string{
+	"ollama":    "Ollama",
+	"anthropic": "Anthropic",
+	"claudecli": "Claude Code CLI",
+	"codexcli":  "Codex CLI",
+	"agycli":    "Antigravity CLI",
+	"fake":      "Fake（オフライン）",
+}
+
+// aiProviderOptionView is one <option> in the workspace's per-request
+// adapter-override <select> (Phase 4 Task W item 5). Default marks
+// (and its Label names) the highest-priority provider — see
+// cmd/jlp/ai.go's buildAIGenerator doc comment for exactly how that's
+// computed.
+type aiProviderOptionView struct {
+	Name    string
+	Label   string
+	Default bool
+}
+
+func aiProviderLabel(name string) string {
+	if l, ok := aiProviderLabels[name]; ok {
+		return l
+	}
+	return name
+}
+
+// aiProviderOptions builds the dropdown's option list from names
+// (Options.AIProviders, already in a stable priority order) and def
+// (Options.AIDefaultProvider).
+func aiProviderOptions(names []string, def string) []aiProviderOptionView {
+	out := make([]aiProviderOptionView, 0, len(names))
+	for _, name := range names {
+		isDefault := name == def
+		label := aiProviderLabel(name)
+		if isDefault {
+			label += "（デフォルト）"
+		}
+		out = append(out, aiProviderOptionView{Name: name, Label: label, Default: isDefault})
+	}
+	return out
+}
+
+// isKnownAIProvider reports whether name appears in names — the
+// feedbackRequest handler's guard against a stale/tampered
+// provider_override value (Phase 4 Task W item 5's "reject an unknown/
+// unconfigured provider with a 400" requirement).
+func isKnownAIProvider(names []string, name string) bool {
+	for _, n := range names {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // feedbackRequest handles the workspace's フィードバックを取得 button:
@@ -168,13 +306,38 @@ func (s *Server) feedbackRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// provider_override (Phase 4 Task W item 5): the dropdown always
+	// carries a value, defaulting to s.opts.AIDefaultProvider. Selecting
+	// that same default provider is treated as NO override — routing
+	// (and its fallback chain, if APP_AI_ROUTES configures one for
+	// teacher.feedback) behaves exactly as it did before this feature.
+	// Only a genuinely different, explicit choice sets
+	// Request.ProviderOverride, which airouter then dispatches to with
+	// no fallback (see that field's own doc comment) — this is also why
+	// "which provider actually served it" (the finished feedback's own
+	// badge) can differ from what was requested: it's the DEFAULT case,
+	// not the override case, where a route can fail over. An unknown/
+	// unconfigured name is rejected with a 400 rather than silently
+	// falling through to the default — a stale form must never produce
+	// a different provider's answer than what it displayed.
+	override := r.FormValue("provider_override")
+	if override != "" && override != s.opts.AIDefaultProvider {
+		if !isKnownAIProvider(s.opts.AIProviders, override) {
+			http.Error(w, "unknown provider", http.StatusBadRequest)
+			return
+		}
+	} else {
+		override = ""
+	}
+
 	fb, err := s.opts.Feedback.RequestFeedback(r.Context(), feedback.Request{
-		Identity:   ident.ID,
-		SessionID:  sid,
-		DocumentID: writing.DocumentID(r.FormValue("document_id")),
-		Start:      start,
-		End:        end,
-		Text:       r.FormValue("text"),
+		Identity:         ident.ID,
+		SessionID:        sid,
+		DocumentID:       writing.DocumentID(r.FormValue("document_id")),
+		Start:            start,
+		End:              end,
+		Text:             r.FormValue("text"),
+		ProviderOverride: override,
 	})
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -186,6 +349,44 @@ func (s *Server) feedbackRequest(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		http.Error(w, "could not get feedback", http.StatusInternalServerError)
+		return
+	}
+	RenderPartial(w, r, "feedback", toFeedbackView(fb))
+
+	// The history list refreshes alongside the detail (Phase 4 Task W
+	// item 3), via an htmx out-of-band swap: the "feedback" partial
+	// above already became #feedback-results' new content (hx-target on
+	// #feedback-btn), and this second, independently-rendered partial
+	// carries hx-swap-oob="true" on its own root so htmx replaces
+	// #feedback-history with it too, regardless of hx-target — one
+	// response, two things updated, no page reload. A history-list
+	// failure here is logged, not surfaced as a request error: the
+	// detail itself already rendered successfully above, so the
+	// response's status code is already committed.
+	history, herr := s.opts.Feedback.ListForSession(r.Context(), ident.ID, sid)
+	if herr != nil {
+		slog.Error("list feedback history", "err", herr)
+		return
+	}
+	RenderPartial(w, r, "feedback_history", toFeedbackHistoryView(sid, fb.ID, history, true))
+}
+
+// feedbackShow handles a feedback history row's click (Phase 4 Task W
+// item 2): a GET (back/forward-friendly, per the brief) that loads one
+// past review into #feedback-results exactly as if it had just been
+// requested — same "feedback" partial, same socratic gate (see
+// feedback.Service.GetFeedback's doc comment).
+func (s *Server) feedbackShow(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	id := chi.URLParam(r, "feedbackID")
+
+	fb, err := s.opts.Feedback.GetFeedback(r.Context(), ident.ID, id)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "could not load feedback", http.StatusInternalServerError)
 		return
 	}
 	RenderPartial(w, r, "feedback", toFeedbackView(fb))

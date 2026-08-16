@@ -142,6 +142,14 @@ func (f *fakeFeedbackRepo) RetryCorrection(context.Context, learner.IdentityID, 
 	panic("not used by anki service tests")
 }
 
+func (f *fakeFeedbackRepo) ListForSession(context.Context, learner.IdentityID, session.ID) ([]storage.FeedbackSummary, error) {
+	panic("not used by anki service tests")
+}
+
+func (f *fakeFeedbackRepo) GetFeedback(context.Context, learner.IdentityID, string) (storage.FeedbackDetail, []storage.CorrectionRecord, error) {
+	panic("not used by anki service tests")
+}
+
 func (f *fakeFeedbackRepo) RevealCorrection(context.Context, learner.IdentityID, string) (storage.CorrectionRecord, error) {
 	panic("not used by anki service tests")
 }

@@ -32,7 +32,7 @@ func (s *stubGenerator) GenerateStructured(_ context.Context, _ ai.StructuredReq
 func TestRouterUsesRoutedChainOnExactPromptNameMatch(t *testing.T) {
 	routed := &stubGenerator{name: "routed"}
 	fallback := &stubGenerator{name: "fallback"}
-	router := New(map[string][]ai.StructuredGenerator{"teacher.feedback": {routed}}, []ai.StructuredGenerator{fallback})
+	router := New(map[string][]ai.StructuredGenerator{"teacher.feedback": {routed}}, []ai.StructuredGenerator{fallback}, nil)
 
 	resp, err := router.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "teacher.feedback"})
 	if err != nil {
@@ -52,7 +52,7 @@ func TestRouterUsesRoutedChainOnExactPromptNameMatch(t *testing.T) {
 func TestRouterFallsThroughToSecondProviderOnFirstError(t *testing.T) {
 	first := &stubGenerator{name: "first", err: errors.New("boom")}
 	second := &stubGenerator{name: "second"}
-	router := New(map[string][]ai.StructuredGenerator{"teacher.feedback": {first, second}}, nil)
+	router := New(map[string][]ai.StructuredGenerator{"teacher.feedback": {first, second}}, nil, nil)
 
 	resp, err := router.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "teacher.feedback"})
 	if err != nil {
@@ -77,7 +77,7 @@ func TestRouterFallsThroughToSecondProviderOnFirstError(t *testing.T) {
 func TestRouterUsesFallbackWhenPromptNameUnrouted(t *testing.T) {
 	routed := &stubGenerator{name: "routed"}
 	fallback := &stubGenerator{name: "fallback"}
-	router := New(map[string][]ai.StructuredGenerator{"other.prompt": {routed}}, []ai.StructuredGenerator{fallback})
+	router := New(map[string][]ai.StructuredGenerator{"other.prompt": {routed}}, []ai.StructuredGenerator{fallback}, nil)
 
 	resp, err := router.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "teacher.feedback"})
 	if err != nil {
@@ -97,7 +97,7 @@ func TestRouterUsesFallbackWhenPromptNameUnrouted(t *testing.T) {
 func TestRouterAllProvidersFailReturnsJoinedErrorNamingProviders(t *testing.T) {
 	first := &stubGenerator{name: "first", err: errors.New("boom1")}
 	second := &stubGenerator{name: "second", err: errors.New("boom2")}
-	router := New(nil, []ai.StructuredGenerator{first, second})
+	router := New(nil, []ai.StructuredGenerator{first, second}, nil)
 
 	_, err := router.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "teacher.feedback"})
 	if err == nil {
@@ -115,9 +115,88 @@ func TestRouterAllProvidersFailReturnsJoinedErrorNamingProviders(t *testing.T) {
 }
 
 func TestRouterEmptyChainReturnsError(t *testing.T) {
-	router := New(nil, nil)
+	router := New(nil, nil, nil)
 	_, err := router.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "teacher.feedback"})
 	if err == nil {
 		t.Fatal("expected error when neither a route nor a fallback chain is configured")
+	}
+}
+
+// TestRouterExplicitOverrideDispatchesToNamedProviderOnly pins Phase 4
+// Task W item 5's core plumbing requirement: req.ProviderOverride
+// bypasses PromptName-based routing entirely and calls exactly the
+// named provider, even when a routed chain for that PromptName exists
+// and would otherwise have picked a different provider first.
+func TestRouterExplicitOverrideDispatchesToNamedProviderOnly(t *testing.T) {
+	routed := &stubGenerator{name: "routed"}
+	overridden := &stubGenerator{name: "agycli"}
+	router := New(
+		map[string][]ai.StructuredGenerator{"teacher.feedback": {routed}},
+		nil,
+		map[string]ai.StructuredGenerator{"routed": routed, "agycli": overridden},
+	)
+
+	resp, err := router.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "teacher.feedback", ProviderOverride: "agycli"})
+	if err != nil {
+		t.Fatalf("GenerateStructured: %v", err)
+	}
+	if resp.Provider != "agycli" {
+		t.Errorf("Provider = %q, want agycli", resp.Provider)
+	}
+	if overridden.calls != 1 {
+		t.Errorf("overridden.calls = %d, want 1", overridden.calls)
+	}
+	if routed.calls != 0 {
+		t.Errorf("routed.calls = %d, want 0 (an explicit override must never consult the routed chain)", routed.calls)
+	}
+}
+
+// TestRouterExplicitOverrideDoesNotFallBackOnFailure pins the brief's
+// "an explicit override does not fall back" rule: when the overridden
+// provider itself errors, GenerateStructured must surface that error
+// directly rather than trying any other configured provider — even one
+// sitting right there in the routed chain or fallback list.
+func TestRouterExplicitOverrideDoesNotFallBackOnFailure(t *testing.T) {
+	failing := &stubGenerator{name: "agycli", err: errors.New("agycli: binary not found")}
+	otherRouted := &stubGenerator{name: "routed"}
+	otherFallback := &stubGenerator{name: "fallback"}
+	router := New(
+		map[string][]ai.StructuredGenerator{"teacher.feedback": {otherRouted}},
+		[]ai.StructuredGenerator{otherFallback},
+		map[string]ai.StructuredGenerator{"agycli": failing, "routed": otherRouted},
+	)
+
+	_, err := router.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "teacher.feedback", ProviderOverride: "agycli"})
+	if err == nil {
+		t.Fatal("expected the overridden provider's own error, got nil")
+	}
+	if !strings.Contains(err.Error(), "agycli") || !strings.Contains(err.Error(), "binary not found") {
+		t.Errorf("error = %q, want it to name agycli and its underlying error", err.Error())
+	}
+	if failing.calls != 1 {
+		t.Errorf("failing.calls = %d, want 1", failing.calls)
+	}
+	if otherRouted.calls != 0 || otherFallback.calls != 0 {
+		t.Errorf("otherRouted.calls=%d otherFallback.calls=%d, want 0/0 (an explicit override must never fall back)", otherRouted.calls, otherFallback.calls)
+	}
+}
+
+// TestRouterExplicitOverrideUnknownProviderReturnsError pins "reject
+// an unknown/unconfigured provider" at the router's own last-resort
+// level (the HTTP handler validates first — see feedback.go — but the
+// router must never silently ignore an override it can't satisfy).
+func TestRouterExplicitOverrideUnknownProviderReturnsError(t *testing.T) {
+	fallback := &stubGenerator{name: "fallback"}
+	router := New(nil, []ai.StructuredGenerator{fallback}, map[string]ai.StructuredGenerator{"ollama": fallback})
+
+	_, err := router.GenerateStructured(context.Background(), ai.StructuredRequest{PromptName: "teacher.feedback", ProviderOverride: "not-a-real-provider"})
+	if err == nil {
+		t.Fatal("expected an error for an unknown provider override")
+	}
+	if !errors.Is(err, ErrUnknownProvider) {
+		t.Errorf("error = %v, want it to wrap ErrUnknownProvider", err)
+	}
+	if fallback.calls != 0 {
+		t.Errorf("fallback.calls = %d, want 0 (an unknown override must not fall back to the default chain)", fallback.calls)
 	}
 }

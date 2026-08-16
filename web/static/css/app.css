@@ -179,9 +179,10 @@ main p.description {
 }
 .feedback-trigger {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
 }
 .feedback-trigger .hint {
   color: var(--fg-subtle);
@@ -192,6 +193,91 @@ main p.description {
 }
 #feedback-results {
   margin-top: 4px;
+}
+
+/* ============================== Feedback progress (Task W item 1) =====
+ * The running state app.js writes into #feedback-results the instant
+ * フィードバックを取得 is clicked (htmx:beforeRequest — the swap into
+ * #feedback-results on response is what replaces it again, per the
+ * task brief's "replace the bottom pane with progress" requirement).
+ * .btn__dot reuses the existing pulsing-dot vocabulary
+ * (components.css's .btn--busy .btn__dot) rather than inventing a
+ * second spinner idiom. */
+.feedback-progress {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3) 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.feedback-progress #feedback-timer {
+  font-family: "JetBrains Mono", monospace;
+}
+.feedback-served-by {
+  margin: 0 0 var(--space-3);
+}
+
+/* ============================== Feedback history (Task W item 2) ======
+ * .history-row is a full-width link (real GET, back/forward-friendly):
+ * timestamp, excerpt, correction-count badge, provider/model badge.
+ * flex-wrap keeps it from overflowing at phone widths where all four
+ * pieces can't share one line. */
+.history-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.history-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--fg);
+  font-size: var(--text-sm);
+}
+.history-row:hover {
+  border-color: var(--primary);
+}
+.history-row.is-active {
+  background: var(--primary-soft);
+  border-color: var(--primary);
+}
+.history-row time {
+  font-family: "JetBrains Mono", monospace;
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+.history-excerpt {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ============================== Workspace tabs (Task W item 4) ========
+ * 添削/会話 behind a .segmented control (components.css already styles
+ * it) so the conversation pane no longer sits stacked directly under
+ * feedback results with no separation — only one panel shows at a
+ * time (app.js toggles [hidden]), the editor above stays visible
+ * either way. */
+.workspace-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+.workspace-tabs > .segmented {
+  align-self: flex-start;
+  max-width: 100%;
 }
 
 #context-pane {
@@ -652,7 +738,8 @@ p.empty {
   .filter-tabs a,
   .rating .star,
   .confidence .star,
-  .correction .reveal {
+  .correction .reveal,
+  .workspace-tabs .segmented > * {
     min-height: var(--tap);
     display: inline-flex;
     align-items: center;
@@ -660,6 +747,25 @@ p.empty {
   }
   .choice {
     min-height: var(--tap);
+  }
+  /* .history-row must stay a BLOCK-level flex container (its base rule
+   * in components.css above) at every width, not inline-flex like the
+   * other touch targets here: inline-flex sizes to fit-content rather
+   * than the parent's available width, which let the row's own content
+   * (timestamp + excerpt + two badges, none of which can shrink past
+   * their own min-content) overflow #context-pane at 390px instead of
+   * wrapping onto a second line the way flex-wrap:wrap intends. Only
+   * min-height is phone-specific here. */
+  .history-row {
+    min-height: var(--tap);
+  }
+  /* #provider-override sits next to フィードバックを取得 in a wrapping
+   * flex row (.feedback-trigger) — letting it size to its own content
+   * instead of the .select default keeps the row from needing three
+   * lines at 390px. */
+  #provider-override {
+    flex: 1 1 auto;
+    min-width: 0;
   }
   /* Wide fixed-size decoration shouldn't force a scrollbar. */
   .sparkline {

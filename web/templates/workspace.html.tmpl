@@ -6,32 +6,52 @@
       <div class="editor-status"><span id="save-state" data-state="saved">保存済み</span>
            <span id="rune-count">{{.Document.RuneCount}}</span>字</div>
     </section>
-    <section id="feedback-pane" class="card">
-      <div class="feedback-trigger">
-        <button id="feedback-btn" class="btn" hx-post="/sessions/{{.Session.ID}}/feedback"
-                hx-target="#feedback-results" hx-swap="innerHTML"
-                hx-vals="js:{...window.jlp.selectionPayload()}">
-          フィードバックを取得</button>
-        <span class="hint">（選択なし＝全文をレビュー）</span>
+    {{/* Phase 4 Task W item 4: 添削 (feedback) and 会話 (conversation)
+         behind tabs so the editor stays visible and only one activity
+         shows at a time — app.js wires the click handling and persists
+         the choice per session in localStorage (key jlp-workspace-tab-
+         {{.Session.ID}}). data-session-id is how it finds that key. */}}
+    <div class="workspace-tabs" data-session-id="{{.Session.ID}}">
+      <div class="segmented" role="tablist">
+        <button type="button" class="is-active" data-tab="feedback" role="tab" aria-selected="true">添削</button>
+        <button type="button" data-tab="conversation" role="tab" aria-selected="false">会話</button>
       </div>
-      <div id="feedback-results"></div>
-    </section>
-    <section id="conversation-pane" class="card">
-      <h2>会話練習</h2>
-      <p class="hint">{{.FeedbackTimingCopy}}</p>
-      <div id="conversation-transcript">{{range .ConversationTurns}}{{template "conversation_turn" .}}{{end}}</div>
-      <form id="conversation-form" class="conv-form" hx-post="/sessions/{{.Session.ID}}/conversation"
-            hx-target="#conversation-transcript" hx-swap="beforeend"
-            hx-disabled-elt="find input, find button"
-            hx-on::after-request="if(event.detail.successful) this.reset()">
-        <input class="input" type="text" name="text" placeholder="日本語でメッセージを送ってください…" required autocomplete="off">
-        <button type="submit" class="btn btn--sm">送信</button>
-      </form>
-      <form hx-post="/sessions/{{.Session.ID}}/conversation/summary" hx-target="#conversation-digest" hx-swap="innerHTML">
-        <button type="submit" class="btn btn--secondary btn--sm">会話をまとめる</button>
-      </form>
-      <div id="conversation-digest"></div>
-    </section>
+      <section id="feedback-pane" class="card" data-tab-panel="feedback">
+        <div class="feedback-trigger">
+          <button id="feedback-btn" class="btn" hx-post="/sessions/{{.Session.ID}}/feedback"
+                  hx-target="#feedback-results" hx-swap="innerHTML"
+                  hx-vals="js:{...window.jlp.selectionPayload(), provider_override: document.getElementById('provider-override').value}">
+            フィードバックを取得</button>
+          {{/* Phase 4 Task W item 5: per-request adapter override,
+               defaulting to the highest-priority provider — see
+               internal/adapters/http/sessions.go's aiProviderOptions
+               call. Choosing a DIFFERENT provider overrides routing for
+               this request only; it never persists and never touches
+               /settings' own per-provider overrides. */}}
+          <select id="provider-override" name="provider_override" class="select" aria-label="AIアダプター">
+            {{range .AIProviders}}<option value="{{.Name}}"{{if .Default}} selected{{end}}>{{.Label}}</option>{{end}}
+          </select>
+          <span class="hint">（選択なし＝全文をレビュー）</span>
+        </div>
+        <div id="feedback-results"></div>
+      </section>
+      <section id="conversation-pane" class="card" data-tab-panel="conversation" hidden>
+        <h2>会話練習</h2>
+        <p class="hint">{{.FeedbackTimingCopy}}</p>
+        <div id="conversation-transcript">{{range .ConversationTurns}}{{template "conversation_turn" .}}{{end}}</div>
+        <form id="conversation-form" class="conv-form" hx-post="/sessions/{{.Session.ID}}/conversation"
+              hx-target="#conversation-transcript" hx-swap="beforeend"
+              hx-disabled-elt="find input, find button"
+              hx-on::after-request="if(event.detail.successful) this.reset()">
+          <input class="input" type="text" name="text" placeholder="日本語でメッセージを送ってください…" required autocomplete="off">
+          <button type="submit" class="btn btn--sm">送信</button>
+        </form>
+        <form hx-post="/sessions/{{.Session.ID}}/conversation/summary" hx-target="#conversation-digest" hx-swap="innerHTML">
+          <button type="submit" class="btn btn--secondary btn--sm">会話をまとめる</button>
+        </form>
+        <div id="conversation-digest"></div>
+      </section>
+    </div>
   </div>
   <aside id="context-pane" class="card">
     <h2>{{.Session.Title}}</h2>
@@ -44,8 +64,10 @@
       {{if .Session.Profile.Tone}}<dt>Tone</dt><dd>{{.Session.Profile.Tone}}</dd>{{end}}
       {{if .Session.Profile.Register}}<dt>Register</dt><dd>{{.Session.Profile.Register}}</dd>{{end}}
     </dl>
-    <h3>アクティビティ</h3>
-    <div id="activity" hx-get="/sessions/{{.Session.ID}}/activity" hx-trigger="load, every 30s"></div>
+    {{/* Phase 4 Task W item 2: フィードバック履歴 replaces the old
+         アクティビティ activity feed — see feedback_history.html.tmpl. */}}
+    <h3>フィードバック履歴</h3>
+    {{template "feedback_history" .FeedbackHistory}}
   </aside>
 </div>
 {{end}}

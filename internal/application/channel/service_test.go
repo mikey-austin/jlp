@@ -211,6 +211,12 @@ func (f *fakeFeedbackRepo) RecentCorrections(context.Context, learner.IdentityID
 func (f *fakeFeedbackRepo) GetCorrectionConcepts(context.Context, string) ([]string, error) {
 	return nil, nil
 }
+func (f *fakeFeedbackRepo) ListForSession(context.Context, learner.IdentityID, session.ID) ([]storage.FeedbackSummary, error) {
+	panic("not used by channel service tests")
+}
+func (f *fakeFeedbackRepo) GetFeedback(context.Context, learner.IdentityID, string) (storage.FeedbackDetail, []storage.CorrectionRecord, error) {
+	panic("not used by channel service tests")
+}
 
 // fakeGrammarRepo mirrors application/practice/service_test.go's own
 // double: ListConcepts backs Start's random-fallback path (this

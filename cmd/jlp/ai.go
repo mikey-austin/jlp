@@ -176,10 +176,24 @@ func warnForUnknownPromptNames(routes map[string][]string) {
 // overrides from, so it passes nil and always uses cfg verbatim,
 // exactly like before this task) — every adapter treats a nil
 // resolver as "no override capability", not an error.
-func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestRepository, resolver ai.ModelResolver) (ai.StructuredGenerator, error) {
+//
+// The second and third return values back Phase 4 Task W item 5's
+// workspace per-request adapter-override dropdown: available is the
+// fixed, real-provider display order (ollama, anthropic, claudecli,
+// codexcli, agycli — deliberately excluding "fake", which is always
+// constructible but never a meaningful operator choice — see
+// aiProviderPriority's own doc comment) filtered to whichever of those
+// are actually constructible in THIS deployment, and defaultProvider is
+// the highest-priority one: the first provider in the "teacher.feedback"
+// APP_AI_ROUTES chain when one exists, else APP_AI_PROVIDER — even when
+// that's "fake" (every non-integration test's config, and `jlp eval`),
+// in which case it's included in available too despite the exclusion
+// above, so the dropdown's own preselected default is never an option
+// missing from its own list.
+func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestRepository, resolver ai.ModelResolver) (ai.StructuredGenerator, []string, string, error) {
 	routes, err := config.ParseRoutes(cfg.AI.Routes)
 	if err != nil {
-		return nil, err
+		return nil, nil, "", err
 	}
 	warnForUnknownPromptNames(routes)
 
@@ -242,7 +256,7 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 		for _, name := range chain {
 			gen, ok := providers[name]
 			if !ok {
-				return nil, fmt.Errorf("ai: route %q names provider %q, which isn't constructible (missing config, e.g. APP_AI_OLLAMA_MODEL for ollama or APP_AI_ANTHROPIC_APIKEY for anthropic)", promptName, name)
+				return nil, nil, "", fmt.Errorf("ai: route %q names provider %q, which isn't constructible (missing config, e.g. APP_AI_OLLAMA_MODEL for ollama or APP_AI_ANTHROPIC_APIKEY for anthropic)", promptName, name)
 			}
 			resolvedRoutes[promptName] = append(resolvedRoutes[promptName], gen)
 		}
@@ -250,11 +264,62 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 
 	defaultGen, ok := providers[cfg.AI.Provider]
 	if !ok {
-		return nil, fmt.Errorf("ai: APP_AI_PROVIDER %q isn't constructible (missing config, e.g. APP_AI_OLLAMA_MODEL for ollama or APP_AI_ANTHROPIC_APIKEY for anthropic)", cfg.AI.Provider)
+		return nil, nil, "", fmt.Errorf("ai: APP_AI_PROVIDER %q isn't constructible (missing config, e.g. APP_AI_OLLAMA_MODEL for ollama or APP_AI_ANTHROPIC_APIKEY for anthropic)", cfg.AI.Provider)
 	}
 
-	return airouter.New(resolvedRoutes, []ai.StructuredGenerator{defaultGen}), nil
+	// defaultProvider is Phase 4 Task W item 5's "highest priority"
+	// provider: the first link in the "teacher.feedback" route chain
+	// when APP_AI_ROUTES configures one (resolvedRoutes above already
+	// proved every link in it is constructible), else APP_AI_PROVIDER —
+	// which defaultGen just proved is constructible too.
+	defaultProvider := cfg.AI.Provider
+	if chain, ok := routes["teacher.feedback"]; ok && len(chain) > 0 {
+		defaultProvider = chain[0]
+	}
+
+	// available is aiProviderPriority filtered to providers actually
+	// constructible here, with defaultProvider prepended when it isn't
+	// already in that filtered list (only possible for "fake" — see
+	// this function's own doc comment) so the dropdown's default is
+	// never missing from its own option list.
+	available := make([]string, 0, len(aiProviderPriority)+1)
+	for _, name := range aiProviderPriority {
+		if _, ok := providers[name]; ok {
+			available = append(available, name)
+		}
+	}
+	if _, ok := providers[defaultProvider]; ok {
+		found := false
+		for _, name := range available {
+			if name == defaultProvider {
+				found = true
+				break
+			}
+		}
+		if !found {
+			available = append([]string{defaultProvider}, available...)
+		}
+	}
+
+	return airouter.New(resolvedRoutes, []ai.StructuredGenerator{defaultGen}, providers), available, defaultProvider, nil
 }
+
+// aiProviderPriority is the fixed display order for the workspace's
+// per-request adapter-override dropdown (Phase 4 Task W item 5) —
+// deliberately the SAME provider set and order as
+// application/settings.Service's own providers catalog (its persistent
+// /settings overrides are a different concept from this per-request
+// override, but there's no reason for an operator to see the four real
+// providers listed in two different orders across the app). "fake" is
+// excluded on purpose: fakeai.New() is unconditionally constructed
+// above (offline, free, always available as a fallback-chain safety
+// net), so it WOULD pass an "actually constructible" test, but it's
+// never a choice a real operator wants to see next to Ollama/Anthropic/
+// the CLIs — buildAIGenerator's caller (this function) still includes
+// it when it's genuinely the configured default (every non-integration
+// test, `jlp eval`), just not as an ordinary option alongside the real
+// providers.
+var aiProviderPriority = []string{"ollama", "anthropic", "claudecli", "codexcli", "agycli"}
 
 // buildToolCaller turns cfg.AI into the single ai.ToolCaller Phase 4's
 // agentic capabilities call (Task 2 onward) — the ToolCaller

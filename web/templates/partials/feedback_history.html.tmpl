@@ -1,0 +1,34 @@
+{{/* feedback_history: the workspace's right-hand feedback-history list
+     (Phase 4 Task W item 2), replacing the old アクティビティ activity
+     feed. Rendered two ways by internal/adapters/http/feedback.go's
+     toFeedbackHistoryView:
+       - SSR, inline in workspace.html.tmpl (OOB=false) on the initial
+         page load;
+       - as an htmx out-of-band swap appended after a POST
+         /sessions/{id}/feedback response's own "feedback" partial
+         (OOB=true, item 3) — hx-swap-oob="true" on the root element
+         makes htmx replace the existing #feedback-history wherever it
+         is in the DOM, regardless of that request's own hx-target.
+     Each row is a real GET link (back/forward-friendly, per the brief)
+     that loads that past review into #feedback-results; app.js marks
+     whichever row was just clicked .is-active (a POST's own OOB refresh
+     marks the newest row active server-side instead, via ActiveID —
+     see toFeedbackHistoryView). */}}
+{{define "feedback_history"}}
+<div id="feedback-history" class="feedback-history"{{if .OOB}} hx-swap-oob="true"{{end}}>
+{{if not .Items}}<p class="hint">まだフィードバックはありません。</p>{{else}}
+<ul class="history-list">
+{{range .Items}}<li><a class="history-row{{if .Active}} is-active{{end}}"
+     href="/sessions/{{$.SessionID}}/feedback/{{.ID}}"
+     hx-get="/sessions/{{$.SessionID}}/feedback/{{.ID}}"
+     hx-target="#feedback-results" hx-swap="innerHTML" hx-push-url="true">
+    <time>{{.CreatedAt.Format "01/02 15:04"}}</time>
+    <span class="history-excerpt">{{.Excerpt}}</span>
+    <span class="badge">{{.CorrectionCount}}件</span>
+    {{if .Provider}}<span class="badge badge--type">{{.Provider}} / {{.Model}}</span>{{end}}
+  </a></li>
+{{end}}
+</ul>
+{{end}}
+</div>
+{{end}}

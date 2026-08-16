@@ -98,6 +98,48 @@ func (q *Queries) GetCorrectionConcepts(ctx context.Context, correctionID pgtype
 	return items, nil
 }
 
+const getFeedbackRequest = `-- name: GetFeedbackRequest :one
+SELECT f.id, f.selection_text, f.corrected_text, f.created_at,
+       COALESCE(a.provider, '') AS provider,
+       COALESCE(a.model, '') AS model
+FROM feedback_requests f
+LEFT JOIN ai_requests a ON a.id = f.ai_request_id
+WHERE f.id = $1 AND f.identity_id = $2
+`
+
+type GetFeedbackRequestParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+}
+
+type GetFeedbackRequestRow struct {
+	ID            pgtype.UUID
+	SelectionText string
+	CorrectedText string
+	CreatedAt     pgtype.Timestamptz
+	Provider      string
+	Model         string
+}
+
+// Identity-scoped read of one feedback_requests row plus the
+// ai_requests row it produced (Phase 4 Task W items 2/3): a LEFT JOIN
+// since ai_request_id is nullable (a fakeai-backed review outside the
+// observability decorator never sets it — see feedback.go's
+// toOptionalUUID).
+func (q *Queries) GetFeedbackRequest(ctx context.Context, arg GetFeedbackRequestParams) (GetFeedbackRequestRow, error) {
+	row := q.db.QueryRow(ctx, getFeedbackRequest, arg.ID, arg.IdentityID)
+	var i GetFeedbackRequestRow
+	err := row.Scan(
+		&i.ID,
+		&i.SelectionText,
+		&i.CorrectedText,
+		&i.CreatedAt,
+		&i.Provider,
+		&i.Model,
+	)
+	return i, err
+}
+
 const insertCorrection = `-- name: InsertCorrection :exec
 INSERT INTO corrections (
     id, feedback_request_id, position, original, replacement,
@@ -194,6 +236,140 @@ func (q *Queries) InsertFeedbackRequest(ctx context.Context, arg InsertFeedbackR
 		arg.CreatedAt,
 	)
 	return err
+}
+
+const listCorrectionsForFeedback = `-- name: ListCorrectionsForFeedback :many
+SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
+       c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
+       c.status, c.attempts, c.confidence, c.revealed, f.session_id
+FROM corrections c
+JOIN feedback_requests f ON c.feedback_request_id = f.id
+WHERE c.feedback_request_id = $1
+ORDER BY c.position
+`
+
+type ListCorrectionsForFeedbackRow struct {
+	ID                pgtype.UUID
+	FeedbackRequestID pgtype.UUID
+	Position          int32
+	Original          string
+	Replacement       string
+	Type              string
+	Severity          string
+	ExplanationJa     string
+	ExplanationEn     string
+	HintJa            string
+	HintEn            string
+	Status            string
+	Attempts          int32
+	Confidence        pgtype.Int4
+	Revealed          bool
+	SessionID         pgtype.UUID
+}
+
+// Every correction for one feedback_request_id, in Position order — NOT
+// separately identity-scoped (see storage.FeedbackRepository.GetFeedback's
+// doc comment: the caller must already have proven ownership of
+// feedback_request_id via GetFeedbackRequest above before calling this).
+// Same column shape as GetCorrection/RecentCorrections so the postgres
+// adapter can reuse buildCorrectionRecord unchanged.
+func (q *Queries) ListCorrectionsForFeedback(ctx context.Context, feedbackRequestID pgtype.UUID) ([]ListCorrectionsForFeedbackRow, error) {
+	rows, err := q.db.Query(ctx, listCorrectionsForFeedback, feedbackRequestID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCorrectionsForFeedbackRow
+	for rows.Next() {
+		var i ListCorrectionsForFeedbackRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FeedbackRequestID,
+			&i.Position,
+			&i.Original,
+			&i.Replacement,
+			&i.Type,
+			&i.Severity,
+			&i.ExplanationJa,
+			&i.ExplanationEn,
+			&i.HintJa,
+			&i.HintEn,
+			&i.Status,
+			&i.Attempts,
+			&i.Confidence,
+			&i.Revealed,
+			&i.SessionID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listFeedbackForSession = `-- name: ListFeedbackForSession :many
+SELECT f.id, f.selection_text, f.created_at,
+       COUNT(c.id) AS correction_count,
+       COALESCE(a.provider, '') AS provider,
+       COALESCE(a.model, '') AS model
+FROM feedback_requests f
+LEFT JOIN corrections c ON c.feedback_request_id = f.id
+LEFT JOIN ai_requests a ON a.id = f.ai_request_id
+WHERE f.identity_id = $1 AND f.session_id = $2
+GROUP BY f.id, f.selection_text, f.created_at, a.provider, a.model
+ORDER BY f.created_at DESC
+`
+
+type ListFeedbackForSessionParams struct {
+	IdentityID string
+	SessionID  pgtype.UUID
+}
+
+type ListFeedbackForSessionRow struct {
+	ID              pgtype.UUID
+	SelectionText   string
+	CreatedAt       pgtype.Timestamptz
+	CorrectionCount int64
+	Provider        string
+	Model           string
+}
+
+// Identity- and session-scoped feedback history (Phase 4 Task W item
+// 2), most-recent-first: one row per feedback_requests entry with its
+// correction count and the ai_requests-joined provider/model that
+// served it (both ” when ai_request_id is NULL — see
+// GetFeedbackRequest below). a.provider/a.model must be listed in
+// GROUP BY explicitly (unlike f's own columns, which Postgres treats as
+// functionally dependent on the f.id primary key) since they come from
+// a joined table.
+func (q *Queries) ListFeedbackForSession(ctx context.Context, arg ListFeedbackForSessionParams) ([]ListFeedbackForSessionRow, error) {
+	rows, err := q.db.Query(ctx, listFeedbackForSession, arg.IdentityID, arg.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFeedbackForSessionRow
+	for rows.Next() {
+		var i ListFeedbackForSessionRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.SelectionText,
+			&i.CreatedAt,
+			&i.CorrectionCount,
+			&i.Provider,
+			&i.Model,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const recentCorrections = `-- name: RecentCorrections :many

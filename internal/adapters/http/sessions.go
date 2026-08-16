@@ -83,6 +83,21 @@ func (s *Server) sessionsWorkspace(w http.ResponseWriter, r *http.Request) {
 		turns = append(turns, toConversationTurnView(t))
 	}
 
+	// FeedbackHistory (Phase 4 Task W item 2) replaces the old アクティビティ
+	// activity feed in the context pane — rendered server-side here
+	// (rather than an htmx hx-get="…/activity"-style fragment fetched on
+	// load) since the data's already a single cheap query away and this
+	// avoids a page-load flash of an empty history list. ActiveID is ""
+	// on first load: #feedback-results itself starts empty (nothing has
+	// been requested yet this page view), so no row is marked shown —
+	// see toFeedbackHistoryView's doc comment for how the POST/GET
+	// handlers mark one after that.
+	feedbackHistory, err := s.opts.Feedback.ListForSession(r.Context(), ident.ID, sess.ID)
+	if err != nil {
+		http.Error(w, "could not load feedback history", http.StatusInternalServerError)
+		return
+	}
+
 	Render(w, r, "workspace", map[string]any{
 		"Title":              sess.Title,
 		"Identity":           ident,
@@ -90,6 +105,8 @@ func (s *Server) sessionsWorkspace(w http.ResponseWriter, r *http.Request) {
 		"Document":           doc,
 		"ConversationTurns":  turns,
 		"FeedbackTimingCopy": feedbackTimingCopy(sess.Profile.FeedbackTiming),
+		"FeedbackHistory":    toFeedbackHistoryView(sess.ID, "", feedbackHistory, false),
+		"AIProviders":        aiProviderOptions(s.opts.AIProviders, s.opts.AIDefaultProvider),
 	})
 }
 
@@ -106,17 +123,4 @@ func feedbackTimingCopy(timing string) string {
 	default: // "end"
 		return "会話が途切れないよう、訂正は会話の最後にまとめて表示されます（「会話をまとめる」ボタン）。"
 	}
-}
-
-// sessionsActivity renders the last 10 learning events for the session,
-// newest first, as an htmx fragment for the workspace's context pane.
-func (s *Server) sessionsActivity(w http.ResponseWriter, r *http.Request) {
-	ident, _ := IdentityFrom(r.Context())
-	id := session.ID(chi.URLParam(r, "id"))
-	events, err := s.opts.Events.ListRecent(r.Context(), ident.ID, &id, 10)
-	if err != nil {
-		http.Error(w, "could not load activity", http.StatusInternalServerError)
-		return
-	}
-	RenderPartial(w, r, "activity", map[string]any{"Events": events})
 }

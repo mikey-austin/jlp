@@ -275,6 +275,75 @@ func (r *FeedbackRepository) RecentCorrections(ctx context.Context, identity lea
 	return out, nil
 }
 
+// ListForSession returns identity's feedback history for sessionID,
+// most-recent-first — see storage.FeedbackRepository's doc comment for
+// why a cross-identity sessionID comes back as an empty slice rather
+// than storage.ErrNotFound.
+func (r *FeedbackRepository) ListForSession(ctx context.Context, identity learner.IdentityID, sessionID session.ID) ([]storage.FeedbackSummary, error) {
+	sid, err := parseUUID(string(sessionID))
+	if err != nil {
+		return nil, fmt.Errorf("session id: %w", err)
+	}
+	rows, err := r.q.ListFeedbackForSession(ctx, sqlcgen.ListFeedbackForSessionParams{
+		IdentityID: string(identity),
+		SessionID:  sid,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]storage.FeedbackSummary, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, storage.FeedbackSummary{
+			ID:              uuid.UUID(row.ID.Bytes).String(),
+			SelectionText:   row.SelectionText,
+			CorrectionCount: int(row.CorrectionCount),
+			Provider:        row.Provider,
+			Model:           row.Model,
+			CreatedAt:       row.CreatedAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// GetFeedback returns feedbackID's own FeedbackDetail plus every one of
+// its corrections, identity-scoped via GetFeedbackRequest's join to
+// feedback_requests — see storage.FeedbackRepository's doc comment for
+// why ListCorrectionsForFeedback (the second query) doesn't repeat that
+// check.
+func (r *FeedbackRepository) GetFeedback(ctx context.Context, identity learner.IdentityID, feedbackID string) (storage.FeedbackDetail, []storage.CorrectionRecord, error) {
+	id, err := parseUUID(feedbackID)
+	if err != nil {
+		return storage.FeedbackDetail{}, nil, fmt.Errorf("feedback id: %w", err)
+	}
+	row, err := r.q.GetFeedbackRequest(ctx, sqlcgen.GetFeedbackRequestParams{ID: id, IdentityID: string(identity)})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return storage.FeedbackDetail{}, nil, storage.ErrNotFound
+		}
+		return storage.FeedbackDetail{}, nil, err
+	}
+	detail := storage.FeedbackDetail{
+		ID:            uuid.UUID(row.ID.Bytes).String(),
+		SelectionText: row.SelectionText,
+		CorrectedText: row.CorrectedText,
+		Provider:      row.Provider,
+		Model:         row.Model,
+		CreatedAt:     row.CreatedAt.Time,
+	}
+
+	corrRows, err := r.q.ListCorrectionsForFeedback(ctx, id)
+	if err != nil {
+		return storage.FeedbackDetail{}, nil, err
+	}
+	corrections := make([]storage.CorrectionRecord, 0, len(corrRows))
+	for _, cr := range corrRows {
+		corrections = append(corrections, buildCorrectionRecord(cr.ID, cr.FeedbackRequestID, cr.SessionID, cr.Position,
+			cr.Original, cr.Replacement, cr.Type, cr.Severity, cr.ExplanationJa, cr.ExplanationEn,
+			cr.HintJa, cr.HintEn, cr.Status, cr.Attempts, cr.Confidence, cr.Revealed))
+	}
+	return detail, corrections, nil
+}
+
 // toOptionalUUID converts an optional canonical UUID string (empty
 // means "not set") to the nullable pgtype sqlc generates for
 // feedback_requests.ai_request_id: empty maps to an invalid (SQL NULL)

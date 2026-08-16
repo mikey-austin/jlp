@@ -144,6 +144,19 @@ type Options struct {
 	// re-consults on every call — a save here reaches the next AI
 	// request with no restart.
 	Settings *appsettings.Service
+	// AIProviders is the fixed, ordered set of AI provider names
+	// actually constructed in this deployment (Phase 4 Task W item 5) —
+	// the workspace's per-request adapter-override dropdown's <option>
+	// values, and the set feedbackRequest validates a submitted
+	// provider_override against (rejecting anything else with a 400
+	// rather than falling through to the default). AIDefaultProvider
+	// names which one is pre-selected and labelled default: main.go
+	// computes it as the first provider in the "teacher.feedback"
+	// APP_AI_ROUTES chain when one exists, else APP_AI_PROVIDER — see
+	// cmd/jlp/ai.go's buildAIGenerator, whose second and third return
+	// values these are, verbatim.
+	AIProviders       []string
+	AIDefaultProvider string
 }
 
 type Server struct {
@@ -211,8 +224,12 @@ func (s *Server) routes() http.Handler {
 		r.Get("/sessions", s.sessionsList)
 		r.Post("/sessions", s.sessionsCreate)
 		r.Get("/sessions/{id}", s.sessionsWorkspace)
-		r.Get("/sessions/{id}/activity", s.sessionsActivity)
 		r.Post("/sessions/{id}/feedback", s.feedbackRequest)
+		// GET /sessions/{id}/feedback/{feedbackID}: Phase 4 Task W item 2 —
+		// clicking a feedback-history row loads that past review into the
+		// bottom pane. A GET (not a POST) so it's back/forward-friendly,
+		// per the task brief.
+		r.Get("/sessions/{id}/feedback/{feedbackID}", s.feedbackShow)
 		// Phase 4 Task 6: the conversation tutor (PRD §17.4) — a
 		// message-posting form in the session pane, and the
 		// end-of-conversation digest button. Listed right after

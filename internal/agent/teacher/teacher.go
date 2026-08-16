@@ -79,6 +79,12 @@ type ReviewInput struct {
 	// instructional — the v3 user template asks the model to weave ONE
 	// in only when it fits naturally, never to force it.
 	ExpressionsToEncourage []string
+	// ProviderOverride, when non-empty, is threaded straight through to
+	// ai.StructuredRequest.ProviderOverride (Phase 4 Task W item 5): the
+	// workspace's per-request adapter-override dropdown. See that
+	// field's own doc comment for the no-fallback contract airouter
+	// enforces on it.
+	ProviderOverride string
 }
 
 // promptData mirrors exactly what templates/teacher.feedback.v3.*.md
@@ -151,16 +157,17 @@ func (a *Agent) ReviewWriting(ctx context.Context, in ReviewInput) (correction.R
 
 	sid := in.Session.ID
 	req := ai.StructuredRequest{
-		PromptName:    promptName,
-		PromptVersion: promptVersion,
-		System:        rendered.System,
-		User:          rendered.User,
-		SchemaName:    schemaName,
-		Schema:        schema,
-		MaxTokens:     maxTokens,
-		IdentityID:    in.Identity,
-		SessionID:     &sid,
-		Agent:         agentName,
+		PromptName:       promptName,
+		PromptVersion:    promptVersion,
+		System:           rendered.System,
+		User:             rendered.User,
+		SchemaName:       schemaName,
+		Schema:           schema,
+		MaxTokens:        maxTokens,
+		IdentityID:       in.Identity,
+		SessionID:        &sid,
+		Agent:            agentName,
+		ProviderOverride: in.ProviderOverride,
 	}
 
 	resp, err := a.gen.GenerateStructured(ctx, req)

@@ -237,6 +237,58 @@ func (f *fakeFeedbackRepo) GetCorrectionConcepts(_ context.Context, correctionID
 	return out, nil
 }
 
+// ListForSession mirrors the real query's identity+session scope,
+// most-recent-first (Phase 4 Task W item 2). A session that exists but
+// belongs to another identity yields an empty slice, matching
+// storage.FeedbackRepository's documented "list, not a lookup" miss
+// shape.
+func (f *fakeFeedbackRepo) ListForSession(_ context.Context, identity learner.IdentityID, sessionID session.ID) ([]storage.FeedbackSummary, error) {
+	var out []storage.FeedbackSummary
+	for _, fb := range f.feedback {
+		if fb.IdentityID != identity || fb.SessionID != sessionID {
+			continue
+		}
+		count := 0
+		for _, c := range f.corrections {
+			if c.FeedbackID == fb.ID {
+				count++
+			}
+		}
+		out = append(out, storage.FeedbackSummary{
+			ID:              fb.ID,
+			SelectionText:   fb.SelectionText,
+			CorrectionCount: count,
+			CreatedAt:       fb.CreatedAt,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
+	return out, nil
+}
+
+// GetFeedback mirrors the real query's identity-scoped join, same
+// "not yours"/"not found" collapse as UpdateCorrectionStatus, plus every
+// one of feedbackID's corrections in Position order.
+func (f *fakeFeedbackRepo) GetFeedback(_ context.Context, identity learner.IdentityID, feedbackID string) (storage.FeedbackDetail, []storage.CorrectionRecord, error) {
+	fb, ok := f.feedback[feedbackID]
+	if !ok || fb.IdentityID != identity {
+		return storage.FeedbackDetail{}, nil, storage.ErrNotFound
+	}
+	var corrections []storage.CorrectionRecord
+	for _, c := range f.corrections {
+		if c.FeedbackID == fb.ID {
+			c.SessionID = fb.SessionID
+			corrections = append(corrections, c)
+		}
+	}
+	sort.Slice(corrections, func(i, j int) bool { return corrections[i].Position < corrections[j].Position })
+	return storage.FeedbackDetail{
+		ID:            fb.ID,
+		SelectionText: fb.SelectionText,
+		CorrectedText: fb.CorrectedText,
+		CreatedAt:     fb.CreatedAt,
+	}, corrections, nil
+}
+
 // feedbackTestServer wires a real chi router with a real
 // feedback.Service (a real teacher.Agent over fakeai — deterministic,
 // no network) over in-memory repos, the same "real collaborators, fake
@@ -283,6 +335,20 @@ func feedbackTestServerWithMode(t *testing.T, content, teacherMode string) (http
 	// NewPlanner's signature — ActivationCandidates never touches it.
 	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, fakeGrammarRepo{}, fakePriorityRepo{}, vocabRepo, time.Now)
 	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec, false, nil)
+	// AIProviders/AIDefaultProvider (Phase 4 Task W item 5): these tests
+	// wire teacher.New(fakeai.New()) directly, not through airouter, so
+	// fakeai itself ignores whatever ProviderOverride ends up on the
+	// generated ai.StructuredRequest (that plumbing is pinned at the
+	// application-service and airouter layers — see
+	// application/feedback/service_test.go's
+	// TestRequestFeedbackProviderOverrideReachesGeneratedRequest and
+	// internal/adapters/airouter's own override tests). What IS this
+	// layer's concern: the handler's own validation against
+	// AIProviders/AIDefaultProvider before RequestFeedback is ever
+	// called — see TestFeedbackRequestUnknownProviderOverrideReturns400
+	// below.
+	opts.AIProviders = []string{"fake", "agycli"}
+	opts.AIDefaultProvider = "fake"
 
 	sess, err := opts.Sessions.Create(context.Background(), "dev", "日記", "Diary", session.Profile{
 		TeacherMode:         teacherMode,
@@ -391,6 +457,165 @@ func TestFeedbackRequestThenAcceptCorrection(t *testing.T) {
 	}
 	if strings.Contains(statusRec.Body.String(), "納得した") {
 		t.Fatalf("accepted card should not still show the accept button: %s", statusRec.Body.String())
+	}
+}
+
+// extractFeedbackID pulls the id out of the "feedback" partial's own
+// data-feedback-id attribute — the SAME id feedback_history.html.tmpl
+// links each history row to (Phase 4 Task W item 2).
+func extractFeedbackID(t *testing.T, body string) string {
+	t.Helper()
+	const marker = `data-feedback-id="`
+	idx := strings.Index(body, marker)
+	if idx == -1 {
+		t.Fatalf("body missing data-feedback-id marker: %s", body)
+	}
+	rest := body[idx+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end == -1 {
+		t.Fatalf("malformed data-feedback-id attribute: %s", body)
+	}
+	return rest[:end]
+}
+
+// TestFeedbackRequestResponseIncludesOOBHistoryRefresh pins Phase 4
+// Task W item 3: a POST /sessions/{id}/feedback response must carry
+// BOTH the fresh detail (the "feedback" partial, which becomes
+// #feedback-results' new content via #feedback-btn's own hx-target)
+// AND the refreshed history list as an htmx out-of-band swap — one
+// response, two things updated, no page reload — with the just-created
+// entry marked active.
+func TestFeedbackRequestResponseIncludesOOBHistoryRefresh(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, docID := feedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	form := url.Values{}
+	form.Set("document_id", docID)
+	form.Set("start", "0")
+	form.Set("end", strconv.Itoa(runeLen))
+	form.Set("text", content)
+	rec := postForm(t, h, "/sessions/"+string(sess.ID)+"/feedback", form)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST feedback status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	if !strings.Contains(body, "面白かったです") {
+		t.Fatalf("response missing the detail (corrected text): %s", body)
+	}
+	if !strings.Contains(body, `id="feedback-history"`) || !strings.Contains(body, `hx-swap-oob="true"`) {
+		t.Fatalf("response missing the OOB-swapped history list: %s", body)
+	}
+	if !strings.Contains(body, `class="history-row is-active"`) {
+		t.Fatalf("response's OOB history list should mark the just-created entry active: %s", body)
+	}
+	if !strings.Contains(body, "とても面白いでした") {
+		t.Fatalf("response's OOB history list missing the new entry's excerpt: %s", body)
+	}
+}
+
+// TestFeedbackRequestUnknownProviderOverrideReturns400 pins Phase 4
+// Task W item 5: an unknown/unconfigured provider_override value must
+// be rejected with a 400 rather than falling through to the default —
+// a stale form must never silently produce a different provider's
+// answer.
+func TestFeedbackRequestUnknownProviderOverrideReturns400(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, docID := feedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	form := url.Values{}
+	form.Set("document_id", docID)
+	form.Set("start", "0")
+	form.Set("end", strconv.Itoa(runeLen))
+	form.Set("text", content)
+	form.Set("provider_override", "not-a-real-provider")
+	rec := postForm(t, h, "/sessions/"+string(sess.ID)+"/feedback", form)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestFeedbackRequestKnownProviderOverrideSucceeds is the positive
+// counterpart: a provider_override value present in AIProviders (but
+// distinct from AIDefaultProvider) must be accepted.
+func TestFeedbackRequestKnownProviderOverrideSucceeds(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, docID := feedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	form := url.Values{}
+	form.Set("document_id", docID)
+	form.Set("start", "0")
+	form.Set("end", strconv.Itoa(runeLen))
+	form.Set("text", content)
+	form.Set("provider_override", "agycli")
+	rec := postForm(t, h, "/sessions/"+string(sess.ID)+"/feedback", form)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestFeedbackShowLoadsHistoricalFeedbackPreservingSocraticGate pins
+// this task's stated recurring hazard on the HTTP surface: GET
+// /sessions/{id}/feedback/{feedbackID} (a history row's click, Phase 4
+// Task W item 2) must render the SAME gated card a fresh POST would —
+// hint shown, answer withheld — never a summary that leaks the
+// Replacement a fresh request would still be hiding.
+func TestFeedbackShowLoadsHistoricalFeedbackPreservingSocraticGate(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, docID, _ := socraticFeedbackTestServer(t, content)
+	runeLen := len([]rune(content))
+
+	form := url.Values{}
+	form.Set("document_id", docID)
+	form.Set("start", "0")
+	form.Set("end", strconv.Itoa(runeLen))
+	form.Set("text", content)
+	postRec := postForm(t, h, "/sessions/"+string(sess.ID)+"/feedback", form)
+	if postRec.Code != http.StatusOK {
+		t.Fatalf("POST feedback status = %d, body=%s", postRec.Code, postRec.Body.String())
+	}
+	feedbackID := extractFeedbackID(t, postRec.Body.String())
+
+	getRec := httptest.NewRecorder()
+	h.ServeHTTP(getRec, httptest.NewRequest(http.MethodGet, "/sessions/"+string(sess.ID)+"/feedback/"+feedbackID, nil))
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("GET feedback history status = %d, body=%s", getRec.Code, getRec.Body.String())
+	}
+	body := getRec.Body.String()
+
+	if !strings.Contains(body, "い形容詞の過去形の作り方を思い出してください") {
+		t.Fatalf("history read missing the JA hint: %s", body)
+	}
+	if strings.Contains(body, "面白かったです") {
+		t.Fatalf("history read leaks the corrected form 面白かったです: %s", body)
+	}
+	if strings.Contains(body, "d-ins") {
+		t.Fatalf("history read contains a d-ins diff span (leaks the answer via the whole-selection diff block): %s", body)
+	}
+	if !strings.Contains(body, "答えを見る") {
+		t.Fatalf("history read missing the reveal button: %s", body)
+	}
+}
+
+// TestFeedbackShowUnknownIDReturnsNotFound pins feedbackShow's
+// ErrNotFound mapping (identity-scoped cross-identity behavior itself
+// is pinned directly against the real repository in
+// internal/adapters/postgres/feedback_test.go's TestFeedbackGetFeedback
+// — this HTTP-layer double doesn't have a second identity to
+// authenticate as through the same handler wiring).
+func TestFeedbackShowUnknownIDReturnsNotFound(t *testing.T) {
+	content := "とても面白いでした"
+	h, sess, _ := feedbackTestServer(t, content)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/"+string(sess.ID)+"/feedback/does-not-exist", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
 	}
 }
 

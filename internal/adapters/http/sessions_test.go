@@ -14,10 +14,14 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai" //nolint:depguard // fakeai is a port-shaped test double injected via agentconversation.New(ai.StructuredGenerator); PRD §75 Rule 3 forbids agents reaching real adapters, not fakes constructed in tests
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	agentconversation "github.com/mikeyaustin/jlp/internal/agent/conversation"
+	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appconversation "github.com/mikeyaustin/jlp/internal/application/conversation"
+	appfeedback "github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
+	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
@@ -233,7 +237,8 @@ func testOptionsWithSessions() Options {
 	opts.Sessions = sessions.NewService(sessRepo)
 	events := newFakeEventRepo()
 	rec := learning.NewRecorder(events, inprocbus.New())
-	opts.Writing = appwriting.NewService(newFakeDocRepo(), rec)
+	docRepo := newFakeDocRepo()
+	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
 	// Zero-value stats by default; tests exercising the dashboard's
 	// content (TestHomeRenders et al.) override this with their own
@@ -244,6 +249,17 @@ func testOptionsWithSessions() Options {
 	// over the SAME sessRepo opts.Sessions uses, so a session created
 	// through opts.Sessions is visible to it.
 	opts.Conversation = appconversation.NewService(newFakeConversationRepo(), sessRepo, agentconversation.New(fakeai.New()), nil, rec, fakeGrammarRepo{})
+	// Feedback (Phase 4 Task W item 2): sessionsWorkspace also reads
+	// Feedback.ListForSession on every GET now (the feedback-history
+	// pane replacing the old activity feed), so every test hitting the
+	// workspace route needs a working feedback.Service, not just
+	// Sessions/Writing/Conversation — over the SAME sessRepo/docRepo
+	// instances, same reasoning as Conversation above.
+	feedbackRepo := newFakeFeedbackRepo()
+	vocabRepo := newFakeVocabRepo()
+	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
+	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, fakeGrammarRepo{}, fakePriorityRepo{}, vocabRepo, time.Now)
+	opts.Feedback = appfeedback.NewService(sessRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec, false, nil)
 	return opts
 }
 
@@ -354,63 +370,11 @@ func TestSessionsWorkspaceCrossIdentityNotFound(t *testing.T) {
 	}
 }
 
-func TestSessionsActivityRendersRecentEventsScopedToCallerAndSession(t *testing.T) {
-	opts := testOptionsWithSessions()
-	sess, err := opts.Sessions.Create(context.Background(), "dev", "旅行について書く", "Diary", session.Profile{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	events := opts.Events.(*fakeEventRepo)
-	sid := sess.ID
-	now := time.Now()
-	events.byIdentity["dev"] = []event.LearningEvent{
-		{ID: "ev-1", IdentityID: "dev", SessionID: &sid, Type: event.TypeWritingCreated, OccurredAt: now},
-		{ID: "ev-2", IdentityID: "dev", SessionID: &sid, Type: event.TypeWritingUpdated, OccurredAt: now.Add(time.Minute)},
-	}
-
-	srv := NewServer(opts) // testOptions() authenticates as identity "dev"
-	h := srv.HandlerForTest()
-
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/"+string(sess.ID)+"/activity", nil))
-
-	if rec.Code != http.StatusOK {
-		t.Fatalf("status = %d, body=%s", rec.Code, rec.Body.String())
-	}
-	body := rec.Body.String()
-	if !strings.Contains(body, `class="activity-list"`) {
-		t.Fatalf("body missing the activity-list wrapper: %s", body)
-	}
-	if !strings.Contains(body, string(event.TypeWritingUpdated)) {
-		t.Fatalf("body missing %q: %s", event.TypeWritingUpdated, body)
-	}
-	if !strings.Contains(body, "<li>") {
-		t.Fatalf("body missing <li> event rows: %s", body)
-	}
-
-	if events.lastIdentity != "dev" {
-		t.Fatalf("ListRecent identity = %q, want dev", events.lastIdentity)
-	}
-	if events.lastSession == nil || *events.lastSession != sess.ID {
-		t.Fatalf("ListRecent session filter = %v, want %s", events.lastSession, sess.ID)
-	}
-}
-
-func TestSessionsActivityRepositoryErrorReturns500(t *testing.T) {
-	opts := testOptionsWithSessions()
-	sess, err := opts.Sessions.Create(context.Background(), "dev", "旅行について書く", "Diary", session.Profile{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	opts.Events.(*fakeEventRepo).listErr = errors.New("db down")
-
-	srv := NewServer(opts)
-	h := srv.HandlerForTest()
-
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/"+string(sess.ID)+"/activity", nil))
-	if rec.Code != http.StatusInternalServerError {
-		t.Fatalf("status = %d, want 500", rec.Code)
-	}
-}
+// Phase 4 Task W item 2 removed /sessions/{id}/activity (the workspace's
+// old アクティビティ feed) along with its handler and template — the
+// feedback-history pane replaces it, and nothing else in the codebase
+// consumed that route (see internal/adapters/http/feedback.go's
+// feedbackRequest/feedbackShow and toFeedbackHistoryView for its
+// replacement). TestSessionsActivityRendersRecentEventsScopedToCallerAndSession
+// and TestSessionsActivityRepositoryErrorReturns500 tested exactly that
+// route and were removed with it.

@@ -633,6 +633,7 @@ type activeRecallFixture struct {
 	identityA    learner.Identity
 	identityB    learner.Identity // a second, unrelated identity for cross-identity checks
 	session      session.Session
+	feedbackID   string
 	correctionID string
 	replacement  string
 }
@@ -706,6 +707,7 @@ func setupActiveRecallFixture(t *testing.T, ctx context.Context, pool *pgxpool.P
 		identityA:    identityA,
 		identityB:    identityB,
 		session:      sess,
+		feedbackID:   feedbackID,
 		correctionID: correctionID,
 		replacement:  "面白かったです",
 	}
@@ -1091,5 +1093,135 @@ func TestFeedbackRecentCorrections(t *testing.T) {
 	}
 	if len(gotLimited) != 0 {
 		t.Fatalf("RecentCorrections(limit=0) = %+v, want empty", gotLimited)
+	}
+}
+
+// TestFeedbackListForSession pins Phase 4 Task W item 2's history-list
+// query: identity- and session-scoped, most-recent-first, with the
+// correction count and (absent here — the fixture's InsertFeedback
+// never sets AIRequestID, same as every other fakeai-backed test in
+// this file) an empty provider/model. The cross-identity case asserts
+// EMPTY, not storage.ErrNotFound — see storage.FeedbackRepository's own
+// doc comment on why a list method's miss shape differs from a
+// single-resource lookup's.
+func TestFeedbackListForSession(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	got, err := fx.repo.ListForSession(ctx, fx.identityA.ID, fx.session.ID)
+	if err != nil {
+		t.Fatalf("ListForSession(identityA): %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("ListForSession(identityA) = %+v, want exactly 1 entry", got)
+	}
+	if got[0].ID != fx.feedbackID {
+		t.Errorf("ID = %q, want %q", got[0].ID, fx.feedbackID)
+	}
+	if got[0].SelectionText != "とても面白いでした" {
+		t.Errorf("SelectionText = %q, want とても面白いでした", got[0].SelectionText)
+	}
+	if got[0].CorrectionCount != 1 {
+		t.Errorf("CorrectionCount = %d, want 1", got[0].CorrectionCount)
+	}
+	if got[0].Provider != "" || got[0].Model != "" {
+		t.Errorf("Provider/Model = %q/%q, want empty (fixture never sets AIRequestID)", got[0].Provider, got[0].Model)
+	}
+	if got[0].CreatedAt.IsZero() {
+		t.Error("CreatedAt is zero, want a real timestamp")
+	}
+
+	// A cross-identity read of the SAME session comes back empty, not
+	// storage.ErrNotFound — this is a list, not a single-resource GET.
+	gotB, err := fx.repo.ListForSession(ctx, fx.identityB.ID, fx.session.ID)
+	if err != nil {
+		t.Fatalf("ListForSession(identityB): %v", err)
+	}
+	if len(gotB) != 0 {
+		t.Fatalf("ListForSession(identityB) = %+v, want empty", gotB)
+	}
+}
+
+// TestFeedbackGetFeedback pins Phase 4 Task W items 2/3's history-detail
+// query: GetFeedback returns the feedback_requests row (as
+// storage.FeedbackDetail) plus every one of its corrections in Position
+// order, identity-scoped via the same feedback_requests join every
+// other method here uses. Crucially, it round-trips the fixture's
+// SOCRATIC correction (HintJA/HintEN set, Status "presented", never
+// revealed) — this is the exact shape correction.IsGated must still
+// gate when a HISTORY row re-renders it: the fix for the socratic
+// gate's recurring failure mode is that GetFeedback returns the SAME
+// CorrectionRecord.IsGated()-covered fields (HintJA/HintEN/Status/
+// Revealed) a fresh RequestFeedback would, not a stripped-down summary
+// that quietly drops them and defeats the gate at the template layer.
+func TestFeedbackGetFeedback(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	fx := setupActiveRecallFixture(t, ctx, pool)
+
+	detail, corrections, err := fx.repo.GetFeedback(ctx, fx.identityA.ID, fx.feedbackID)
+	if err != nil {
+		t.Fatalf("GetFeedback(identityA): %v", err)
+	}
+	if detail.ID != fx.feedbackID {
+		t.Errorf("detail.ID = %q, want %q", detail.ID, fx.feedbackID)
+	}
+	if detail.SelectionText != "とても面白いでした" || detail.CorrectedText != "とても面白かったです" {
+		t.Errorf("SelectionText/CorrectedText = %q/%q, want the fixture's values", detail.SelectionText, detail.CorrectedText)
+	}
+	if detail.Provider != "" || detail.Model != "" {
+		t.Errorf("Provider/Model = %q/%q, want empty (fixture never sets AIRequestID)", detail.Provider, detail.Model)
+	}
+	if len(corrections) != 1 || corrections[0].ID != fx.correctionID {
+		t.Fatalf("corrections = %+v, want exactly [%s]", corrections, fx.correctionID)
+	}
+
+	// The socratic gate's own fields must round-trip intact: a history
+	// read must be able to re-derive EXACTLY the same
+	// correction.IsGated() verdict a fresh RequestFeedback would —
+	// never a summary that drops HintJA/HintEN/Status/Revealed and
+	// leaves a caller unable to tell this correction is still gated.
+	got := corrections[0]
+	if !got.HasHint() {
+		t.Fatal("HasHint() = false, want true (fixture sets HintJA/HintEN)")
+	}
+	if got.Status != "presented" || got.Revealed {
+		t.Fatalf("Status/Revealed = %q/%v, want presented/false", got.Status, got.Revealed)
+	}
+	if !got.IsGated() {
+		t.Fatal("IsGated() = false, want true — a history read must still withhold this correction's answer")
+	}
+	if got.Replacement != fx.replacement {
+		t.Errorf("Replacement = %q, want %q (the row itself always carries it — correction.IsGated is what the TEMPLATE layer must respect, see internal/adapters/http)", got.Replacement, fx.replacement)
+	}
+
+	// Cross-identity: identityB's read misses with storage.ErrNotFound,
+	// same as every other single-resource lookup in this file.
+	if _, _, err := fx.repo.GetFeedback(ctx, fx.identityB.ID, fx.feedbackID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("GetFeedback(identityB) err = %v, want storage.ErrNotFound", err)
+	}
+
+	// An unknown feedback ID also misses with storage.ErrNotFound.
+	if _, _, err := fx.repo.GetFeedback(ctx, fx.identityA.ID, uuid.New().String()); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("GetFeedback(unknown id) err = %v, want storage.ErrNotFound", err)
 	}
 }
