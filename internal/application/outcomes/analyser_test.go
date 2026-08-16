@@ -339,9 +339,53 @@ func TestLearnerWhoStoppedWritingIsNeverCalledImproving(t *testing.T) {
 	if !strings.Contains(rep.Excluded[0].Reason, "submitted for review in the last 30 days") {
 		t.Errorf("Reason = %q, want it to name the missing recent writing", rep.Excluded[0].Reason)
 	}
-	want := "No concept has enough history to judge yet; 5 concepts excluded for insufficient data."
+
+	// The sentence itself is asserted, not just the counts. Every one of
+	// these concepts has 200 days of history — blaming their history
+	// would be a different false claim in exactly the case this guard
+	// exists for, and would contradict the page's own banner.
+	want := "Less than 1,000 characters were submitted for review in the last 30 days (counted by whole weeks); " +
+		"no concept could be judged yet; 5 concepts excluded for insufficient data."
 	if rep.Headline != want {
-		t.Fatalf("Headline = %q, want %q", rep.Headline, want)
+		t.Fatalf("Headline =\n  %q\nwant\n  %q", rep.Headline, want)
+	}
+	if strings.Contains(rep.Headline, "history") {
+		t.Errorf("headline blames history for concepts with 200 days of it: %q", rep.Headline)
+	}
+}
+
+// TestRisingCorrectionsStayPersistentInALowVolumeWindow: the
+// recent-writing gate exists to stop an ABSENCE of corrections reading
+// as improvement. A concept whose corrections went UP is evidence
+// regardless of how much was written — 9 corrections in 800 characters
+// is not "no new writing", and withholding that judgement would be the
+// opposite of the caution the gate was added for.
+func TestRisingCorrectionsStayPersistentInALowVolumeWindow(t *testing.T) {
+	fading := zeroFilledFading(8)
+	fading[7].Runes = 800
+	fading[7].Corrections = 9
+	repo := &fakeOutcomeRepo{
+		concepts: []storage.ConceptOutcome{
+			conceptOutcome("worse", 200*day, day, 14, 5, 9),
+			conceptOutcome("same", 200*day, day, 10, 5, 5),
+			// Down, on the same thin volume: this one IS gated.
+			conceptOutcome("down", 200*day, day, 6, 5, 1),
+		},
+		fading: fading,
+	}
+	rep := report(t, repo)
+
+	assertSlugs(t, "Persistent", rep.Persistent, "worse", "same")
+	assertSlugs(t, "Improving", rep.Improving)
+	if len(rep.Excluded) != 1 || rep.Excluded[0].Slug != "down" {
+		t.Fatalf("Excluded = %+v, want just the concept whose corrections fell", rep.Excluded)
+	}
+	// And the reason must not claim there was no writing when there was.
+	if strings.Contains(rep.Excluded[0].Reason, "no new writing") {
+		t.Errorf("Reason = %q asserts there was no writing, but 800 characters were reviewed", rep.Excluded[0].Reason)
+	}
+	if !strings.Contains(rep.Excluded[0].Reason, "only 800 characters") {
+		t.Errorf("Reason = %q, want it to state the actual volume", rep.Excluded[0].Reason)
 	}
 }
 
@@ -405,7 +449,7 @@ func TestRetiredCountsCarryAnInactivityCaveat(t *testing.T) {
 	}
 	repo := &fakeOutcomeRepo{concepts: concepts, fading: zeroFilledFading(8)}
 
-	want := "Less than 1,000 characters were submitted for review in the last 30 days; " +
+	want := "Less than 1,000 characters were submitted for review in the last 30 days (counted by whole weeks); " +
 		"12 concepts retired, 0 improving, 0 still recurring."
 	if got := report(t, repo).Headline; got != want {
 		t.Fatalf("Headline =\n  %q\nwant\n  %q", got, want)
@@ -583,12 +627,18 @@ func TestHeadlineOmitsTheFadingClauseWithOnlyOneMeasurableWeek(t *testing.T) {
 
 // TestHeadlineWhenEveryConceptIsExcluded must not report "0 improving"
 // as though that were a finding — nothing was judged at all.
+// TestHeadlineWhenEveryConceptIsExcluded: an actively-writing learner
+// whose concepts are simply too new. The clause must not name a
+// specific missing ingredient — the exclusions have several possible
+// causes and the per-concept reasons in the table below state the
+// actual one for each.
 func TestHeadlineWhenEveryConceptIsExcluded(t *testing.T) {
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
+	repo := activeRepo(
 		conceptOutcome("x1", 10*day, day, 9, 5, 5),
 		conceptOutcome("x2", 10*day, day, 9, 5, 5),
-	}}
-	want := "No concept has enough history to judge yet; 2 concepts excluded for insufficient data."
+	)
+	want := "No concept could be judged yet; 2 concepts excluded for insufficient data; " +
+		"corrections per 1,000 characters held steady at 2.0 over 8 weeks."
 	if got := report(t, repo).Headline; got != want {
 		t.Fatalf("Headline = %q, want %q", got, want)
 	}

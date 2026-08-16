@@ -858,7 +858,7 @@ independent solves, correct later productions, totals and dates.
 | **収束 (retired)** | ≥3 corrections, then 60 days with none |
 | **判定外 (excluded)** | first corrected <60 days ago — the two 30-day windows still overlap, so comparing them measures nothing |
 | **判定外 (excluded)** | <3 corrections in the baseline window — too thin a rate to compare against |
-| **判定外 (excluded)** | <1,000 characters submitted for review in the last 30 days — with no new writing, "fewer corrections" is just "less writing" |
+| **判定外 (excluded)** | corrections *fell*, but <1,000 characters were submitted for review in the last 30 days — with too little new writing, "fewer corrections" is just "less writing" |
 | **改善 (improving)** | strictly fewer corrections in the recent window than the baseline |
 | **継続中 (persistent)** | the same number or more |
 
@@ -872,9 +872,24 @@ matters most: without it, a learner who simply *stopped writing* has
 zero corrections on every concept and every one of them is reported as
 improving. Because the retired rule deliberately needs no recent
 activity, that path can still produce counts for a learner who has gone
-quiet — so when less than 1,000 characters were reviewed in the last 30
-days, the headline leads with exactly that and the page repeats it
-above the tables.
+quiet — so when less than 1,000 characters were reviewed recently, the
+headline leads with exactly that and the page repeats it above the
+tables.
+
+That gate applies **only** to the improving verdict, and the asymmetry
+is deliberate. Fewer corrections is evidence of improvement only if
+there was something to correct. Corrections *rising* is evidence on its
+own terms — nine corrections inside 800 characters is not "no writing",
+and low volume can only make a 継続中 verdict understate the problem,
+never overstate it — so it is reported regardless of volume.
+
+The recent-window total is summed from weekly buckets, so the bucket
+straddling the 30-day boundary counts in full and the figure can reach
+up to six days further back than a literal "last 30 days". Both the
+headline and the page say "counted by whole weeks" rather than implying
+a precision the measurement does not have. Erring toward "the learner
+was writing" is the safe direction for a threshold whose only power is
+to *withhold* a judgement.
 
 **Thin data is not a rate.** `修正/1000字` is quoted per 1,000
 characters to one decimal place, so a week holding fewer than 1,000

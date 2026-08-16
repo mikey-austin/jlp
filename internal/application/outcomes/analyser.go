@@ -240,14 +240,21 @@ const (
 //  3. Only then the before/after comparison.
 //
 // recentRunes is how much reviewed writing the learner produced inside
-// the recent window. It gates the comparison for the same reason
-// minBaselineCorrections gates the baseline: without new production,
-// "fewer corrections" is not a measurement of anything. In practice
-// this can only ever move a concept out of *improving* — a concept
-// with as many corrections as before necessarily had writing to be
-// corrected — but it is applied before the comparison rather than
-// inside its improving arm, because the honest statement is "this
-// window cannot be compared", not "this window cannot be praised".
+// the recent window. It gates ONLY the improving arm, and that
+// asymmetry is the whole point rather than an oversight:
+//
+//   - Fewer corrections than before is evidence of improvement only if
+//     there was something to be corrected. With almost no new writing,
+//     a drop to zero is what quitting looks like, so the judgement is
+//     withheld — the same argument minBaselineCorrections makes about
+//     the baseline side.
+//   - As many corrections as before, or more, is evidence on its own
+//     terms. Nine corrections inside 800 characters is not "no new
+//     writing", and the corrections went UP; suppressing that would
+//     withhold a well-supported finding in the name of caution, which
+//     is the opposite of what the caution is for. Low volume can make
+//     a persistent verdict UNDERSTATE the problem — never overstate it
+//     — so it is safe to report.
 //
 // The returned reason is non-empty only for groupExcluded.
 func classify(c storage.ConceptOutcome, now time.Time, recentRunes int) (group, string) {
@@ -266,13 +273,12 @@ func classify(c storage.ConceptOutcome, now time.Time, recentRunes int) (group, 
 			"only %s in the first %d days — too few to compare a later rate against",
 			countOf(c.CorrectionsBefore, "correction"), int(storage.OutcomeBaselineWindow/(24*time.Hour)))
 	}
-	if recentRunes < MinMeasurableRunes {
-		return groupExcluded, fmt.Sprintf(
-			"only %d characters submitted for review in the last %d days — with no new writing, fewer corrections measures nothing",
-			recentRunes, int(storage.OutcomeRecentWindow/(24*time.Hour)))
-	}
-
 	if c.CorrectionsAfter < c.CorrectionsBefore {
+		if recentRunes < MinMeasurableRunes {
+			return groupExcluded, fmt.Sprintf(
+				"only %d characters submitted for review in the last %d days — too little new writing for fewer corrections to mean anything",
+				recentRunes, int(storage.OutcomeRecentWindow/(24*time.Hour)))
+		}
 		return groupImproving, ""
 	}
 	return groupPersistent, ""
@@ -374,18 +380,25 @@ func headline(rep Report) string {
 
 	judged := len(rep.Retired) + len(rep.Improving) + len(rep.Persistent)
 
-	// The inactivity caveat leads the sentence whenever concepts WERE
-	// judged but the learner has barely written lately. That combination
-	// is reachable through the retired rule, which by design needs no
-	// recent activity at all ("≥3 corrections then 60 silent days"):
-	// without this clause, a learner who walked away would be handed
-	// "12 concepts retired, 0 improving, 0 still recurring." as though
-	// it were a finding about their learning. It is omitted when nothing
-	// was judged, because the per-concept exclusion reasons already say
-	// it, in more detail, right below.
-	if judged > 0 && rep.RecentRunes < MinMeasurableRunes {
+	// The inactivity caveat leads the sentence whenever there is anything
+	// at all to qualify and the learner has barely written lately. It is
+	// reachable with concepts judged — the retired rule by design needs
+	// no recent activity ("≥3 corrections then 60 silent days"), so
+	// without this a learner who walked away would be handed "12
+	// concepts retired, 0 improving, 0 still recurring." as though it
+	// were a finding about their learning — and equally with everything
+	// excluded, where it is the single most useful thing the sentence
+	// can say.
+	//
+	// "counted by whole weeks" is not hedging: RecentRunes is summed
+	// from weekly buckets, and the bucket straddling the 30-day boundary
+	// counts in full, so the total can reach up to six days further back
+	// than a literal "last 30 days" (see recentReviewedRunes for why
+	// that direction is the safe one). The sentence says what was
+	// actually measured.
+	if (judged > 0 || len(rep.Excluded) > 0) && rep.RecentRunes < MinMeasurableRunes {
 		clauses = append(clauses, fmt.Sprintf(
-			"less than %s characters were submitted for review in the last %d days",
+			"less than %s characters were submitted for review in the last %d days (counted by whole weeks)",
 			thousands(MinMeasurableRunes), int(storage.OutcomeRecentWindow/(24*time.Hour))))
 	}
 
@@ -401,8 +414,19 @@ func headline(rep Report) string {
 		// Every concept was excluded. Reporting "0 improving" here would
 		// read as a measured absence of improvement rather than an
 		// absence of measurement, so the counts are omitted entirely.
+		//
+		// The clause deliberately names NO missing ingredient. It used to
+		// say "no concept has enough history to judge yet", which is a
+		// different false claim in exactly the case the recent-writing
+		// guard exists for: a learner who stopped writing has concepts
+		// with 200 days of history and was told their history was too
+		// short — contradicting the page's own banner, which correctly
+		// blamed the missing writing. Exclusions have three possible
+		// causes; the per-concept reasons in the table below state the
+		// actual one for each, and the caveat clause above states the
+		// inactivity case when it applies.
 		clauses = append(clauses,
-			"no concept has enough history to judge yet",
+			"no concept could be judged yet",
 			fmt.Sprintf("%s excluded for insufficient data", countOf(len(rep.Excluded), "concept")))
 	}
 

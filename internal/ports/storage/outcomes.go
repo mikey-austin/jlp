@@ -155,7 +155,7 @@ type WeeklyRate struct {
 	Corrections int
 	// Measurable is whether Runes clears the minimum sample size below
 	// which a "per 1,000 characters" figure is not a rate at all (see
-	// application/outcomes' minMeasurableRunes). Derived there, never by
+	// application/outcomes.MinMeasurableRunes). Derived there, never by
 	// SQL. Runes and Corrections are raw facts and are always displayed;
 	// Per1000 is only meaningful — and only computed — when this is true.
 	Measurable bool

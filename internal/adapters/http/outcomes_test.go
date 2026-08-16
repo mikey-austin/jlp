@@ -211,10 +211,15 @@ func TestOutcomesPageWarnsWhenTheLearnerHasBarelyWritten(t *testing.T) {
 		fading:   weeklyFading([]int{0, 0, 0, 0, 0, 0, 0, 0}, []int{0, 0, 0, 0, 0, 0, 0, 0}),
 	}
 	body := getOutcomes(t, outcomesTestOptions(quiet))
-	if !strings.Contains(body, "直近30日に添削へ出した文章は0文字です。") {
+	if !strings.Contains(body, "に添削へ出した文章は0文字です。") {
 		t.Errorf("no inactivity caveat on a page with no recent writing: %s", body)
 	}
-	if !strings.Contains(body, "Less than 1,000 characters were submitted for review in the last 30 days;") {
+	// The banner must not claim a literal 30-day span: RecentRunes is
+	// summed from weekly buckets, so the straddling week counts in full.
+	if !strings.Contains(body, "週単位で集計するため最大6日分多く含みます") {
+		t.Errorf("banner claims a literal 30-day window it does not measure: %s", body)
+	}
+	if !strings.Contains(body, "Less than 1,000 characters were submitted for review in the last 30 days (counted by whole weeks);") {
 		t.Errorf("headline does not lead with the inactivity caveat: %s", body)
 	}
 
@@ -223,7 +228,7 @@ func TestOutcomesPageWarnsWhenTheLearnerHasBarelyWritten(t *testing.T) {
 		concepts: []storage.ConceptOutcome{outcomeRow("improving-slug", 120*outcomesDay, outcomesDay, 9, 5, 1)},
 		fading:   activeFading(),
 	}
-	if body := getOutcomes(t, outcomesTestOptions(active)); strings.Contains(body, "直近30日に添削へ出した文章は") {
+	if body := getOutcomes(t, outcomesTestOptions(active)); strings.Contains(body, "に添削へ出した文章は") {
 		t.Errorf("inactivity caveat shown to an active learner: %s", body)
 	}
 }
