@@ -341,7 +341,7 @@ func main() {
 		// repository, not the sibling application service" choice
 		// feedbackSvc's own first two constructor args already make.
 		conversationAgent := agentconversation.New(aiGen)
-		conversationSvc := appconversation.NewService(postgres.NewConversationRepository(pool), postgres.NewSessionRepository(pool), conversationAgent, vocabSvc, recorder, grammarRepo)
+		conversationSvc := appconversation.NewService(postgres.NewConversationRepository(pool), postgres.NewSessionRepository(pool), conversationAgent, vocabSvc, recorder, grammarRepo, eventRepo)
 
 		// Speech recognition (Phase 4 Task 8, PRD §66): recognizer stays
 		// nil — and appspeech.Service.Transcribe always returns

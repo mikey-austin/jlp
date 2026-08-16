@@ -3,6 +3,7 @@ package conversation_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -127,8 +128,31 @@ func (f *fakeEventStore) Append(_ context.Context, ev event.LearningEvent) error
 	f.events = append(f.events, ev)
 	return nil
 }
-func (f *fakeEventStore) ListRecent(context.Context, learner.IdentityID, *session.ID, int) ([]event.LearningEvent, error) {
-	return f.events, nil
+
+// ListRecent mirrors the REAL postgres repository's identity (and,
+// when sid is non-nil, session) scoping exactly — not a passthrough of
+// every event ever appended. This matters: Say's speech_event_id
+// validation (code review Important, post-I1) relies on this scoping
+// to reject another identity's or another session's genuine event id,
+// and a fake that ignored scoping would let a forged-provenance test
+// pass for the wrong reason (see TestSayIgnoresSpeechEventIDBelonging
+// ToAnotherIdentity's own doc comment).
+func (f *fakeEventStore) ListRecent(_ context.Context, identity learner.IdentityID, sid *session.ID, limit int) ([]event.LearningEvent, error) {
+	var out []event.LearningEvent
+	for i := len(f.events) - 1; i >= 0; i-- { // newest first, like the real repo
+		ev := f.events[i]
+		if ev.IdentityID != identity {
+			continue
+		}
+		if sid != nil && (ev.SessionID == nil || *ev.SessionID != *sid) {
+			continue
+		}
+		out = append(out, ev)
+		if limit > 0 && len(out) >= limit {
+			break
+		}
+	}
+	return out, nil
 }
 func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.LearningEvent, error) {
 	return f.events, nil
@@ -258,7 +282,7 @@ func newHarness(timing string) *harness {
 	vocabRepo := newFakeVocabRepo()
 	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
 	agent := agentconversation.New(fakeai.New())
-	svc := appconversation.NewService(repo, sessions, agent, vocabSvc, rec, &fakeGrammarRepo{concepts: knownConceptsForFakeAI()})
+	svc := appconversation.NewService(repo, sessions, agent, vocabSvc, rec, &fakeGrammarRepo{concepts: knownConceptsForFakeAI()}, events)
 	return &harness{svc: svc, sessions: sessions, repo: repo, events: events, vocab: vocabRepo}
 }
 
@@ -491,26 +515,58 @@ func TestSayRecordsConversationTurnAndCorrectionEvents(t *testing.T) {
 	}
 }
 
+// seedEventCounter gives seedSpeechEvent's generated ids a little
+// uniqueness across calls — a plain package-level counter is enough
+// since these tests run sequentially, not in parallel.
+var seedEventCounter int
+
+// seedSpeechEvent appends a genuine speech.transcribed event straight
+// into h's event store (bypassing Say/Recorder — this is test setup,
+// not something under test) and returns its id, for tests that need a
+// real, resolvable event id to validate sourceEventID against.
+func seedSpeechEvent(t *testing.T, h *harness, identity learner.IdentityID, sid session.ID) string {
+	t.Helper()
+	seedEventCounter++
+	id := fmt.Sprintf("speech-evt-%s-%s-%d", identity, sid, seedEventCounter)
+	if err := h.events.Append(context.Background(), event.LearningEvent{
+		ID:         id,
+		IdentityID: identity,
+		SessionID:  &sid,
+		Type:       event.TypeSpeechTranscribed,
+		Subject:    id,
+		Evidence:   map[string]any{"duration_ms": 1000, "mime": "audio/wav", "chars": 3},
+	}); err != nil {
+		t.Fatalf("seedSpeechEvent: %v", err)
+	}
+	return id
+}
+
 // TestSayTagsTurnEventWithSourceSpeechEventID pins code review
-// Important I1: a non-empty sourceEventID must land verbatim on the
-// resulting conversation.turn event's Evidence under "speech_event_id"
-// — the join key that lets Task 9's learning-outcome analytics (or any
-// future consumer) tell a spoken turn apart from a typed one, given
-// only the event log. An empty sourceEventID (ordinary typed input,
-// covered by TestSayRecordsConversationTurnAndCorrectionEvents above)
-// must NOT add the key at all, not even as an empty string — a
-// consumer checking "does this turn have a speech_event_id" must see
-// a real map-key absence, not a falsy-but-present value.
+// Important I1: a sourceEventID that resolves to a genuine
+// speech.transcribed event — owned by identity, scoped to sid, not
+// already used — lands verbatim on the resulting conversation.turn
+// event's Evidence under "speech_event_id" — the join key that lets
+// Task 9's learning-outcome analytics (or any future consumer) tell a
+// spoken turn apart from a typed one. An empty sourceEventID (ordinary
+// typed input, covered by TestSayRecordsConversationTurnAndCorrection
+// Events above) must NOT add the key at all, not even as an empty
+// string — a consumer checking "does this turn have a speech_event_id"
+// must see a real map-key absence, not a falsy-but-present value.
 func TestSayTagsTurnEventWithSourceSpeechEventID(t *testing.T) {
 	h := newHarness("immediate")
-	const sourceID = "speech-evt-123"
+	sourceID := seedSpeechEvent(t, h, testIdentity, testSessionID)
 	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。", sourceID); err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
-	if len(h.events.events) < 1 || h.events.events[0].Type != event.TypeConversationTurn {
-		t.Fatalf("events[0] = %+v, want a conversation.turn event first", h.events.events)
+	var turnEvidence map[string]any
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeConversationTurn {
+			turnEvidence = ev.Evidence
+		}
 	}
-	turnEvidence := h.events.events[0].Evidence
+	if turnEvidence == nil {
+		t.Fatal("no conversation.turn event recorded")
+	}
 	if turnEvidence["speech_event_id"] != sourceID {
 		t.Fatalf("turn Evidence[speech_event_id] = %v, want %q", turnEvidence["speech_event_id"], sourceID)
 	}
@@ -531,6 +587,113 @@ func TestSayTagsTurnEventWithSourceSpeechEventID(t *testing.T) {
 	}
 	if _, present := secondTurnEvidence["speech_event_id"]; present {
 		t.Fatalf("typed turn's Evidence unexpectedly has a speech_event_id key: %+v", secondTurnEvidence)
+	}
+}
+
+// TestSayDowngradesUnresolvedSpeechEventIDToTyped pins the first of
+// four provenance-forgery guards a follow-up code review required:
+// a sourceEventID that doesn't resolve to ANY event at all (a client
+// sending an arbitrary string) must silently downgrade the turn to
+// typed — not error out and lose the learner's message, and not trust
+// the unvalidated string either.
+func TestSayDowngradesUnresolvedSpeechEventIDToTyped(t *testing.T) {
+	h := newHarness("immediate")
+	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "映画について話しましょう。", "forged-does-not-exist")
+	if err != nil {
+		t.Fatalf("Say returned error: %v, want it to succeed with a downgraded (typed) turn", err)
+	}
+	if turn.Reply == "" {
+		t.Fatal("the learner's message must still produce a turn, not be lost, on invalid provenance")
+	}
+	var turnEvidence map[string]any
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeConversationTurn {
+			turnEvidence = ev.Evidence
+		}
+	}
+	if _, present := turnEvidence["speech_event_id"]; present {
+		t.Fatalf("Evidence unexpectedly carries speech_event_id for an unresolved id: %+v", turnEvidence)
+	}
+}
+
+// TestSayIgnoresSpeechEventIDBelongingToAnotherIdentity is the case a
+// naive existence-only check would let through: the id is genuine and
+// really is a speech.transcribed event — just not this caller's. A
+// malicious identity could otherwise forge provenance by reusing
+// someone else's real event id.
+func TestSayIgnoresSpeechEventIDBelongingToAnotherIdentity(t *testing.T) {
+	h := newHarness("immediate")
+	othersID := seedSpeechEvent(t, h, "someone-else", testSessionID)
+	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "映画について話しましょう。", othersID)
+	if err != nil {
+		t.Fatalf("Say returned error: %v, want a downgraded typed turn instead", err)
+	}
+	if turn.Reply == "" {
+		t.Fatal("the learner's message must still produce a turn")
+	}
+	var turnEvidence map[string]any
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeConversationTurn && ev.IdentityID == testIdentity {
+			turnEvidence = ev.Evidence
+		}
+	}
+	if _, present := turnEvidence["speech_event_id"]; present {
+		t.Fatalf("Evidence unexpectedly carries another identity's event id: %+v", turnEvidence)
+	}
+}
+
+// TestSayIgnoresSpeechEventIDForDifferentSession pins the "for this
+// session" condition: a real event, genuinely owned by identity, but
+// recorded under a DIFFERENT session, must not be accepted either —
+// scoping speech.transcribed events per-session is exactly what code
+// review Important I1 introduced SessionID for in the first place.
+func TestSayIgnoresSpeechEventIDForDifferentSession(t *testing.T) {
+	h := newHarness("immediate")
+	const otherSession session.ID = "sess-other"
+	sourceID := seedSpeechEvent(t, h, testIdentity, otherSession)
+	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "映画について話しましょう。", sourceID)
+	if err != nil {
+		t.Fatalf("Say returned error: %v, want a downgraded typed turn instead", err)
+	}
+	if turn.Reply == "" {
+		t.Fatal("the learner's message must still produce a turn")
+	}
+	var turnEvidence map[string]any
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeConversationTurn {
+			turnEvidence = ev.Evidence
+		}
+	}
+	if _, present := turnEvidence["speech_event_id"]; present {
+		t.Fatalf("Evidence unexpectedly carries a different session's event id: %+v", turnEvidence)
+	}
+}
+
+// TestSayIgnoresSpeechEventIDAlreadyAttachedToAnotherTurn pins the
+// fourth condition: a real, correctly-owned, correctly-scoped event
+// id that has ALREADY been consumed by an earlier turn must not be
+// reusable for a second one — otherwise a client could tag every
+// typed message in a session as speech-sourced by replaying one real
+// event id.
+func TestSayIgnoresSpeechEventIDAlreadyAttachedToAnotherTurn(t *testing.T) {
+	h := newHarness("immediate")
+	sourceID := seedSpeechEvent(t, h, testIdentity, testSessionID)
+	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。", sourceID); err != nil {
+		t.Fatalf("first Say returned error: %v", err)
+	}
+	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "今日は楽しいでした。", sourceID); err != nil {
+		t.Fatalf("second Say returned error: %v", err)
+	}
+	var tagged int
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeConversationTurn {
+			if id, ok := ev.Evidence["speech_event_id"]; ok && id == sourceID {
+				tagged++
+			}
+		}
+	}
+	if tagged != 1 {
+		t.Fatalf("turns tagged with the reused speech_event_id = %d, want exactly 1 (the first)", tagged)
 	}
 }
 
@@ -556,7 +719,7 @@ func TestSayPassesConceptCandidatesToAgent(t *testing.T) {
 	rec := learning.NewRecorder(events, inprocbus.New())
 	gen := &spyGen{}
 	agent := agentconversation.New(gen)
-	svc := appconversation.NewService(repo, sessions, agent, nil, rec, &fakeGrammarRepo{concepts: knownConceptsForFakeAI()})
+	svc := appconversation.NewService(repo, sessions, agent, nil, rec, &fakeGrammarRepo{concepts: knownConceptsForFakeAI()}, events)
 
 	if _, err := svc.Say(context.Background(), testIdentity, testSessionID, "映画を見ました。", ""); err != nil {
 		t.Fatalf("Say returned error: %v", err)

@@ -59,11 +59,19 @@ type Service struct {
 	// provided candidate list" instruction has no list to choose from,
 	// and no correction can ever tag a concept in production.
 	grammar storage.GrammarRepository
+	// events backs Say's sourceEventID validation (code review
+	// Important, post-I1): a client-supplied "speech_event_id" is
+	// otherwise a free-form string ANY caller could set on a typed
+	// message, forging speech provenance and corrupting exactly the
+	// spoken-vs-typed distinction I1 exists to support. See
+	// validSourceEvent's own doc comment for what this repository is
+	// used to check.
+	events storage.LearningEventRepository
 }
 
 // NewService wires the conversation tutor pipeline.
-func NewService(repo storage.ConversationRepository, sessions storage.SessionRepository, agent *agentconversation.Agent, vocab *appvocabulary.Service, rec *learning.Recorder, grammar storage.GrammarRepository) *Service {
-	return &Service{repo: repo, sessions: sessions, agent: agent, vocab: vocab, rec: rec, grammar: grammar}
+func NewService(repo storage.ConversationRepository, sessions storage.SessionRepository, agent *agentconversation.Agent, vocab *appvocabulary.Service, rec *learning.Recorder, grammar storage.GrammarRepository, events storage.LearningEventRepository) *Service {
+	return &Service{repo: repo, sessions: sessions, agent: agent, vocab: vocab, rec: rec, grammar: grammar, events: events}
 }
 
 // Turn is one exchange in the conversation, as Say returns it: Reply is
@@ -121,16 +129,25 @@ type Summary struct {
 // sourceEventID is empty for ordinary typed input; when non-empty (set
 // by internal/adapters/http/conversation.go's conversationSay from the
 // conversation form's hidden "speech_event_id" field, which record.js
-// populates from POST /speech/transcribe's own response) it's the ID
-// of the speech.transcribed event that produced text, and is recorded
-// verbatim into the resulting conversation.turn event's Evidence as
-// "speech_event_id" (code review Important I1: without this, a
+// populates from POST /speech/transcribe's own response) it is
+// CLIENT-SUPPLIED and UNTRUSTED — Say validates it (validSourceEvent)
+// before recording anything, and only a value that resolves to a
+// genuine speech.transcribed event owned by identity, scoped to sid,
+// and not already attached to an earlier turn is recorded verbatim
+// into the resulting conversation.turn event's Evidence as
+// "speech_event_id" (code review Important I1: without this key, a
 // speech.transcribed event and the conversation.turn it became have no
-// key joining them, and Task 9's learning-outcome analytics can't tell
+// way to be joined, and Task 9's learning-outcome analytics can't tell
 // spoken production from typed — the entire reason PRD §66 asks for
-// ONE shared pipeline in the first place). This is still the SAME
-// pipeline for both — no branch on whether sourceEventID is set
-// changes what Say does beyond this one Evidence field.
+// ONE shared pipeline in the first place; a follow-up review then
+// found the naive version of this trusted the client outright, which
+// would have let any caller forge a typed message as speech-sourced,
+// including with another identity's real event id). A sourceEventID
+// that fails validation silently DOWNGRADES the turn to typed rather
+// than rejecting the request — a bad provenance hint must never lose
+// the learner's message. Either way this is still the SAME pipeline —
+// no branch on validity changes what Say does beyond this one Evidence
+// field.
 func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid session.ID, text string, sourceEventID string) (Turn, error) {
 	sess, err := s.sessions.Get(ctx, identity, sid)
 	if err != nil {
@@ -213,12 +230,16 @@ func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid sess
 		"position":    position,
 		"corrections": len(out.Corrections),
 	}
-	if sourceEventID != "" {
+	if sourceEventID != "" && s.validSourceEvent(ctx, identity, sid, sourceEventID) {
 		// The join key I1 asked for: Task 9 (or any future consumer) can
 		// match this conversation.turn back to the exact speech.
 		// transcribed event (internal/application/speech.Service.
 		// Transcribe's own Evidence carries duration_ms/mime/chars) that
 		// produced text, distinguishing spoken from typed production.
+		// Only ever set once validSourceEvent has confirmed the id is
+		// genuine, owned, scoped, and unused — see that method's doc
+		// comment. An invalid id silently downgrades to typed (this map
+		// simply never gets the key), never an error.
 		turnEvidence["speech_event_id"] = sourceEventID
 	}
 	if err := s.rec.Record(ctx, event.LearningEvent{
@@ -311,6 +332,64 @@ func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid sess
 		Timing:      sess.Profile.FeedbackTiming,
 		Pending:     pendingCount(shown, out.Corrections),
 	}, nil
+}
+
+// sourceEventLookupWindow bounds validSourceEvent's own event lookup —
+// generous enough that a genuine speech.transcribed event from earlier
+// in a long conversation session is still found (a session's total
+// event count is bounded by how many turns/corrections/speech clips
+// one sitting realistically produces), while still being a fixed,
+// non-unbounded query.
+const sourceEventLookupWindow = 500
+
+// validSourceEvent reports whether sourceEventID is safe to record as
+// a conversation.turn's "speech_event_id" evidence — code review's
+// post-I1 finding that the naive version of this (recording whatever
+// string the client sent) let ANY caller forge speech provenance onto
+// a typed message, including by replaying another identity's real
+// event id. All four conditions must hold:
+//
+//  1. sourceEventID resolves to an event that actually exists.
+//  2. That event's Type is event.TypeSpeechTranscribed (not some other
+//     event type reused as a forgery vector).
+//  3. It's owned by identity and scoped to sid — enforced by asking
+//     s.events.ListRecent for exactly this identity+session window,
+//     the same repository-level scoping every other identity-scoped
+//     lookup in this codebase relies on (a postgres implementation
+//     filters by identity_id/session_id in SQL; the id simply won't
+//     appear in the results otherwise — see internal/adapters/
+//     postgres/learningevents.go's ListRecent).
+//  4. It hasn't already been attached to an earlier conversation.turn
+//     in this same window — otherwise one real event id could be
+//     replayed to tag an unlimited number of typed messages as
+//     speech-sourced.
+//
+// Any of these failing returns false, never an error: Say's own
+// caller (this method's) treats a bad sourceEventID as "no provenance
+// hint" and proceeds with an ordinary typed turn — see Say's doc
+// comment on why a forged/invalid id downgrades rather than rejects.
+func (s *Service) validSourceEvent(ctx context.Context, identity learner.IdentityID, sid session.ID, sourceEventID string) bool {
+	events, err := s.events.ListRecent(ctx, identity, &sid, sourceEventLookupWindow)
+	if err != nil {
+		slog.Error("conversation: validate speech_event_id: list recent events", "err", err)
+		return false
+	}
+
+	found := false
+	for _, ev := range events {
+		if ev.Type == event.TypeConversationTurn {
+			if id, ok := ev.Evidence["speech_event_id"]; ok && id == sourceEventID {
+				return false // condition 4: already consumed by an earlier turn
+			}
+			continue
+		}
+		if ev.Type == event.TypeSpeechTranscribed && ev.ID == sourceEventID {
+			found = true // conditions 1-3: exists, right type, and — since
+			// ListRecent already scoped this whole query to identity+sid —
+			// owned and scoped correctly by construction.
+		}
+	}
+	return found
 }
 
 // pendingCount is Turn.Pending's definition: 0 whenever shown is

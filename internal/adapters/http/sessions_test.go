@@ -248,7 +248,7 @@ func testOptionsWithSessions() Options {
 	// Conversation.History on every render (Phase 4 Task 6) — wired
 	// over the SAME sessRepo opts.Sessions uses, so a session created
 	// through opts.Sessions is visible to it.
-	opts.Conversation = appconversation.NewService(newFakeConversationRepo(), sessRepo, agentconversation.New(fakeai.New()), nil, rec, fakeGrammarRepo{})
+	opts.Conversation = appconversation.NewService(newFakeConversationRepo(), sessRepo, agentconversation.New(fakeai.New()), nil, rec, fakeGrammarRepo{}, events)
 	// Feedback (Phase 4 Task W item 2): sessionsWorkspace also reads
 	// Feedback.ListForSession on every GET now (the feedback-history
 	// pane replacing the old activity feed), so every test hitting the
