@@ -58,7 +58,28 @@ const execTimeout = 120 * time.Second
 // search for a {...} object in. claude.go and codex.go each supply
 // one: claude's stdout is a JSON envelope to unwrap first; codex's is
 // raw text whose trailing line carries the answer.
-type extractFunc func(stdout []byte) ([]byte, error)
+type extractFunc func(stdout []byte) (cliOutput, error)
+
+// cliOutput is what an extractFunc recovers from a CLI's stdout. Text
+// is the answer to search for a balanced JSON object in; the rest is
+// telemetry the tool reported about its own run.
+//
+// An earlier version of this package asserted that "neither CLI's
+// non-interactive JSON output reports token counts". Live transcripts
+// from both tools falsify that: `claude -p --output-format json`
+// carries usage.input_tokens/output_tokens plus a modelUsage map keyed
+// by the model that actually answered, and `codex exec --json`'s final
+// turn.completed event carries its own usage block. Reporting them
+// makes the AI dashboard tell the truth about these adapters instead
+// of showing every CLI call as zero tokens.
+type cliOutput struct {
+	Text         []byte
+	InputTokens  int
+	OutputTokens int
+	// Model is the model the tool says answered, when it says. Empty
+	// leaves the reported model to reportedModel's own fallback chain.
+	Model string
+}
 
 // generator is the shared exec core both NewClaude and NewCodex build
 // on top of. Every field is set once at construction and never
@@ -68,6 +89,20 @@ type generator struct {
 	args     []string
 	provider string
 	extract  extractFunc
+	// modelLabel is what GenerateStructured reports as Model. Empty
+	// falls back to the "cli" placeholder above; a non-empty value means
+	// the operator pinned a model with --model, so the run genuinely
+	// used it and ai_requests should say so rather than "cli".
+	modelLabel string
+}
+
+// reportedModel is modelLabel when the operator pinned one, else the
+// honest "cli" placeholder.
+func (g *generator) reportedModel() string {
+	if g.modelLabel != "" {
+		return g.modelLabel
+	}
+	return model
 }
 
 // GenerateStructured renders req onto the CLI's stdin (System + "\n\n"
@@ -129,33 +164,40 @@ func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredReq
 			// directly so callers can detect it with errors.Is
 			// regardless of exactly how os/exec itself phrases the
 			// underlying kill/wait error.
-			return ai.StructuredResponse{Provider: g.provider, Model: model},
+			return ai.StructuredResponse{Provider: g.provider, Model: g.reportedModel()},
 				fmt.Errorf("clicmd: %s: %w", g.provider, execCtx.Err())
 		}
-		return ai.StructuredResponse{Provider: g.provider, Model: model},
+		return ai.StructuredResponse{Provider: g.provider, Model: g.reportedModel()},
 			fmt.Errorf("clicmd: %s: %w (stderr: %s)", g.provider, err, bytes.TrimSpace(stderr.Bytes()))
 	}
 
-	text, err := g.extract(stdout.Bytes())
+	out, err := g.extract(stdout.Bytes())
 	if err != nil {
-		return ai.StructuredResponse{Provider: g.provider, Model: model},
+		return ai.StructuredResponse{Provider: g.provider, Model: g.reportedModel()},
 			fmt.Errorf("clicmd: %s: %w", g.provider, err)
 	}
 
-	obj, ok := aiutil.ExtractJSONObject(string(text))
+	obj, ok := aiutil.ExtractJSONObject(string(out.Text))
 	if !ok {
-		return ai.StructuredResponse{Provider: g.provider, Model: model},
-			fmt.Errorf("clicmd: %s: no JSON object found in output: %s", g.provider, bytes.TrimSpace(text))
+		return ai.StructuredResponse{Provider: g.provider, Model: g.reportedModel()},
+			fmt.Errorf("clicmd: %s: no JSON object found in output: %s", g.provider, bytes.TrimSpace(out.Text))
+	}
+
+	// The tool's own report of which model answered beats both the
+	// operator's pin and the placeholder: it's the only one that
+	// reflects what actually ran (the CLI may substitute a fallback
+	// model of its own).
+	reported := g.reportedModel()
+	if out.Model != "" {
+		reported = out.Model
 	}
 
 	return ai.StructuredResponse{
-		JSON:     obj,
-		Provider: g.provider,
-		Model:    model,
-		// InputTokens/OutputTokens stay zero: neither CLI's
-		// non-interactive JSON output reports token counts, and
-		// there's no per-token billing to approximate anyway (PRD
-		// §23 frames these as a free, host-installed fallback).
-		Latency: time.Since(start),
+		JSON:         obj,
+		Provider:     g.provider,
+		Model:        reported,
+		InputTokens:  out.InputTokens,
+		OutputTokens: out.OutputTokens,
+		Latency:      time.Since(start),
 	}, nil
 }

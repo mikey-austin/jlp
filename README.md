@@ -193,6 +193,49 @@ the `/ai` page).
   APP_AI_CODEXCLI_BIN=         # optional override; defaults to "codex"
   ```
 
+  Model and effort are configurable per adapter. Both are optional:
+  unset means "pass no flag", leaving whatever the operator already
+  configured the CLI to do:
+
+  ```
+  APP_AI_CLAUDECLI_MODEL=sonnet          # --model
+  APP_AI_CLAUDECLI_EFFORT=low            # --effort: low|medium|high|xhigh|max
+  APP_AI_CODEXCLI_MODEL=                 # --model
+  APP_AI_CODEXCLI_EFFORT=low             # none|minimal|low|medium|high|xhigh
+  ```
+
+  The two tools spell effort differently and accept different values,
+  so each is validated against its own CLI's vocabulary at startup
+  rather than a shared invented one — `max` is meaningful to Claude
+  Code and unknown to Codex, `none`/`minimal` the other way round.
+  Claude Code takes `--effort` directly; Codex has no such flag, so
+  the adapter passes `-c model_reasoning_effort="<level>"`.
+
+  Both adapters report the token counts the CLI itself reports, and
+  Claude Code additionally names the model that actually answered
+  (from its `modelUsage` map), so `/ai` shows a real model and a real
+  cost rather than a `cli` placeholder at $0. Codex does not name a
+  model, so its rows read `cli` unless you pin one.
+
+  Measured live (Claude Code CLI 2.1.232, Codex CLI 0.135.0) on this
+  repo's `teacher.feedback` prompt: `claudecli` with
+  `--model sonnet --effort low` answered in ~11 s; `codexcli` with
+  `model_reasoning_effort=low` in ~8 s. Note that Codex rejects some
+  model names depending on your account type — `gpt-5.5-codex` returns
+  "not supported when using Codex with a ChatGPT account", so leaving
+  `APP_AI_CODEXCLI_MODEL` empty is the safer default.
+
+  **Antigravity is not usable as a provider.** Its CLI is the
+  VS Code–derived editor launcher, not a headless generator: the only
+  prompt-shaped subcommand, `antigravity chat`, hands the prompt to the
+  GUI (`--maximize`, `--reuse-window`, `--new-window`) and returns
+  immediately, printing only `Reading from stdin via: /tmp/code-stdin-…`
+  with no way to get the model's answer back on stdout. There is no
+  adapter for it, and one cannot be written against this interface.
+  If you want a third CLI provider, the `gemini` CLI is a real
+  candidate — it has a documented headless mode (`-p/--prompt`,
+  `-m/--model`, `-o/--output-format json`).
+
   Both send the prompt (system + user text, plus a trailing instruction
   naming the JSON schema to answer with) on the CLI's stdin —
   `claude -p --output-format json` / `codex exec --json` — under a

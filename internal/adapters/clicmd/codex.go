@@ -59,19 +59,70 @@ const codexProvider = "codexcli"
 // JSON-decode failure, or an object with no message-carrying field
 // all still exercise — when no such nested field yields a balanced
 // object.
-func extractCodexTrailingLine(stdout []byte) ([]byte, error) {
+// A live transcript (Codex CLI 0.135.0) since confirmed the enveloped
+// shape this was written defensively for, and pinned the exact events:
+//
+//	{"type":"thread.started","thread_id":"…"}
+//	{"type":"turn.started"}
+//	{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"{…answer…}"}}
+//	{"type":"turn.completed","usage":{"input_tokens":14168,"cached_input_tokens":2432,"output_tokens":231,…}}
+//
+// Two consequences. The answer is NOT on the trailing line —
+// turn.completed is — so the scan really does need to walk backwards
+// past non-answer events rather than trusting the last line. And usage
+// lives on that trailing event, so it must be collected on the way
+// past. See codex_transcript_test.go, which runs the real bytes.
+func extractCodexTrailingLine(stdout []byte) (cliOutput, error) {
+	out := cliOutput{}
 	lines := bytes.Split(bytes.TrimRight(stdout, "\n"), []byte("\n"))
+	var answer []byte
 	for i := len(lines) - 1; i >= 0; i-- {
 		line := bytes.TrimSpace(lines[i])
 		if len(line) == 0 {
 			continue
 		}
-		if nested, ok := findNestedJSONObject(line); ok {
-			return nested, nil
+		if out.InputTokens == 0 && out.OutputTokens == 0 {
+			if in, outTok, ok := codexUsage(line); ok {
+				out.InputTokens, out.OutputTokens = in, outTok
+				continue
+			}
 		}
-		return line, nil
+		if answer != nil {
+			continue
+		}
+		if nested, ok := findNestedJSONObject(line); ok {
+			answer = nested
+			continue
+		}
+		// A non-JSON trailing line is the bare-answer case: take it and
+		// stop, since earlier lines are then not part of the answer.
+		answer = line
+		break
 	}
-	return nil, fmt.Errorf("codex exec --json: empty output")
+	if answer == nil {
+		return cliOutput{}, fmt.Errorf("codex exec --json: empty output")
+	}
+	out.Text = answer
+	return out, nil
+}
+
+// codexUsage pulls token counts off a turn.completed event.
+// cached_input_tokens is counted into the input total for the same
+// reason claude.go sums its cache fields: they were really consumed,
+// and omitting them makes the dashboard understate the request.
+func codexUsage(line []byte) (input, output int, ok bool) {
+	var ev struct {
+		Type  string `json:"type"`
+		Usage struct {
+			InputTokens       int `json:"input_tokens"`
+			CachedInputTokens int `json:"cached_input_tokens"`
+			OutputTokens      int `json:"output_tokens"`
+		} `json:"usage"`
+	}
+	if err := json.Unmarshal(line, &ev); err != nil || ev.Type != "turn.completed" {
+		return 0, 0, false
+	}
+	return ev.Usage.InputTokens + ev.Usage.CachedInputTokens, ev.Usage.OutputTokens, true
 }
 
 // codexMessageFields is the set of JSON object key names
@@ -149,11 +200,26 @@ func searchJSONValue(v any) ([]byte, bool) {
 // host-mode AI fallback (PRD §23). See the package doc comment for the
 // host-mode-only caveat: cfg.Bin not being installed is not a
 // construction-time error, only a per-call one.
+// Model and Effort are appended only when set (same
+// empty-means-CLI-default contract as NewClaude). Codex has no
+// `--effort` flag: reasoning effort is a config key, overridden per
+// invocation with `-c`. The value is emitted as a quoted TOML string
+// because `-c` parses its value as TOML and only falls back to a raw
+// literal when that parse fails — relying on the fallback would be
+// depending on an error path.
 func NewCodex(cfg config.CodexCLI) ai.StructuredGenerator {
+	args := []string{"exec", "--json"}
+	if cfg.Model != "" {
+		args = append(args, "--model", cfg.Model)
+	}
+	if cfg.Effort != "" {
+		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", cfg.Effort))
+	}
 	return &generator{
-		bin:      cfg.Bin,
-		args:     []string{"exec", "--json"},
-		provider: codexProvider,
-		extract:  extractCodexTrailingLine,
+		bin:        cfg.Bin,
+		args:       args,
+		provider:   codexProvider,
+		extract:    extractCodexTrailingLine,
+		modelLabel: cfg.Model,
 	}
 }

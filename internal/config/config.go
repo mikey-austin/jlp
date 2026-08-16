@@ -98,19 +98,52 @@ type Ollama struct {
 // to "claude" (see Load's viper default) — the bare command name,
 // resolved via the process's PATH at call time, not construction
 // time: NewClaude never errors just because the binary isn't
-// installed (see the clicmd package doc comment), so this struct
-// carries no other fields to validate.
+// installed (see the clicmd package doc comment).
+//
+// Model and Effort are both optional: empty means "don't pass the flag
+// at all", leaving the CLI's own configured default in charge, which
+// is the right default for a tool the operator has already set up for
+// themselves. When set they map to `--model` and `--effort`.
 type ClaudeCLI struct {
-	Bin string
+	Bin    string
+	Model  string
+	Effort string
 }
 
 // CodexCLI configures internal/adapters/clicmd.NewCodex, the host-mode
 // OpenAI Codex CLI fallback (Task 12, PRD §23). Bin defaults to
 // "codex" (see Load's viper default); same construction-never-fails
-// contract as ClaudeCLI above.
+// and empty-means-CLI-default contract as ClaudeCLI above.
+//
+// Codex spells effort differently from Claude Code: it has no
+// `--effort` flag, taking it as a config override
+// (`-c model_reasoning_effort="high"`) instead, and its vocabulary is
+// minimal/low/medium/high with no xhigh or max. The two are validated
+// against their own CLI's real vocabulary rather than a shared
+// invented one — a value only one tool accepts must not silently pass
+// for the other (see claudeEfforts/codexEfforts in validate).
 type CodexCLI struct {
-	Bin string
+	Bin    string
+	Model  string
+	Effort string
 }
+
+// claudeEfforts/codexEfforts are each CLI's own accepted effort levels.
+// Claude Code's come from `claude --help` ("low, medium, high, xhigh,
+// max"); Codex's come from the Codex backend itself, which enumerated
+// them in an error while rejecting an unknown one ("expected one of
+// `none`, `minimal`, `low`, `medium`, `high`, `xhigh`") — an
+// authoritative list, not a guess from documentation.
+//
+// They deliberately differ: "max" is meaningful to Claude Code and
+// unknown to Codex, "none"/"minimal" the other way round. Validating
+// each against its own tool is the point — a value only one CLI
+// accepts must not silently pass for the other and fail later at
+// exec time.
+var (
+	claudeEfforts = []string{"low", "medium", "high", "xhigh", "max"}
+	codexEfforts  = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+)
 
 // Anki configures the optional AnkiConnect push (PRD §19,
 // internal/adapters/ankiconnect). ConnectURL empty (the default) means
@@ -425,7 +458,10 @@ func Load() (Config, error) {
 	for _, key := range []string{"server.port", "server.baseurl", "database.url",
 		"auth.mode", "auth.static.id", "auth.static.displayname",
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
-		"ai.ollama.url", "ai.ollama.model", "ai.claudecli.bin", "ai.codexcli.bin", "ai.routes", "ai.agenticteacher",
+		"ai.ollama.url", "ai.ollama.model", "ai.ollama.timeout",
+		"ai.claudecli.bin", "ai.claudecli.model", "ai.claudecli.effort",
+		"ai.codexcli.bin", "ai.codexcli.model", "ai.codexcli.effort",
+		"ai.routes", "ai.agenticteacher",
 		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url",
 		"a2a.enabled", "a2a.path",
 		"slack.apptoken", "slack.bottoken", "slack.smokechannel",
@@ -477,6 +513,18 @@ func (c Config) validate() error {
 	}
 	if _, err := ParseRoutes(c.AI.Routes); err != nil {
 		return err
+	}
+	// Effort vocabularies differ per CLI and are validated against each
+	// tool's own set: passing an unsupported level would otherwise only
+	// surface as a per-call exec failure, long after boot, on whichever
+	// prompt happened to route there first.
+	if c.AI.ClaudeCLI.Effort != "" && !slices.Contains(claudeEfforts, c.AI.ClaudeCLI.Effort) {
+		return fmt.Errorf("config: APP_AI_CLAUDECLI_EFFORT must be %s, got %q",
+			strings.Join(claudeEfforts, "|"), c.AI.ClaudeCLI.Effort)
+	}
+	if c.AI.CodexCLI.Effort != "" && !slices.Contains(codexEfforts, c.AI.CodexCLI.Effort) {
+		return fmt.Errorf("config: APP_AI_CODEXCLI_EFFORT must be %s, got %q",
+			strings.Join(codexEfforts, "|"), c.AI.CodexCLI.Effort)
 	}
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("config: invalid port %d", c.Server.Port)
