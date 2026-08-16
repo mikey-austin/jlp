@@ -13,6 +13,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	apppractice "github.com/mikeyaustin/jlp/internal/application/practice"
+	appretrieval "github.com/mikeyaustin/jlp/internal/application/retrieval"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
@@ -164,6 +165,10 @@ func (f *fakeVocabRepo) ListActivationCandidates(context.Context, learner.Identi
 func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
 	panic("not used by practice service tests")
 }
+func (f *fakeVocabRepo) GetByExpressions(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	panic("not used by practice service tests")
+}
+
 func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
 	panic("not used by practice service tests")
 }
@@ -214,7 +219,13 @@ func newTestHarness(gen ai.StructuredGenerator, prios storage.PriorityRepository
 	rec := learning.NewRecorder(events, inprocbus.New())
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
 	agent := drill.New(gen)
-	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec)
+	// retrieval is deliberately nil here: dueConcept treats a nil
+	// scheduler as "nothing due" (see its own doc comment), so every
+	// existing Start test in this file keeps exercising the
+	// planner/random-fallback path unchanged. TestStartPrefersDueConcept
+	// below builds its own Service directly with a real scheduler
+	// instead of going through this harness.
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, nil)
 	return &testHarness{svc: svc, repo: repo, grammar: grammarRepo, prios: prios, events: events}
 }
 
@@ -345,7 +356,7 @@ func TestAnswerCorrectChoiceNeverCallsAI(t *testing.T) {
 	ex := startExercise(t, h)
 
 	deny := &denyAfterStartGen{}
-	h.svc = apppractice.NewService(h.repo, drill.New(deny), planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, h.grammar, h.prios, &fakeVocabRepo{}, time.Now), h.grammar, learning.NewRecorder(h.events, inprocbus.New()))
+	h.svc = apppractice.NewService(h.repo, drill.New(deny), planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, h.grammar, h.prios, &fakeVocabRepo{}, time.Now), h.grammar, learning.NewRecorder(h.events, inprocbus.New()), nil)
 
 	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, ex.Answer, 4)
 	if err != nil {
@@ -519,5 +530,124 @@ func TestAnswerUnknownExerciseIDMisses(t *testing.T) {
 	_, err := h.svc.Answer(context.Background(), testIdentity, "does-not-exist", "x", 0)
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("Answer unknown id err = %v, want storage.ErrNotFound", err)
+	}
+}
+
+// --- Start / spaced retrieval (PRD §54) ---
+
+// fakeRetrievalRepoForPractice is a minimal storage.RetrievalRepository
+// double: only Due is exercised by practice.Service.dueConcept (via
+// retrieval.Scheduler.DueSubjects) — every other method panics, the
+// same "only what this package uses" convention fakeGrammarRepo etc.
+// above follow.
+type fakeRetrievalRepoForPractice struct {
+	due []storage.RetrievalItem
+}
+
+func (f *fakeRetrievalRepoForPractice) Upsert(context.Context, storage.RetrievalItem) error {
+	panic("not used by practice service tests")
+}
+func (f *fakeRetrievalRepoForPractice) Get(context.Context, learner.IdentityID, string, string) (storage.RetrievalItem, error) {
+	panic("not used by practice service tests")
+}
+func (f *fakeRetrievalRepoForPractice) Due(context.Context, learner.IdentityID, time.Time, int) ([]storage.RetrievalItem, error) {
+	return f.due, nil
+}
+func (f *fakeRetrievalRepoForPractice) List(context.Context, learner.IdentityID, int) ([]storage.RetrievalItem, error) {
+	panic("not used by practice service tests")
+}
+
+// TestStartPrefersDueConceptOverPlannerTopConcept pins the brief's
+// ordering: "practice picks a due subject before falling back to the
+// planner's top priority" — a concept due for spaced review wins even
+// though the planner has its own (different) top concept.
+func TestStartPrefersDueConceptOverPlannerTopConcept(t *testing.T) {
+	teFormConcept := grammar.Concept{Slug: "te-form", Name: "て-form", JLPTLevel: 5}
+	grammarRepo := &fakeGrammarRepo{
+		bySlug: map[string]grammar.Concept{
+			"te-form":          teFormConcept,
+			"i-adjective-past": iAdjectivePastConcept,
+		},
+	}
+	prios := &fakePriorityRepo{top: []storage.Priority{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "i-adjective-past", Score: 7.5},
+	}}
+	retrievalRepo := &fakeRetrievalRepoForPractice{due: []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "te-form"},
+	}}
+	sched := appretrieval.NewScheduler(retrievalRepo, time.Now)
+
+	repo := newFakeExerciseRepo()
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
+	agent := drill.New(fakeai.New())
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
+
+	ex, err := svc.Start(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if ex.ConceptSlug != "te-form" {
+		t.Fatalf("ConceptSlug = %q, want the DUE concept %q, not the planner's top concept", ex.ConceptSlug, "te-form")
+	}
+}
+
+// TestStartFallsBackToPlannerWhenNothingDueIsConceptType pins that a
+// due queue containing ONLY expression-type items (vocabulary due for
+// review, not a grammar concept) does not block the planner's own top
+// concept from driving Start.
+func TestStartFallsBackToPlannerWhenNothingDueIsConceptType(t *testing.T) {
+	grammarRepo := &fakeGrammarRepo{bySlug: map[string]grammar.Concept{"i-adjective-past": iAdjectivePastConcept}}
+	prios := &fakePriorityRepo{top: []storage.Priority{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "i-adjective-past", Score: 7.5},
+	}}
+	retrievalRepo := &fakeRetrievalRepoForPractice{due: []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "積もる"},
+	}}
+	sched := appretrieval.NewScheduler(retrievalRepo, time.Now)
+
+	repo := newFakeExerciseRepo()
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
+	agent := drill.New(fakeai.New())
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
+
+	ex, err := svc.Start(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if ex.ConceptSlug != "i-adjective-past" {
+		t.Fatalf("ConceptSlug = %q, want the planner's top concept %q (only an expression was due)", ex.ConceptSlug, "i-adjective-past")
+	}
+}
+
+// TestStartFallsBackToPlannerWhenDueConceptSlugIsStale pins the
+// stale-slug tolerance dueConcept documents: a due concept subject the
+// catalog no longer resolves is skipped, not treated as a hard error.
+func TestStartFallsBackToPlannerWhenDueConceptSlugIsStale(t *testing.T) {
+	grammarRepo := &fakeGrammarRepo{bySlug: map[string]grammar.Concept{"i-adjective-past": iAdjectivePastConcept}}
+	prios := &fakePriorityRepo{top: []storage.Priority{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "i-adjective-past", Score: 7.5},
+	}}
+	retrievalRepo := &fakeRetrievalRepoForPractice{due: []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "stale-slug-no-longer-in-catalog"},
+	}}
+	sched := appretrieval.NewScheduler(retrievalRepo, time.Now)
+
+	repo := newFakeExerciseRepo()
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
+	agent := drill.New(fakeai.New())
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
+
+	ex, err := svc.Start(context.Background(), testIdentity)
+	if err != nil {
+		t.Fatalf("Start returned error: %v", err)
+	}
+	if ex.ConceptSlug != "i-adjective-past" {
+		t.Fatalf("ConceptSlug = %q, want the planner's top concept %q (stale due slug must be skipped, not fatal)", ex.ConceptSlug, "i-adjective-past")
 	}
 }

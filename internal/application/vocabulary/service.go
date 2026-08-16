@@ -238,6 +238,15 @@ func (s *Service) List(ctx context.Context, identity learner.IdentityID, filter 
 	return s.repo.List(ctx, identity, filter)
 }
 
+// GetByExpressions is List's bounded sibling — a thin pass-through to
+// storage.VocabularyRepository.GetByExpressions, for a caller (Phase 4
+// Task 7's application/feedback.Service.dueExpressionItems) that needs
+// Reading/Meaning for a small, specific set of expressions rather than
+// the whole vocabulary.
+func (s *Service) GetByExpressions(ctx context.Context, identity learner.IdentityID, expressions []string) ([]vocabulary.Item, error) {
+	return s.repo.GetByExpressions(ctx, identity, expressions)
+}
+
 // formatSource combines an IngestEvent's Source.Type/Title into an
 // Item's free-text Source field: "novel: コンビニ人間" when both are
 // given, just whichever one when only one is, "" when neither is.

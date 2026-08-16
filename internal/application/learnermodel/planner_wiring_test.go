@@ -95,6 +95,10 @@ func (panicVocabRepo) ListActivationCandidates(context.Context, learner.Identity
 	panic("not used by planner wiring tests")
 }
 
+func (panicVocabRepo) GetByExpressions(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	panic("not used by planner wiring tests")
+}
+
 func (panicVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
 	panic("not used by planner wiring tests")
 }

@@ -121,7 +121,7 @@ func practiceTestServer(t *testing.T) (http.Handler, *practiceExerciseRepo, *fak
 		bySlug:   map[string]grammar.Concept{practiceTestConcept.Slug: practiceTestConcept},
 	}
 	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, grammarRepo, practicePriorityRepo{}, &fakeVocabRepo{}, time.Now)
-	opts.Practice = apppractice.NewService(exerciseRepo, drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec)
+	opts.Practice = apppractice.NewService(exerciseRepo, drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, nil)
 
 	srv := NewServer(opts)
 	return srv.HandlerForTest(), exerciseRepo, events

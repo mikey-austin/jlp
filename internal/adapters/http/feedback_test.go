@@ -334,7 +334,7 @@ func feedbackTestServerWithMode(t *testing.T, content, teacherMode string) (http
 	// NewService doc comment). obsRepo is only there to satisfy
 	// NewPlanner's signature — ActivationCandidates never touches it.
 	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, fakeGrammarRepo{}, fakePriorityRepo{}, vocabRepo, time.Now)
-	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec, false, nil)
+	opts.Feedback = appfeedback.NewService(sessionRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec, false, nil, nil)
 	// AIProviders/AIDefaultProvider (Phase 4 Task W item 5): these tests
 	// wire teacher.New(fakeai.New()) directly, not through airouter, so
 	// fakeai itself ignores whatever ProviderOverride ends up on the

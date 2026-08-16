@@ -154,6 +154,10 @@ func (f *fakeVocabRepo) ListActivationCandidates(_ context.Context, identity lea
 	return items, nil
 }
 
+func (f *fakeVocabRepo) GetByExpressions(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	panic("not used by planner tests")
+}
+
 func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
 	panic("not used by planner tests")
 }

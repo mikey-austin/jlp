@@ -72,6 +72,13 @@ type Options struct {
 	// Priorities — shown alongside the priority table so a learner can
 	// see both the current read AND what it's derived from.
 	Observations storage.ObservationRepository
+	// Retrieval backs the /learner page's 復習キュー (review queue) table
+	// (Task 7, PRD §54): List(N), the same "raw repository for a GET
+	// listing page" split Priorities/Observations above already use —
+	// application/retrieval.Scheduler's own mutating side
+	// (RecordOutcome) is reached only through the event-bus Consumer
+	// (see main.go), never from an HTTP handler.
+	Retrieval storage.RetrievalRepository
 	// Vocabulary backs both the /vocabulary page's List and POST
 	// /api/v1/vocabulary/events's Ingest (Task 6, PRD §12) — a single
 	// application-layer service rather than a raw repository (unlike

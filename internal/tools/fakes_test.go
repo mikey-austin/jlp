@@ -157,6 +157,9 @@ func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map
 func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
 	return nil
 }
+func (f *fakeVocabRepo) GetByExpressions(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	return nil, nil
+}
 func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
 	return 0, nil
 }

@@ -259,7 +259,7 @@ func testOptionsWithSessions() Options {
 	vocabRepo := newFakeVocabRepo()
 	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
 	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, fakeGrammarRepo{}, fakePriorityRepo{}, vocabRepo, time.Now)
-	opts.Feedback = appfeedback.NewService(sessRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec, false, nil)
+	opts.Feedback = appfeedback.NewService(sessRepo, docRepo, feedbackRepo, fakeGrammarRepo{}, fakePriorityRepo{}, teachingPlanner, vocabSvc, teacher.New(fakeai.New()), rec, false, nil, nil)
 	return opts
 }
 

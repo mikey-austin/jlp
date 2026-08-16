@@ -119,6 +119,16 @@ func (f *fakeVocabRepo) AllExpressions(_ context.Context, identity learner.Ident
 	return out, nil
 }
 
+func (f *fakeVocabRepo) GetByExpressions(_ context.Context, identity learner.IdentityID, expressions []string) ([]vocabulary.Item, error) {
+	out := make([]vocabulary.Item, 0, len(expressions))
+	for _, expr := range expressions {
+		if item, ok := f.items[vocabKey(identity, expr)]; ok {
+			out = append(out, *item)
+		}
+	}
+	return out, nil
+}
+
 // SeedBank mirrors the real adapter's insert-if-absent contract (see
 // storage.VocabularyRepository.SeedBank): a no-op per-entry when
 // (identity, expression) already has a row. Not exercised by any

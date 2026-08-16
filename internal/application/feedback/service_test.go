@@ -16,6 +16,7 @@ import (
 	appfeedback "github.com/mikeyaustin/jlp/internal/application/feedback"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
+	appretrieval "github.com/mikeyaustin/jlp/internal/application/retrieval"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
@@ -442,6 +443,13 @@ type fakeVocabRepo struct {
 	// planner.ActivationCandidates failure surfaces as a
 	// RequestFeedback error.
 	listErr error
+	// allItems backs GetByExpressions — feedback.Service.
+	// dueExpressionItems' resolve-a-due-subject-back-to-Reading/Meaning
+	// step (PRD §54). Unset (nil) is fine for every test that never
+	// seeds a due expression: dueExpressionItems only calls
+	// GetByExpressions at all once retrieval.Scheduler.DueSubjects has
+	// reported a due "expression" item, which nothing does by default.
+	allItems []vocabulary.Item
 }
 
 type productionCall struct {
@@ -474,6 +482,24 @@ func (f *fakeVocabRepo) RecordProduction(_ context.Context, _ learner.IdentityID
 
 func (f *fakeVocabRepo) List(context.Context, learner.IdentityID, string) ([]vocabulary.Item, error) {
 	panic("not used by feedback service tests")
+}
+
+// GetByExpressions is a bounded lookup over f.allItems (see that
+// field's doc comment) — the real adapter's indexed WHERE expression =
+// ANY(...) query, mirrored here as a plain linear filter since
+// allItems is always small in these tests.
+func (f *fakeVocabRepo) GetByExpressions(_ context.Context, _ learner.IdentityID, expressions []string) ([]vocabulary.Item, error) {
+	want := make(map[string]bool, len(expressions))
+	for _, e := range expressions {
+		want[e] = true
+	}
+	out := make([]vocabulary.Item, 0, len(expressions))
+	for _, it := range f.allItems {
+		if want[it.Expression] {
+			out = append(out, it)
+		}
+	}
+	return out, nil
 }
 
 // ListActivationCandidates mirrors the real adapter's contract (sort
@@ -514,6 +540,29 @@ func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []s
 	panic("not used by feedback service tests")
 }
 
+// fakeRetrievalRepo is a storage.RetrievalRepository double: only Due
+// is exercised by feedback.Service.dueExpressionItems (via
+// retrieval.Scheduler.DueSubjects) — Upsert/Get/List all panic if
+// called, the same "only what this package uses" convention every
+// other fake in this file follows. due is set directly by a test that
+// wants expressionsToEncourage to see a due expression.
+type fakeRetrievalRepo struct {
+	due []storage.RetrievalItem
+}
+
+func (f *fakeRetrievalRepo) Upsert(context.Context, storage.RetrievalItem) error {
+	panic("not used by feedback service tests")
+}
+func (f *fakeRetrievalRepo) Get(context.Context, learner.IdentityID, string, string) (storage.RetrievalItem, error) {
+	panic("not used by feedback service tests")
+}
+func (f *fakeRetrievalRepo) Due(context.Context, learner.IdentityID, time.Time, int) ([]storage.RetrievalItem, error) {
+	return f.due, nil
+}
+func (f *fakeRetrievalRepo) List(context.Context, learner.IdentityID, int) ([]storage.RetrievalItem, error) {
+	panic("not used by feedback service tests")
+}
+
 // knownConceptsForFakeAI mirrors the two concept slugs
 // internal/adapters/fakeai tags corrections with (i-adjective-past,
 // particle-ni-direction), so the default test harness's candidate list
@@ -543,6 +592,7 @@ type testHarness struct {
 	events     *fakeEventStore
 	priorities *fakePriorityRepo
 	vocab      *fakeVocabRepo
+	retrieval  *fakeRetrievalRepo
 }
 
 // newTestHarness wires the default harness over fakeai — its
@@ -576,8 +626,14 @@ func newTestHarnessWithGenerator(gen ai.StructuredGenerator) *testHarness {
 	// signature; ActivationCandidates never touches them.
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, events, grammarRepo, priorities, vocabRepo, time.Now)
 	t := teacher.New(gen)
-	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, teachingPlanner, vocabSvc, t, rec, false, nil)
-	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events, priorities: priorities, vocab: vocabRepo}
+	// retrievalRepo starts with nothing due — TestExpressionsToEncourage*
+	// tests that care about the due-preference path set retrievalRepo.due
+	// directly (via the returned harness's retrieval field) before
+	// calling RequestFeedback.
+	retrievalRepo := &fakeRetrievalRepo{}
+	retrievalSched := appretrieval.NewScheduler(retrievalRepo, time.Now)
+	svc := appfeedback.NewService(sessions, docs, repo, grammarRepo, priorities, teachingPlanner, vocabSvc, t, rec, false, nil, retrievalSched)
+	return &testHarness{svc: svc, sessions: sessions, docs: docs, repo: repo, grammar: grammarRepo, events: events, priorities: priorities, vocab: vocabRepo, retrieval: retrievalRepo}
 }
 
 func (h *testHarness) putSession(s session.Session) {
@@ -1367,6 +1423,84 @@ func TestRequestFeedbackExpressionsToEncourageReachRenderedPrompt(t *testing.T) 
 	}
 	if gen.lastReq.PromptVersion != "v3" {
 		t.Fatalf("PromptVersion = %q, want v3", gen.lastReq.PromptVersion)
+	}
+}
+
+// TestRequestFeedbackExpressionsToEncourageDueExpressionComesFirst pins
+// the brief's "the feedback prompt's existing 'expressions to
+// encourage' block prefers due expressions" (PRD §54): a due
+// expression must appear in the encourage block AHEAD of a plain
+// activation candidate, even though the activation candidate has far
+// higher Lookups (which would otherwise put it first).
+func TestRequestFeedbackExpressionsToEncourageDueExpressionComesFirst(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.vocab.activateItems = []vocabulary.Item{
+		{Expression: "気がしないでもない", Reading: "きがしないでもない", Meaning: "I do feel a bit like...", Kind: vocabulary.KindExpression, Lookups: 99},
+	}
+	h.vocab.allItems = []vocabulary.Item{
+		{Expression: "積もる", Reading: "つもる", Meaning: "to pile up", Kind: vocabulary.KindExpression},
+	}
+	h.retrieval.due = []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "積もる"},
+	}
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+
+	prompt := gen.lastReq.User
+	dueLine := "積もる (つもる) — to pile up"
+	activationLine := "気がしないでもない"
+	dueIdx := strings.Index(prompt, dueLine)
+	activationIdx := strings.Index(prompt, activationLine)
+	if dueIdx == -1 {
+		t.Fatalf("rendered prompt missing the due expression's line %q: %q", dueLine, prompt)
+	}
+	if activationIdx == -1 {
+		t.Fatalf("rendered prompt missing the activation candidate's line: %q", prompt)
+	}
+	if dueIdx > activationIdx {
+		t.Fatalf("due expression line (at %d) did not precede the activation candidate's (at %d): %q", dueIdx, activationIdx, prompt)
+	}
+}
+
+// TestRequestFeedbackExpressionsToEncourageDueExpressionDeduplicated
+// pins that a due expression which ALSO appears in the plain activation
+// ranking is listed exactly once, not twice.
+func TestRequestFeedbackExpressionsToEncourageDueExpressionDeduplicated(t *testing.T) {
+	gen := &capturingGen{}
+	h := newTestHarnessWithGenerator(gen)
+	h.vocab.activateItems = []vocabulary.Item{
+		{Expression: "積もる", Reading: "つもる", Meaning: "to pile up", Kind: vocabulary.KindExpression},
+	}
+	h.vocab.allItems = []vocabulary.Item{
+		{Expression: "積もる", Reading: "つもる", Meaning: "to pile up", Kind: vocabulary.KindExpression},
+	}
+	h.retrieval.due = []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "積もる"},
+	}
+	h.putSession(session.Session{ID: testSessionID, IdentityID: testIdentity, Purpose: "diary", Profile: testProfile()})
+	content := "とても面白いでした"
+	h.docs.put(writing.Document{ID: testDocID, SessionID: testSessionID, IdentityID: testIdentity, Content: content, Version: 1})
+
+	_, err := h.svc.RequestFeedback(context.Background(), appfeedback.Request{
+		Identity: testIdentity, SessionID: testSessionID, DocumentID: testDocID,
+		Start: 0, End: len([]rune(content)),
+	})
+	if err != nil {
+		t.Fatalf("RequestFeedback returned error: %v", err)
+	}
+
+	if count := strings.Count(gen.lastReq.User, "積もる"); count != 1 {
+		t.Fatalf("rendered prompt mentions 積もる %d times, want exactly 1 (deduplicated): %q", count, gen.lastReq.User)
 	}
 }
 

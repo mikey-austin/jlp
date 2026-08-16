@@ -6,18 +6,25 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 )
 
 // funcs are the helpers every page/partial template can call.
 // html/template has no arithmetic (or string-casing) of its own, so
 // display conversions live here once rather than being recomputed ad
 // hoc in each handler that needs them: "percent" turns the dashboard's
-// 納得率 ratio into a display percentage, and "lower" turns a JLPT
-// chip's display text ("N5") into the lowercase suffix Task 9's
-// per-level badge classes use (.badge--jlpt-n5).
+// 納得率 ratio into a display percentage, "lower" turns a JLPT chip's
+// display text ("N5") into the lowercase suffix Task 9's per-level
+// badge classes use (.badge--jlpt-n5), and "days" turns a
+// storage.RetrievalItem.Interval time.Duration into the whole-day count
+// the /learner 復習キュー table displays (Phase 4 Task 7, PRD §54) —
+// every interval the scheduler ever stores is an exact multiple of 24h
+// (see application/retrieval's steps table), so integer division never
+// loses information here.
 var funcs = template.FuncMap{
 	"percent": func(ratio float64) string { return fmt.Sprintf("%.0f", ratio*100) },
 	"lower":   strings.ToLower,
+	"days":    func(d time.Duration) int64 { return int64(d / (24 * time.Hour)) },
 }
 
 // Render executes page against the shared layout. It also loads every

@@ -192,6 +192,10 @@ func (f *fakeVocabRepo) ListActivationCandidates(_ context.Context, _ learner.Id
 func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
 	panic("not used by lessons service tests")
 }
+func (f *fakeVocabRepo) GetByExpressions(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	panic("not used by lessons service tests")
+}
+
 func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
 	panic("not used by lessons service tests")
 }

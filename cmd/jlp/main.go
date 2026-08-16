@@ -39,6 +39,7 @@ import (
 	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
+	appretrieval "github.com/mikeyaustin/jlp/internal/application/retrieval"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appsettings "github.com/mikeyaustin/jlp/internal/application/settings"
 	appsummary "github.com/mikeyaustin/jlp/internal/application/summary"
@@ -221,6 +222,26 @@ func main() {
 		// construction of it.
 		feedbackRepo := postgres.NewFeedbackRepository(pool)
 
+		// The spaced-retrieval scheduler (Phase 4 Task 7, PRD §54):
+		// retrievalSched is shared by feedbackSvc (the encourage block's
+		// due-expression preference) and practiceSvc (Start's due-concept
+		// preference) below, and by retrievalConsumer here, which reacts
+		// to the three outcome events that already exist — quiz.answered,
+		// correction.retried, vocabulary.produced-correctly — the same
+		// "subscribe a consumer's HandleEvent to the events it classifies"
+		// wiring obsUpdater below uses. Unlike obsUpdater, it needs no
+		// repository of its own beyond retrievalRepo: a correction.retried
+		// event's concept slug(s) arrive directly in its own Evidence
+		// (feedback.Service.RetryCorrection threads them through — see
+		// application/retrieval.Consumer's own doc comment on why, rather
+		// than this consumer re-querying feedbackRepo itself).
+		retrievalRepo := postgres.NewRetrievalRepository(pool)
+		retrievalSched := appretrieval.NewScheduler(retrievalRepo, time.Now)
+		retrievalConsumer := appretrieval.NewConsumer(retrievalSched)
+		bus.Subscribe(event.TypeQuizAnswered, retrievalConsumer.HandleEvent)
+		bus.Subscribe(event.TypeCorrectionRetried, retrievalConsumer.HandleEvent)
+		bus.Subscribe(event.TypeVocabularyProducedCorrectly, retrievalConsumer.HandleEvent)
+
 		// The tool registry (Phase 4 Task 1/2, PRD §27-§29/§64): the
 		// ONLY route any agent has from a tool-calling conversation to
 		// real application state. Read-only tools whose dependencies
@@ -284,6 +305,7 @@ func main() {
 			recorder,
 			cfg.AI.AgenticTeacher,
 			runner,
+			retrievalSched,
 		)
 		analyticsSvc := analytics.NewService(postgres.NewAnalyticsRepository(pool))
 		aiRatingRepo := postgres.NewAIRatingRepository(pool)
@@ -296,7 +318,7 @@ func main() {
 		// TopConcept's own concept resolution) — the same shared
 		// instances feedbackSvc's construction above already established.
 		drillAgent := drill.New(aiGen)
-		practiceSvc := practice.NewService(postgres.NewExerciseRepository(pool), drillAgent, teachingPlanner, grammarRepo, recorder)
+		practiceSvc := practice.NewService(postgres.NewExerciseRepository(pool), drillAgent, teachingPlanner, grammarRepo, recorder, retrievalSched)
 
 		// The conversation tutor (Phase 4 Task 6, PRD §17.4): a free-form
 		// dialogue alternative to the writing/feedback pane, in the same
@@ -462,6 +484,7 @@ func main() {
 			Grammar:            grammarRepo,
 			Priorities:         prioRepo,
 			Observations:       obsRepo,
+			Retrieval:          retrievalRepo,
 			Vocabulary:         vocabSvc,
 			Practice:           practiceSvc,
 			Anki:               ankiSvc,

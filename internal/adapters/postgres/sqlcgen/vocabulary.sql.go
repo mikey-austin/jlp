@@ -59,6 +59,64 @@ func (q *Queries) GetVocabularyItem(ctx context.Context, id pgtype.UUID) (Vocabu
 	return i, err
 }
 
+const getVocabularyItemsByExpressions = `-- name: GetVocabularyItemsByExpressions :many
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags
+FROM vocabulary_items
+WHERE identity_id = $1 AND expression = ANY($2::text[])
+`
+
+type GetVocabularyItemsByExpressionsParams struct {
+	IdentityID  string
+	Expressions []string
+}
+
+// Bounded lookup for a SMALL, caller-supplied set of expressions —
+// application/feedback.Service.dueExpressionItems' resolve-a-due-
+// subject-back-to-Reading/Meaning step (PRD §54): unlike
+// ListVocabularyItems (filter=""), which scans the identity's ENTIRE
+// vocabulary, this is indexed on (identity_id, expression) and returns
+// at most len(expressions) rows — the same "push the bound into SQL"
+// principle ListVocabularyActivationCandidates documents above, so
+// resolving a handful of due expressions stays cheap regardless of how
+// large a learner's vocabulary grows.
+func (q *Queries) GetVocabularyItemsByExpressions(ctx context.Context, arg GetVocabularyItemsByExpressionsParams) ([]VocabularyItem, error) {
+	rows, err := q.db.Query(ctx, getVocabularyItemsByExpressions, arg.IdentityID, arg.Expressions)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VocabularyItem
+	for rows.Next() {
+		var i VocabularyItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdentityID,
+			&i.Expression,
+			&i.Reading,
+			&i.Meaning,
+			&i.Kind,
+			&i.JlptLevel,
+			&i.Source,
+			&i.Lookups,
+			&i.Productions,
+			&i.SuccessfulProductions,
+			&i.FirstSeen,
+			&i.LastEvent,
+			&i.MeaningEn,
+			&i.Tags,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertVocabularyEvent = `-- name: InsertVocabularyEvent :exec
 INSERT INTO vocabulary_events (id, identity_id, item_id, type, payload, client_event_id, occurred_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

@@ -32,6 +32,21 @@
     </table>
   </div>
 
+  <h2>復習キュー</h2>
+  <div class="table-card table-card--stack">
+    <table>
+      <thead><tr><th>対象</th><th>種類</th><th>期日</th><th>間隔</th></tr></thead>
+      <tbody>
+        {{range .Retrieval}}<tr>
+          <td data-label="対象">{{.Subject}}</td>
+          <td data-label="種類"><span class="badge badge--type">{{.SubjectType}}</span></td>
+          <td data-label="期日">{{.DueAt.Format "2006-01-02"}}</td>
+          <td data-label="間隔">{{days .Interval}}日</td>
+        </tr>{{else}}<tr><td colspan="4" class="empty">復習予定がありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+
   <h2>エージェント利用</h2>
   <div class="table-card table-card--stack">
     <table>

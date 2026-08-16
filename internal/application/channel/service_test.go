@@ -289,6 +289,10 @@ func (f *fakeVocabRepo) ListActivationCandidates(context.Context, learner.Identi
 func (f *fakeVocabRepo) AllExpressions(context.Context, learner.IdentityID) (map[string]string, error) {
 	return map[string]string{}, nil
 }
+func (f *fakeVocabRepo) GetByExpressions(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	panic("not used by channel service tests")
+}
+
 func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
 	panic("not used by channel service tests")
 }
@@ -382,11 +386,11 @@ func newTestHarness(allowFrom string) *testHarness {
 
 	sessionsSvc := sessions.NewService(sessionRepo)
 	teacherAgent := teacher.New(fakeai.New())
-	feedbackSvc := feedback.NewService(sessionRepo, docRepo, feedbackRepo, grammarRepo, prioRepo, teachingPlanner, vocabSvc, teacherAgent, rec, false, nil)
+	feedbackSvc := feedback.NewService(sessionRepo, docRepo, feedbackRepo, grammarRepo, prioRepo, teachingPlanner, vocabSvc, teacherAgent, rec, false, nil, nil)
 
 	exerciseRepo := newFakeExerciseRepo()
 	drillAgent := drill.New(fakeai.New())
-	practiceSvc := practice.NewService(exerciseRepo, drillAgent, teachingPlanner, grammarRepo, rec)
+	practiceSvc := practice.NewService(exerciseRepo, drillAgent, teachingPlanner, grammarRepo, rec, nil)
 
 	svc := appchannel.NewService(sessionsSvc, feedbackSvc, practiceSvc, docRepo, identityRepo, config.Channels{AllowFrom: allowFrom})
 

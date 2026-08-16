@@ -400,6 +400,58 @@ func TestVocabularyAllExpressionsMapsExpressionToItemID(t *testing.T) {
 	}
 }
 
+// TestVocabularyGetByExpressionsReturnsOnlyMatchingRowsForIdentity pins
+// GetByExpressions' bounded lookup (Phase 4 Task 7, PRD §54): only rows
+// whose expression is in the requested set, and only for the calling
+// identity, come back — a requested expression with no matching row
+// (or one belonging to a different identity) is simply absent, not an
+// error. Also pins that an empty expressions slice short-circuits to
+// an empty result without even querying (see the adapter's own doc
+// comment).
+func TestVocabularyGetByExpressionsReturnsOnlyMatchingRowsForIdentity(t *testing.T) {
+	repo, identity := vocabTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	otherIdentity := learner.IdentityID("test-vocab-other-" + uuid.NewString())
+	identities := NewIdentityRepository(repo.pool)
+	if err := identities.Upsert(ctx, learner.Identity{ID: otherIdentity, DisplayName: "Other"}); err != nil {
+		t.Fatal(err)
+	}
+
+	item1, _, err := repo.UpsertOnLookup(ctx, identity, "積もる", "つもる", "to pile up", "", "", vocabulary.KindWord, "", now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := repo.UpsertOnLookup(ctx, identity, "取り組む", "とりくむ", "to tackle", "", "", vocabulary.KindWord, "", now); err != nil {
+		t.Fatal(err)
+	}
+	// Same expression string, but belongs to a DIFFERENT identity — must
+	// never leak into identity's own GetByExpressions result.
+	if _, _, err := repo.UpsertOnLookup(ctx, otherIdentity, "積もる", "つもる", "to pile up", "", "", vocabulary.KindWord, "", now); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := repo.GetByExpressions(ctx, identity, []string{"積もる", "not-looked-up-at-all"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("GetByExpressions returned %d items, want 1: %+v", len(got), got)
+	}
+	if got[0].ID != item1.ID || got[0].Expression != "積もる" || got[0].Meaning != "to pile up" {
+		t.Fatalf("GetByExpressions[0] = %+v, want the 積もる item", got[0])
+	}
+
+	empty, err := repo.GetByExpressions(ctx, identity, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("GetByExpressions(nil) = %+v, want empty", empty)
+	}
+}
+
 // TestVocabularySeedBankInsertsOnceAndNeverResetsCounts pins the
 // brief's seed-idempotency requirement (Task 7, PRD §55/§17.5): a first
 // SeedBank call creates a zero-count baseline row; once the learner has

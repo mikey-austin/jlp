@@ -169,6 +169,10 @@ func (f *fakeVocabRepo) RecordProduction(_ context.Context, _ learner.IdentityID
 func (f *fakeVocabRepo) ListActivationCandidates(context.Context, learner.IdentityID, int) ([]vocabulary.Item, error) {
 	panic("not used")
 }
+func (f *fakeVocabRepo) GetByExpressions(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	panic("not used by conversation service tests")
+}
+
 func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary.BankEntry, time.Time) error {
 	panic("not used")
 }
@@ -554,11 +558,11 @@ func TestSayDelayedTimingSecondBatchDoesNotReReleaseFirst(t *testing.T) {
 	ctx := context.Background()
 	msgs := []string{
 		"昨日の映画はとても面白いでした。", // turn 1: correction (withheld)
-		"今日は楽しいでした。",          // turn 2: correction (withheld)
-		"映画について話しましょう。",      // turn 3: batch boundary — releases turns 1-2 (2 corrections)
-		"明日は晴れるでしょう。",         // turn 4: clean (withheld, new window)
-		"猫が好きです。",             // turn 5: clean (withheld, new window)
-		"それはとても面白いでした。",      // turn 6: batch boundary — must release ONLY turn 6's own (1)
+		"今日は楽しいでした。",       // turn 2: correction (withheld)
+		"映画について話しましょう。",    // turn 3: batch boundary — releases turns 1-2 (2 corrections)
+		"明日は晴れるでしょう。",      // turn 4: clean (withheld, new window)
+		"猫が好きです。",          // turn 5: clean (withheld, new window)
+		"それはとても面白いでした。",    // turn 6: batch boundary — must release ONLY turn 6's own (1)
 	}
 	var turns []appconversation.Turn
 	for i, m := range msgs {

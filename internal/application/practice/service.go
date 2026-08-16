@@ -19,6 +19,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/agent/drill"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
+	appretrieval "github.com/mikeyaustin/jlp/internal/application/retrieval"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
@@ -45,31 +46,56 @@ const (
 	deterministicWrongScore   = 0
 )
 
+// dueSubjectsScanLimit caps how many of the scheduler's most-due items
+// Start scans looking for the first "concept" one (see dueConcept):
+// DueSubjects can return "expression" items too (vocabulary due for
+// review), which Start has no use for, so it looks a little past the
+// single most-due item rather than falling back to the planner just
+// because the very top of the queue happens to be an expression.
+const dueSubjectsScanLimit = 5
+
 // Service wires the drill pipeline. planner and grammar are used ONLY
 // by Start, to decide what concept to drill next (see TopConcept and
-// randomCatalogConcept below) — Answer never touches them.
+// randomCatalogConcept below) — Answer never touches them. retrieval is
+// also Start-only (see dueConcept): a due subject takes priority over
+// the planner's own top concept (PRD §54's queue is meant to actually
+// resurface, not just sit unread on /learner).
 type Service struct {
-	repo    storage.ExerciseRepository
-	agent   *drill.Agent
-	planner *planner.Planner
-	grammar storage.GrammarRepository
-	rec     *learning.Recorder
+	repo      storage.ExerciseRepository
+	agent     *drill.Agent
+	planner   *planner.Planner
+	grammar   storage.GrammarRepository
+	rec       *learning.Recorder
+	retrieval *appretrieval.Scheduler
 }
 
 // NewService wires the practice pipeline.
-func NewService(repo storage.ExerciseRepository, agent *drill.Agent, plnr *planner.Planner, grammarRepo storage.GrammarRepository, rec *learning.Recorder) *Service {
-	return &Service{repo: repo, agent: agent, planner: plnr, grammar: grammarRepo, rec: rec}
+func NewService(repo storage.ExerciseRepository, agent *drill.Agent, plnr *planner.Planner, grammarRepo storage.GrammarRepository, rec *learning.Recorder, retrieval *appretrieval.Scheduler) *Service {
+	return &Service{repo: repo, agent: agent, planner: plnr, grammar: grammarRepo, rec: rec, retrieval: retrieval}
 }
 
-// Start generates and persists one new exercise for identity: the
-// planner's top concept (planner.Planner.TopConcept) when identity has
-// a live grammar weakness, or a random catalog concept otherwise (a
-// brand-new learner, or one whose top priority isn't concept-type).
+// Start generates and persists one new exercise for identity, picking
+// what to drill in priority order (PRD §54's queue takes precedence
+// over PRD §16's adapt loop, which in turn beats a cold start):
+//  1. a concept due for spaced review (dueConcept, PRD §54) —
+//     resurfacing something the learner is about to forget beats
+//     drilling a fresh weakness;
+//  2. the planner's top concept (planner.Planner.TopConcept) when
+//     identity has a live grammar weakness and nothing is due;
+//  3. a random catalog concept otherwise (a brand-new learner, or one
+//     whose top priority isn't concept-type).
+//
 // Records quiz.started with Evidence {"concept":…, "type":…}.
 func (s *Service) Start(ctx context.Context, identity learner.IdentityID) (exercise.Exercise, error) {
-	concept, ok, err := s.planner.TopConcept(ctx, identity)
+	concept, ok, err := s.dueConcept(ctx, identity)
 	if err != nil {
-		return exercise.Exercise{}, fmt.Errorf("practice: top concept: %w", err)
+		return exercise.Exercise{}, fmt.Errorf("practice: due concept: %w", err)
+	}
+	if !ok {
+		concept, ok, err = s.planner.TopConcept(ctx, identity)
+		if err != nil {
+			return exercise.Exercise{}, fmt.Errorf("practice: top concept: %w", err)
+		}
 	}
 	if !ok {
 		concept, err = s.randomCatalogConcept(ctx)
@@ -105,6 +131,41 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID) (exerc
 	}
 
 	return ex, nil
+}
+
+// dueConcept looks for a concept Start should drill because it's due
+// for spaced review (PRD §54): the identity's most-due items
+// (retrieval.Scheduler.DueSubjects, scanned up to dueSubjectsScanLimit
+// deep), returning the first one whose SubjectType is "concept",
+// resolved to a grammar.Concept the same way TopConcept resolves its
+// own subject. ok is false — with no error — when retrieval is nil (a
+// caller that hasn't wired the scheduler, e.g. some existing tests),
+// nothing is due, only "expression" items are due, or the due
+// concept's slug no longer resolves (storage.ErrNotFound from
+// GetConcept — the same stale-slug tolerance TopConcept already has).
+// Any other DueSubjects or GetConcept failure propagates as an error.
+func (s *Service) dueConcept(ctx context.Context, identity learner.IdentityID) (grammar.Concept, bool, error) {
+	if s.retrieval == nil {
+		return grammar.Concept{}, false, nil
+	}
+	due, err := s.retrieval.DueSubjects(ctx, identity, dueSubjectsScanLimit)
+	if err != nil {
+		return grammar.Concept{}, false, err
+	}
+	for _, item := range due {
+		if item.SubjectType != "concept" {
+			continue
+		}
+		concept, err := s.grammar.GetConcept(ctx, item.Subject)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			}
+			return grammar.Concept{}, false, fmt.Errorf("get concept %q: %w", item.Subject, err)
+		}
+		return concept, true, nil
+	}
+	return grammar.Concept{}, false, nil
 }
 
 // randomCatalogConcept picks a uniformly random concept from the full

@@ -90,6 +90,22 @@ LIMIT NULLIF(sqlc.arg(limit_count)::int, 0);
 -- name: ListVocabularyExpressions :many
 SELECT id, expression FROM vocabulary_items WHERE identity_id = $1;
 
+-- name: GetVocabularyItemsByExpressions :many
+-- Bounded lookup for a SMALL, caller-supplied set of expressions —
+-- application/feedback.Service.dueExpressionItems' resolve-a-due-
+-- subject-back-to-Reading/Meaning step (PRD §54): unlike
+-- ListVocabularyItems (filter=""), which scans the identity's ENTIRE
+-- vocabulary, this is indexed on (identity_id, expression) and returns
+-- at most len(expressions) rows — the same "push the bound into SQL"
+-- principle ListVocabularyActivationCandidates documents above, so
+-- resolving a handful of due expressions stays cheap regardless of how
+-- large a learner's vocabulary grows.
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags
+FROM vocabulary_items
+WHERE identity_id = $1 AND expression = ANY(sqlc.arg(expressions)::text[]);
+
 -- name: UpsertVocabularyWord :exec
 -- Phase 3 Task 8's bulk sync path (POST /api/v1/words): unlike
 -- UpsertVocabularyItemOnLookup above, lookups/productions/

@@ -65,10 +65,42 @@ func (f *fakeObservationRepo) DeleteAll(context.Context, learner.IdentityID) err
 	panic("not used by learner page tests")
 }
 
+// fakeLearnerRetrievalRepo is an in-memory storage.RetrievalRepository
+// double for the /learner page's 復習キュー table tests — only List is
+// exercised (learnerPage's own only call), every other method panics.
+type fakeLearnerRetrievalRepo struct {
+	list    []storage.RetrievalItem
+	listErr error
+}
+
+func (f *fakeLearnerRetrievalRepo) Upsert(context.Context, storage.RetrievalItem) error {
+	panic("not used by learner page tests")
+}
+
+func (f *fakeLearnerRetrievalRepo) Get(context.Context, learner.IdentityID, string, string) (storage.RetrievalItem, error) {
+	panic("not used by learner page tests")
+}
+
+func (f *fakeLearnerRetrievalRepo) Due(context.Context, learner.IdentityID, time.Time, int) ([]storage.RetrievalItem, error) {
+	panic("not used by learner page tests")
+}
+
+func (f *fakeLearnerRetrievalRepo) List(_ context.Context, _ learner.IdentityID, limit int) ([]storage.RetrievalItem, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	out := f.list
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
 func learnerTestOptions() Options {
 	opts := testOptions()
 	opts.Priorities = &fakeLearnerPriorityRepo{}
 	opts.Observations = &fakeObservationRepo{}
+	opts.Retrieval = &fakeLearnerRetrievalRepo{}
 	// Zero-value AgentUsage/SystemStats by default; tests exercising
 	// those sections override this with their own fakeAnalyticsRepo (see
 	// TestLearnerPageRendersAgentUsageAndSystemSections).
@@ -125,6 +157,48 @@ func TestLearnerPagePrioritiesRepositoryErrorReturns500(t *testing.T) {
 func TestLearnerPageObservationsRepositoryErrorReturns500(t *testing.T) {
 	opts := learnerTestOptions()
 	opts.Observations.(*fakeObservationRepo).listErr = context.DeadlineExceeded
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// TestLearnerPageRendersRetrievalQueueRows covers Phase 4 Task 7's
+// 復習キュー table: a seeded retrieval item renders its subject, subject
+// type, due date, and interval (in whole days).
+func TestLearnerPageRendersRetrievalQueueRows(t *testing.T) {
+	opts := learnerTestOptions()
+	dueAt := time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC)
+	opts.Retrieval.(*fakeLearnerRetrievalRepo).list = []storage.RetrievalItem{
+		{SubjectType: "expression", Subject: "積もる", DueAt: dueAt, Interval: 3 * 24 * time.Hour, Successes: 2, Failures: 0},
+	}
+
+	srv := NewServer(opts)
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /learner status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{
+		"復習キュー",
+		"積もる",
+		"expression",
+		"2026-08-20",
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("GET /learner body missing %q: %s", want, body)
+		}
+	}
+}
+
+func TestLearnerPageRetrievalRepositoryErrorReturns500(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Retrieval.(*fakeLearnerRetrievalRepo).listErr = context.DeadlineExceeded
 
 	srv := NewServer(opts)
 	rec := httptest.NewRecorder()

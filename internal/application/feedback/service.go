@@ -18,12 +18,14 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/agentrun"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
+	appretrieval "github.com/mikeyaustin/jlp/internal/application/retrieval"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/diff"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
@@ -43,6 +45,13 @@ const recentErrorsLimit = 5
 // the Teacher prompt's ExpressionsToEncourage — PRD §55/§17.5's
 // vocabulary activator, the brief's "ActivationCandidates(5)".
 const activationCandidatesLimit = 5
+
+// dueExpressionsScanLimit caps how many of the spaced-retrieval
+// scheduler's most-due items (PRD §54) dueExpressionItems scans looking
+// for up to activationCandidatesLimit "expression" ones — see that
+// method's own doc comment for why a deeper scan than
+// activationCandidatesLimit itself is needed.
+const dueExpressionsScanLimit = 25
 
 // ErrInvalidSelection is returned when Request's Start/End don't
 // satisfy 0 <= Start <= End <= len(document runes).
@@ -66,6 +75,12 @@ type Service struct {
 	vocab      *appvocabulary.Service
 	teacher    *teacher.Agent
 	rec        *learning.Recorder
+	// retrieval feeds expressionsToEncourage's due-expression preference
+	// (PRD §54): nil is tolerated exactly like every other optional
+	// collaborator here — a caller that hasn't wired the scheduler just
+	// gets ActivationCandidates' plain ranking, unchanged from before
+	// Task 7.
+	retrieval *appretrieval.Scheduler
 	// agenticTeacher/runner back Task 2's opt-in agentic path
 	// (APP_AI_AGENTICTEACHER, PRD §27/§50): when agenticTeacher is
 	// true, RequestFeedback calls teacher.ReviewWritingAgentic (via the
@@ -98,8 +113,8 @@ type Service struct {
 //
 // vocab.DetectProduction runs at the very end of every RequestFeedback
 // call — see that method's closing comment for why it's non-fatal.
-func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, plnr *planner.Planner, vocab *appvocabulary.Service, t *teacher.Agent, rec *learning.Recorder, agenticTeacher bool, runner *agentrun.Runner) *Service {
-	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, planner: plnr, vocab: vocab, teacher: t, rec: rec, agenticTeacher: agenticTeacher, runner: runner}
+func NewService(sessions storage.SessionRepository, docs storage.DocumentRepository, repo storage.FeedbackRepository, grammar storage.GrammarRepository, priorities storage.PriorityRepository, plnr *planner.Planner, vocab *appvocabulary.Service, t *teacher.Agent, rec *learning.Recorder, agenticTeacher bool, runner *agentrun.Runner, retrieval *appretrieval.Scheduler) *Service {
+	return &Service{sessions: sessions, docs: docs, repo: repo, grammar: grammar, priorities: priorities, planner: plnr, vocab: vocab, teacher: t, rec: rec, agenticTeacher: agenticTeacher, runner: runner, retrieval: retrieval}
 }
 
 // runnerAdapter adapts *agentrun.Runner to teacher.AgenticRunner: the
@@ -645,6 +660,15 @@ type RetryResult struct {
 // could race against a reveal happening in between): a learner who
 // peeked via 答えを見る before typing the right answer didn't recall it
 // independently, even though the retry itself is still "correct".
+//
+// concepts is fetched ONCE, here, and reused both for the event's own
+// Evidence["concepts"] and for the returned CorrectionView below —
+// NOT fetched a second time from inside application/retrieval.Consumer
+// (Phase 4 Task 7, PRD §54), which reacts to this same event to
+// schedule spaced review for each concept: threading concepts through
+// Evidence instead of a second GetCorrectionConcepts call keeps this
+// method's identity-scoped DB round trips at exactly one, the same as
+// before Task 7 added a second subscriber to this event type.
 func (s *Service) RetryCorrection(ctx context.Context, identity learner.IdentityID, correctionID, attempt string) (RetryResult, error) {
 	trimmed := strings.TrimSpace(attempt)
 	rec, err := s.repo.RetryCorrection(ctx, identity, correctionID, trimmed)
@@ -655,6 +679,11 @@ func (s *Service) RetryCorrection(ctx context.Context, identity learner.Identity
 	correct := rec.Status == "accepted"
 	independent := correct && !rec.Revealed
 
+	concepts, err := s.repo.GetCorrectionConcepts(ctx, rec.ID)
+	if err != nil {
+		return RetryResult{}, fmt.Errorf("feedback: get correction concepts: %w", err)
+	}
+
 	if err := s.rec.Record(ctx, event.LearningEvent{
 		IdentityID: identity,
 		SessionID:  &rec.SessionID,
@@ -664,14 +693,10 @@ func (s *Service) RetryCorrection(ctx context.Context, identity learner.Identity
 			"attempts":    rec.Attempts,
 			"correct":     correct,
 			"independent": independent,
+			"concepts":    concepts,
 		},
 	}); err != nil {
 		return RetryResult{}, fmt.Errorf("feedback: record %s: %w", event.TypeCorrectionRetried, err)
-	}
-
-	concepts, err := s.repo.GetCorrectionConcepts(ctx, rec.ID)
-	if err != nil {
-		return RetryResult{}, fmt.Errorf("feedback: get correction concepts: %w", err)
 	}
 
 	return RetryResult{
@@ -783,30 +808,123 @@ func (s *Service) recentErrors(ctx context.Context, identity learner.IdentityID)
 	return lines, nil
 }
 
-// expressionsToEncourage formats identity's top activation candidates
-// (PRD §55/§17.5's vocabulary activator — application/planner.Planner's
-// ActivationCandidates, capped at activationCandidatesLimit) as the
-// human-readable lines the teacher.feedback.v3 prompt's
-// ExpressionsToEncourage range renders directly: "expression (reading)
-// — meaning", with the parenthetical reading dropped when it's empty or
-// identical to the expression itself (a pure-kana entry has nothing to
-// disambiguate). An identity with no candidates yet gets an empty
-// slice — the prompt template already tolerates that via
-// {{if .ExpressionsToEncourage}}.
+// expressionsToEncourage formats up to activationCandidatesLimit lines
+// for the teacher.feedback.v3 prompt's ExpressionsToEncourage range,
+// PREFERRING expressions due for spaced review (PRD §54's
+// dueExpressionItems) ahead of the plain activation ranking (PRD
+// §55/§17.5's vocabulary activator — application/planner.Planner's
+// ActivationCandidates): a due expression is deduplicated out of the
+// activation list if it also appears there, never listed twice. An
+// identity with neither yet gets an empty slice — the prompt template
+// already tolerates that via {{if .ExpressionsToEncourage}}.
 func (s *Service) expressionsToEncourage(ctx context.Context, identity learner.IdentityID) ([]string, error) {
-	items, err := s.planner.ActivationCandidates(ctx, identity, activationCandidatesLimit)
+	due, err := s.dueExpressionItems(ctx, identity)
 	if err != nil {
 		return nil, err
 	}
-	lines := make([]string, 0, len(items))
-	for _, item := range items {
-		if item.Reading != "" && item.Reading != item.Expression {
-			lines = append(lines, fmt.Sprintf("%s (%s) — %s", item.Expression, item.Reading, item.Meaning))
-		} else {
-			lines = append(lines, fmt.Sprintf("%s — %s", item.Expression, item.Meaning))
+	candidates, err := s.planner.ActivationCandidates(ctx, identity, activationCandidatesLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(due))
+	lines := make([]string, 0, activationCandidatesLimit)
+	for _, item := range due {
+		if len(lines) >= activationCandidatesLimit {
+			break
 		}
+		lines = append(lines, formatExpressionLine(item))
+		seen[item.Expression] = true
+	}
+	for _, item := range candidates {
+		if len(lines) >= activationCandidatesLimit {
+			break
+		}
+		if seen[item.Expression] {
+			continue
+		}
+		lines = append(lines, formatExpressionLine(item))
 	}
 	return lines, nil
+}
+
+// dueExpressionItems returns identity's vocabulary items whose
+// expression is currently due for spaced review (PRD §54): the
+// scheduler's own due-ordering (retrieval.Scheduler.DueSubjects,
+// earliest-due first) filtered to SubjectType "expression" and resolved
+// back to a vocabulary.Item via vocab.List so the caller has
+// Reading/Meaning to format with — retrieval.RetrievalItem itself
+// carries neither. retrieval == nil (a caller that hasn't wired the
+// scheduler) and "nothing due" both return (nil, nil), never an error:
+// this is a preference, not a requirement.
+func (s *Service) dueExpressionItems(ctx context.Context, identity learner.IdentityID) ([]vocabulary.Item, error) {
+	if s.retrieval == nil {
+		return nil, nil
+	}
+	// DueSubjects' queue mixes "concept" and "expression" items,
+	// ordered by DueAt regardless of type — asking for only
+	// activationCandidatesLimit(5) items risks every one of them being
+	// concept-type (due grammar review, PRD §54's OTHER due surface —
+	// see practice.Service.dueConcept), which would starve this block
+	// even when expressions genuinely are due. Scanning
+	// dueExpressionsScanLimit deep (like practice.Service's own
+	// analogous dueSubjectsScanLimit) makes that far less likely,
+	// though — same as practice's scan — not impossible at the extreme.
+	due, err := s.retrieval.DueSubjects(ctx, identity, dueExpressionsScanLimit)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: due expressions: %w", err)
+	}
+
+	dueExpressions := make([]string, 0, activationCandidatesLimit)
+	for _, item := range due {
+		if item.SubjectType != "expression" {
+			continue
+		}
+		dueExpressions = append(dueExpressions, item.Subject)
+		if len(dueExpressions) >= activationCandidatesLimit {
+			break
+		}
+	}
+	if len(dueExpressions) == 0 {
+		return nil, nil
+	}
+
+	// GetByExpressions is a bounded, indexed lookup over dueExpressions
+	// (at most activationCandidatesLimit of them) — NOT List(filter=""),
+	// which would scan identity's entire vocabulary on every
+	// RequestFeedback call just to resolve a handful of Reading/Meaning
+	// pairs.
+	vocabItems, err := s.vocab.GetByExpressions(ctx, identity, dueExpressions)
+	if err != nil {
+		return nil, fmt.Errorf("feedback: resolve due expressions: %w", err)
+	}
+	byExpression := make(map[string]vocabulary.Item, len(vocabItems))
+	for _, it := range vocabItems {
+		byExpression[it.Expression] = it
+	}
+
+	out := make([]vocabulary.Item, 0, len(dueExpressions))
+	for _, expr := range dueExpressions {
+		// A due expression whose vocabulary_items row has since been
+		// removed (shouldn't happen — nothing deletes vocabulary items —
+		// but skip rather than render a blank line) is silently omitted.
+		if it, ok := byExpression[expr]; ok {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+// formatExpressionLine renders one vocabulary.Item as the
+// human-readable "expression (reading) — meaning" line
+// ExpressionsToEncourage's prompt range renders directly, dropping the
+// parenthetical reading when it's empty or identical to the expression
+// itself (a pure-kana entry has nothing to disambiguate).
+func formatExpressionLine(item vocabulary.Item) string {
+	if item.Reading != "" && item.Reading != item.Expression {
+		return fmt.Sprintf("%s (%s) — %s", item.Expression, item.Reading, item.Meaning)
+	}
+	return fmt.Sprintf("%s — %s", item.Expression, item.Meaning)
 }
 
 // windowContext returns the substring of runes covering [start,end]

@@ -242,6 +242,18 @@ type LessonObservation struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type RetrievalItem struct {
+	IdentityID      string
+	SubjectType     string
+	Subject         string
+	Successes       int32
+	Failures        int32
+	LastSeen        pgtype.Timestamptz
+	DueAt           pgtype.Timestamptz
+	IntervalSeconds int64
+	Confidence      float64
+}
+
 type Session struct {
 	ID         pgtype.UUID
 	IdentityID string

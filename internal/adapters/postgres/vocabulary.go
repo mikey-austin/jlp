@@ -179,6 +179,30 @@ func (r *VocabularyRepository) ListActivationCandidates(ctx context.Context, ide
 	return out, nil
 }
 
+// GetByExpressions is List's bounded sibling (see
+// storage.VocabularyRepository.GetByExpressions' doc comment): a
+// dedicated indexed query rather than List(filter="") + a Go-side
+// filter, so resolving a small, caller-supplied set of expressions
+// stays cheap regardless of how large identity's vocabulary grows. An
+// empty expressions returns an empty result without a query round trip.
+func (r *VocabularyRepository) GetByExpressions(ctx context.Context, identity learner.IdentityID, expressions []string) ([]vocabulary.Item, error) {
+	if len(expressions) == 0 {
+		return nil, nil
+	}
+	rows, err := r.q.GetVocabularyItemsByExpressions(ctx, sqlcgen.GetVocabularyItemsByExpressionsParams{
+		IdentityID:  string(identity),
+		Expressions: expressions,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]vocabulary.Item, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, fromVocabularyItemRow(row))
+	}
+	return out, nil
+}
+
 // SeedBank inserts entries as expression-bank baseline items, all in
 // one transaction (mirroring GrammarRepository.UpsertConcepts' shape),
 // doing nothing per-entry when (identity, expression) already has a

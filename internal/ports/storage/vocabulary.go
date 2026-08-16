@@ -65,6 +65,17 @@ type VocabularyRepository interface {
 	// application/vocabulary.Service.DetectProduction scans a reviewed
 	// text against.
 	AllExpressions(ctx context.Context, identity learner.IdentityID) (map[string]string, error)
+	// GetByExpressions returns identity's vocabulary items whose
+	// Expression is in expressions — a bounded, indexed lookup for a
+	// SMALL caller-supplied set (Phase 4 Task 7, PRD §54:
+	// application/feedback.Service.dueExpressionItems resolving a
+	// handful of due expressions back to Reading/Meaning), the same
+	// "push the bound into SQL" principle ListActivationCandidates
+	// above uses — never a substitute for List(filter="") over the
+	// whole vocabulary. An expression with no matching row is simply
+	// absent from the result (never an error); len(expressions) == 0
+	// returns an empty result.
+	GetByExpressions(ctx context.Context, identity learner.IdentityID, expressions []string) ([]vocabulary.Item, error)
 	// SeedBank inserts entries as expression-bank baseline items (Task
 	// 7, PRD §55/§17.5) — the curated catalog from
 	// data/expressions/core.yaml — each with Lookups/Productions/
