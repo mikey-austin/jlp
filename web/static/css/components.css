@@ -881,42 +881,86 @@ p.hint {
   color: var(--primary);
 }
 
+/* .nav-toggle: the hamburger trigger for #topnav below the 900px
+ * breakpoint. Hidden above it (the inline .nav stays exactly as it is
+ * today — see the media query below), so this button never appears and
+ * never steals a tab stop on desktop. */
+.nav-toggle {
+  display: none;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: var(--tap);
+  min-height: var(--tap);
+  padding: 0 var(--space-3);
+  border-radius: 10px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--fg);
+  font: inherit;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  cursor: pointer;
+  box-shadow: var(--shadow-sm);
+}
+.nav-toggle:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.nav-toggle__icon {
+  font-size: var(--text-lg);
+  line-height: 1;
+}
+.nav-toggle__label {
+  max-width: 28vw;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* --- Topbar responsive behaviour ---------------------------------------
  * The topbar used to be a single nowrap flex row (brand + an 8-item nav +
  * right cluster), whose minimum content width was ~544px — that alone
  * pushed every page 272px past a 390px viewport and 342px past 320px.
- *
- * Instead of hiding navigation behind a hamburger (eight destinations, no JS
- * menu exists, and everything must stay reachable), the header wraps:
- * the brand and the right-hand cluster keep the first row, and the nav
- * drops to its own full-width row that scrolls horizontally rather than
- * being squeezed. `order: 1` is what moves it below .topbar__right
- * without touching the template's source order (which keeps the tab
- * sequence brand -> nav -> toggle). */
+ * A previous pass wrapped the nav onto its own horizontally-scrolling
+ * row rather than hide it behind a hamburger. The user has since asked
+ * for a hamburger explicitly, so below 900px (the width where the inline
+ * nav no longer fits — unchanged from that pass, still the natural
+ * cutoff) #topnav becomes a toggled dropdown instead of a second row:
+ * that is the whole point of a hamburger, reclaiming the vertical space
+ * a permanent second row cost. `position: absolute` takes it out of the
+ * topbar's flow entirely, so the header is one row whether the menu is
+ * open or closed — .topbar's own `position: sticky` (above) already
+ * gives it a positioned ancestor, so no extra wrapper is needed. */
 @media (max-width: 900px) {
-  .nav {
-    order: 1;
-    flex: 1 0 100%;
-    min-width: 0;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
-    -webkit-overflow-scrolling: touch;
-    /* The nav row is a single line of eight short links that almost fits;
-     * a permanent scrollbar track under it read as a stray rule across
-     * the header. The row stays swipeable/wheel-scrollable — only the
-     * chrome is suppressed. */
-    scrollbar-width: none;
+  .nav-toggle {
+    display: inline-flex;
   }
-  .nav::-webkit-scrollbar {
+  .nav {
     display: none;
+    position: absolute;
+    top: 100%;
+    left: 0;
+    right: 0;
+    flex-direction: column;
+    align-items: stretch;
+    gap: var(--space-1);
+    padding: var(--space-2);
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    box-shadow: var(--shadow-md);
+    z-index: 60;
+  }
+  .nav.is-open {
+    display: flex;
   }
   .nav a {
-    white-space: nowrap;
+    min-height: var(--tap);
+    display: flex;
+    align-items: center;
   }
 }
 
 @media (max-width: 640px) {
-  .nav a,
   .theme-toggle {
     min-height: var(--tap);
     display: inline-flex;
@@ -936,10 +980,10 @@ p.hint {
   }
 }
 
-/* At phone widths the toggle becomes its glyph alone. The label text is
- * still in the DOM (so the button keeps its accessible name) — it is the
- * rendered size that collapses, which is what buys back the ~110px the
- * first row needs at 320px. */
+/* At phone widths the theme and nav toggles become their glyph alone.
+ * The label text is still in the DOM (so each button keeps its
+ * accessible name) — it is the rendered size that collapses, which is
+ * what buys back the space the first row needs at 320px. */
 @media (max-width: 480px) {
   .theme-toggle {
     font-size: 0;
@@ -949,6 +993,15 @@ p.hint {
     justify-content: center;
   }
   .theme-toggle > [aria-hidden="true"] {
+    font-size: var(--text-lg);
+  }
+  .nav-toggle {
+    font-size: 0;
+    gap: 0;
+    padding: 0 var(--space-3);
+    justify-content: center;
+  }
+  .nav-toggle__icon {
     font-size: var(--text-lg);
   }
 }

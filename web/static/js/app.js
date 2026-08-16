@@ -194,3 +194,56 @@ document.addEventListener("click", function (evt) {
     dialog.showModal();
   }
 })();
+
+// Hamburger nav (layout.html.tmpl): #nav-toggle shows/hides #topnav
+// below the 900px breakpoint (components.css) where the inline nav no
+// longer fits the header in one row. #topnav has no native modal
+// semantics (it's a <nav>, not a <dialog> — the header behind it must
+// stay reachable/visible, unlike the session modal above), so open/close
+// state, Esc, and click-outside are all handled by hand here.
+(function () {
+  "use strict";
+  var toggle = document.getElementById("nav-toggle");
+  var menu = document.getElementById("topnav");
+  if (!toggle || !menu) return;
+
+  function isOpen() {
+    return menu.classList.contains("is-open");
+  }
+
+  function open() {
+    menu.classList.add("is-open");
+    toggle.setAttribute("aria-expanded", "true");
+    document.addEventListener("keydown", onKeydown);
+    document.addEventListener("click", onDocClick, true);
+    var first = menu.querySelector("a");
+    if (first) first.focus();
+  }
+
+  function close(returnFocus) {
+    menu.classList.remove("is-open");
+    toggle.setAttribute("aria-expanded", "false");
+    document.removeEventListener("keydown", onKeydown);
+    document.removeEventListener("click", onDocClick, true);
+    if (returnFocus) toggle.focus();
+  }
+
+  function onKeydown(evt) {
+    if (evt.key === "Escape") close(true);
+  }
+
+  // Capture-phase so this sees the click before it might otherwise be
+  // stopped, and so a click on the toggle itself (which has its own
+  // handler below) doesn't immediately re-close what that handler just
+  // opened — toggle.contains(evt.target) is excluded here for exactly
+  // that reason.
+  function onDocClick(evt) {
+    if (menu.contains(evt.target) || toggle.contains(evt.target)) return;
+    close(true);
+  }
+
+  toggle.addEventListener("click", function () {
+    if (isOpen()) close(true);
+    else open();
+  });
+})();
