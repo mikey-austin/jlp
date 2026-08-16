@@ -129,8 +129,15 @@ func toConversationSummaryView(sum appconversation.Summary) conversationSummaryV
 }
 
 // conversationSay handles the conversation pane's message form: form
-// field "text" is the learner's new message. Renders the
-// "conversation_turn" partial, appended to the transcript
+// field "text" is the learner's new message. "speech_event_id" is an
+// optional hidden field (workspace.html.tmpl's conversation-form,
+// populated by record.js from POST /speech/transcribe's own
+// response) — empty for ordinary typed input, set when text came from
+// a transcript, so appconversation.Service.Say can tag the resulting
+// turn's event with the join key code review Important I1 asked for.
+// This is decode/encode plumbing only: whether or not the field is
+// set, this is the exact same Say call, same corrections, same turn.
+// Renders the "conversation_turn" partial, appended to the transcript
 // (hx-swap="beforeend" on #conversation-transcript — see
 // workspace.html.tmpl).
 func (s *Server) conversationSay(w http.ResponseWriter, r *http.Request) {
@@ -142,7 +149,7 @@ func (s *Server) conversationSay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	turn, err := s.opts.Conversation.Say(r.Context(), ident.ID, sid, r.FormValue("text"))
+	turn, err := s.opts.Conversation.Say(r.Context(), ident.ID, sid, r.FormValue("text"), r.FormValue("speech_event_id"))
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			http.NotFound(w, r)

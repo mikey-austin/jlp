@@ -17,6 +17,8 @@ import (
 	"net/http"
 
 	appspeech "github.com/mikeyaustin/jlp/internal/application/speech"
+	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
 // speechMaxBytes caps POST /speech/transcribe's request body — the
@@ -27,10 +29,16 @@ import (
 const speechMaxBytes = 10 << 20
 
 // speechTranscribeResponse is POST /speech/transcribe's success body —
-// the brief's own frozen shape: {"text":"...", "duration_ms":123}.
+// the brief's own frozen shape ({"text":"...", "duration_ms":123}),
+// plus event_id (code review Important I1): record.js stashes this in
+// the conversation form's hidden "speech_event_id" field, so the turn
+// that form submission produces can be joined back to this exact
+// speech.transcribed event — see application/speech.Transcript.EventID
+// and application/conversation.Service.Say's sourceEventID parameter.
 type speechTranscribeResponse struct {
 	Text       string `json:"text"`
 	DurationMS int    `json:"duration_ms"`
+	EventID    string `json:"event_id"`
 }
 
 // speechTranscribe handles POST /speech/transcribe: a multipart
@@ -38,7 +46,12 @@ type speechTranscribeResponse struct {
 // --convert-enabled whisper-server sniffs the real format via ffmpeg
 // regardless of what's declared), identity-scoped via the SAME
 // RequireIdentity context every other route in this authenticated
-// group already carries.
+// group already carries. An optional "session_id" field (record.js
+// reads it from the record button's own data-session-id — see
+// workspace.html.tmpl) is threaded to Service.Transcribe so the
+// recorded speech.transcribed event carries a real SessionID instead
+// of always being session-less (code review Important I1); omitting
+// it keeps the original session-less behavior.
 func (s *Server) speechTranscribe(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
@@ -75,15 +88,20 @@ func (s *Server) speechTranscribe(w http.ResponseWriter, r *http.Request) {
 		mime = "application/octet-stream"
 	}
 
-	t, err := s.opts.Speech.Transcribe(r.Context(), ident.ID, data, mime)
+	sid := session.ID(r.FormValue("session_id"))
+	t, err := s.opts.Speech.Transcribe(r.Context(), ident.ID, sid, data, mime)
 	if err != nil {
 		if errors.Is(err, appspeech.ErrNotConfigured) {
 			writeAPIError(w, http.StatusServiceUnavailable, "speech recognition is not configured")
+			return
+		}
+		if errors.Is(err, storage.ErrNotFound) {
+			http.NotFound(w, r)
 			return
 		}
 		writeAPIError(w, http.StatusBadGateway, "could not transcribe audio")
 		return
 	}
 
-	writeJSON(w, http.StatusOK, speechTranscribeResponse{Text: t.Text, DurationMS: t.DurationMS})
+	writeJSON(w, http.StatusOK, speechTranscribeResponse{Text: t.Text, DurationMS: t.DurationMS, EventID: t.EventID})
 }

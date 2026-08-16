@@ -1,14 +1,19 @@
 // Phase 4 Task 8 (PRD §66): records a short clip with MediaRecorder,
-// posts it to POST /speech/transcribe, and drops the returned text
-// into the conversation pane's own input — #conversation-form's
-// "text" field, the SAME field 送信 already posts through the
-// unchanged /sessions/{id}/conversation route (conversationSay). This
-// script never submits the form itself and never talks to the
-// conversation route directly: pipeline reuse means the learner's
-// spoken message goes through the exact same POST, application
-// service, and events a typed one does — see internal/application/
-// speech's package doc comment for why that split lives where it
-// does.
+// posts it to POST /speech/transcribe (with the current session's id,
+// so the recorded speech.transcribed event isn't session-less), and
+// drops the returned text into the conversation pane's own input —
+// #conversation-form's "text" field, the SAME field 送信 already
+// posts through the unchanged /sessions/{id}/conversation route
+// (conversationSay). It also stashes the response's event_id into the
+// form's hidden #speech-event-id field, so that submission can tag
+// the resulting turn as speech-sourced (code review Important I1's
+// join key — see application/conversation.Service.Say's
+// sourceEventID). This script never submits the form itself and never
+// talks to the conversation route directly: pipeline reuse means the
+// learner's spoken message goes through the exact same POST,
+// application service, and events a typed one does — see
+// internal/application/speech's package doc comment for why that
+// split lives where it does.
 //
 // Progressively enhanced: if the browser has no MediaRecorder or
 // getUserMedia, #record-btn is hidden entirely and typed input keeps
@@ -30,6 +35,7 @@ window.jlp = window.jlp || {};
   }
 
   const transcribeURL = btn.dataset.transcribeUrl;
+  const sessionID = btn.dataset.sessionId;
   const idleLabel = btn.textContent;
   const recordingLabel = "■ 停止";
 
@@ -57,6 +63,7 @@ window.jlp = window.jlp || {};
       const blob = new Blob(chunks, { type: mediaRecorder.mimeType || "audio/webm" });
       const form = new FormData();
       form.append("audio", blob, "clip.webm");
+      if (sessionID) form.append("session_id", sessionID);
       const res = await fetch(transcribeURL, { method: "POST", body: form });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -68,6 +75,14 @@ window.jlp = window.jlp || {};
         input.value = json.text || "";
         input.focus();
       }
+      // Code review Important I1: thread the speech.transcribed
+      // event's own id through the conversation form's hidden field,
+      // so conversationSay can tag the resulting conversation.turn
+      // event with the join key that ties it back to this exact
+      // transcription — see application/conversation.Service.Say's
+      // sourceEventID parameter.
+      const eventIDField = document.getElementById("speech-event-id");
+      if (eventIDField) eventIDField.value = json.event_id || "";
       setStatus("");
     } catch (err) {
       setStatus("書き起こしに失敗しました: " + err.message);

@@ -360,7 +360,12 @@ func main() {
 		if cfg.Speech.STTURL != "" {
 			recognizer = whisperadapter.New(cfg.Speech.STTURL)
 		}
-		speechSvc := appspeech.NewService(recognizer, recorder)
+		// postgres.NewSessionRepository(pool) here (not sessionsSvc) is
+		// the same "a storage repository, not the sibling application
+		// service" choice conversationSvc's own construction above makes
+		// — Transcribe only needs Get for authorization (code review
+		// Important I1), never the rest of sessions.Service's surface.
+		speechSvc := appspeech.NewService(recognizer, postgres.NewSessionRepository(pool), recorder)
 		// Deliberately NOT constructing an internal/adapters/tts.
 		// Synthesizer here even when APP_SPEECH_TTSURL is set: nothing in
 		// this task's HTTP surface calls ai.SpeechSynthesizer.Speak yet

@@ -266,7 +266,7 @@ func newHarness(timing string) *harness {
 
 func TestSayReturnsAReply(t *testing.T) {
 	h := newHarness("immediate")
-	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "今日はいい天気ですね。")
+	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "今日はいい天気ですね。", "")
 	if err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
@@ -280,7 +280,7 @@ func TestSayReturnsAReply(t *testing.T) {
 
 func TestSayImmediateTimingShowsCorrectionsInline(t *testing.T) {
 	h := newHarness("immediate")
-	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。")
+	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。", "")
 	if err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
@@ -304,7 +304,7 @@ func TestSayImmediateTimingShowsCorrectionsInline(t *testing.T) {
 // releases it.
 func TestSayEndTimingWithholdsUntilSummarise(t *testing.T) {
 	h := newHarness("end")
-	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。")
+	turn, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。", "")
 	if err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
@@ -335,7 +335,7 @@ func TestSayDelayedTimingBatchesAfterN(t *testing.T) {
 	h := newHarness("delayed")
 	ctx := context.Background()
 
-	turn1, err := h.svc.Say(ctx, testIdentity, testSessionID, "昨日の映画はとても面白いでした。")
+	turn1, err := h.svc.Say(ctx, testIdentity, testSessionID, "昨日の映画はとても面白いでした。", "")
 	if err != nil {
 		t.Fatalf("Say turn 1 returned error: %v", err)
 	}
@@ -343,7 +343,7 @@ func TestSayDelayedTimingBatchesAfterN(t *testing.T) {
 		t.Fatalf("turn 1 Corrections = %+v, want withheld (empty)", turn1.Corrections)
 	}
 
-	turn2, err := h.svc.Say(ctx, testIdentity, testSessionID, "今日は楽しいでした。")
+	turn2, err := h.svc.Say(ctx, testIdentity, testSessionID, "今日は楽しいでした。", "")
 	if err != nil {
 		t.Fatalf("Say turn 2 returned error: %v", err)
 	}
@@ -355,7 +355,7 @@ func TestSayDelayedTimingBatchesAfterN(t *testing.T) {
 	// withheld corrections from turns 1-2 come back together with
 	// turn 3's own (this message has no known mistake, so the batch is
 	// exactly the two prior corrections).
-	turn3, err := h.svc.Say(ctx, testIdentity, testSessionID, "映画について話しましょう。")
+	turn3, err := h.svc.Say(ctx, testIdentity, testSessionID, "映画について話しましょう。", "")
 	if err != nil {
 		t.Fatalf("Say turn 3 returned error: %v", err)
 	}
@@ -372,7 +372,7 @@ func TestSayDetectsVocabularyProduction(t *testing.T) {
 	h := newHarness("immediate")
 	h.vocab.seed("item-1", "それはそれとして")
 
-	_, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "それはそれとして、映画の話をしましょう。")
+	_, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "それはそれとして、映画の話をしましょう。", "")
 	if err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
@@ -396,7 +396,7 @@ func TestSayDetectsVocabularyProduction(t *testing.T) {
 // belonging to another identity.
 func TestSayCrossIdentitySessionReturnsErrNotFound(t *testing.T) {
 	h := newHarness("immediate")
-	_, err := h.svc.Say(context.Background(), "someone-else", testSessionID, "こんにちは。")
+	_, err := h.svc.Say(context.Background(), "someone-else", testSessionID, "こんにちは。", "")
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("err = %v, want storage.ErrNotFound", err)
 	}
@@ -404,7 +404,7 @@ func TestSayCrossIdentitySessionReturnsErrNotFound(t *testing.T) {
 
 func TestSummariseCrossIdentitySessionReturnsErrNotFound(t *testing.T) {
 	h := newHarness("end")
-	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "こんにちは。"); err != nil {
+	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "こんにちは。", ""); err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
 	_, err := h.svc.Summarise(context.Background(), "someone-else", testSessionID)
@@ -423,7 +423,7 @@ func TestSummariseCrossIdentitySessionReturnsErrNotFound(t *testing.T) {
 func TestSayEndTimingCleanMessageIsNotFlaggedWithheld(t *testing.T) {
 	h := newHarness("end")
 
-	clean, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "今日はいい天気ですね。")
+	clean, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "今日はいい天気ですね。", "")
 	if err != nil {
 		t.Fatalf("Say (clean) returned error: %v", err)
 	}
@@ -431,7 +431,7 @@ func TestSayEndTimingCleanMessageIsNotFlaggedWithheld(t *testing.T) {
 		t.Fatalf("clean message: Pending = %d, want 0", clean.Pending)
 	}
 
-	dirty, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。")
+	dirty, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。", "")
 	if err != nil {
 		t.Fatalf("Say (dirty) returned error: %v", err)
 	}
@@ -451,7 +451,7 @@ func TestHistoryReDerivesPerTurnVisibilityForDelayedTiming(t *testing.T) {
 	h := newHarness("delayed")
 	ctx := context.Background()
 	for _, msg := range []string{"昨日の映画はとても面白いでした。", "今日は楽しいでした。", "映画について話しましょう。"} {
-		if _, err := h.svc.Say(ctx, testIdentity, testSessionID, msg); err != nil {
+		if _, err := h.svc.Say(ctx, testIdentity, testSessionID, msg, ""); err != nil {
 			t.Fatalf("Say returned error: %v", err)
 		}
 	}
@@ -477,7 +477,7 @@ func TestHistoryReDerivesPerTurnVisibilityForDelayedTiming(t *testing.T) {
 // feedback.requested/correction.presented event pair.
 func TestSayRecordsConversationTurnAndCorrectionEvents(t *testing.T) {
 	h := newHarness("immediate")
-	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。"); err != nil {
+	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。", ""); err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
 	if len(h.events.events) < 2 {
@@ -488,6 +488,49 @@ func TestSayRecordsConversationTurnAndCorrectionEvents(t *testing.T) {
 	}
 	if h.events.events[1].Type != event.TypeCorrectionPresented {
 		t.Fatalf("events[1].Type = %q, want %q", h.events.events[1].Type, event.TypeCorrectionPresented)
+	}
+}
+
+// TestSayTagsTurnEventWithSourceSpeechEventID pins code review
+// Important I1: a non-empty sourceEventID must land verbatim on the
+// resulting conversation.turn event's Evidence under "speech_event_id"
+// — the join key that lets Task 9's learning-outcome analytics (or any
+// future consumer) tell a spoken turn apart from a typed one, given
+// only the event log. An empty sourceEventID (ordinary typed input,
+// covered by TestSayRecordsConversationTurnAndCorrectionEvents above)
+// must NOT add the key at all, not even as an empty string — a
+// consumer checking "does this turn have a speech_event_id" must see
+// a real map-key absence, not a falsy-but-present value.
+func TestSayTagsTurnEventWithSourceSpeechEventID(t *testing.T) {
+	h := newHarness("immediate")
+	const sourceID = "speech-evt-123"
+	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。", sourceID); err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+	if len(h.events.events) < 1 || h.events.events[0].Type != event.TypeConversationTurn {
+		t.Fatalf("events[0] = %+v, want a conversation.turn event first", h.events.events)
+	}
+	turnEvidence := h.events.events[0].Evidence
+	if turnEvidence["speech_event_id"] != sourceID {
+		t.Fatalf("turn Evidence[speech_event_id] = %v, want %q", turnEvidence["speech_event_id"], sourceID)
+	}
+
+	// The typed-input case, in the SAME test for direct contrast: an
+	// empty sourceEventID must leave the key entirely absent.
+	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "今日は楽しいでした。", ""); err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+	var secondTurnEvidence map[string]any
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeConversationTurn && ev.Evidence["position"] == 2 {
+			secondTurnEvidence = ev.Evidence
+		}
+	}
+	if secondTurnEvidence == nil {
+		t.Fatal("could not find the second conversation.turn event")
+	}
+	if _, present := secondTurnEvidence["speech_event_id"]; present {
+		t.Fatalf("typed turn's Evidence unexpectedly has a speech_event_id key: %+v", secondTurnEvidence)
 	}
 }
 
@@ -515,7 +558,7 @@ func TestSayPassesConceptCandidatesToAgent(t *testing.T) {
 	agent := agentconversation.New(gen)
 	svc := appconversation.NewService(repo, sessions, agent, nil, rec, &fakeGrammarRepo{concepts: knownConceptsForFakeAI()})
 
-	if _, err := svc.Say(context.Background(), testIdentity, testSessionID, "映画を見ました。"); err != nil {
+	if _, err := svc.Say(context.Background(), testIdentity, testSessionID, "映画を見ました。", ""); err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
 	if !strings.Contains(gen.req.User, "Known grammar concepts") {
@@ -533,7 +576,7 @@ func TestSayPassesConceptCandidatesToAgent(t *testing.T) {
 // stop at correction.presented/hint.shown.
 func TestSayRecordsGrammarConceptEncounteredEvent(t *testing.T) {
 	h := newHarness("immediate")
-	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。"); err != nil {
+	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。", ""); err != nil {
 		t.Fatalf("Say returned error: %v", err)
 	}
 	found := false
@@ -566,7 +609,7 @@ func TestSayDelayedTimingSecondBatchDoesNotReReleaseFirst(t *testing.T) {
 	}
 	var turns []appconversation.Turn
 	for i, m := range msgs {
-		turn, err := h.svc.Say(ctx, testIdentity, testSessionID, m)
+		turn, err := h.svc.Say(ctx, testIdentity, testSessionID, m, "")
 		if err != nil {
 			t.Fatalf("Say turn %d returned error: %v", i+1, err)
 		}

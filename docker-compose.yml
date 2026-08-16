@@ -243,6 +243,17 @@ services:
     # doesn't re-fetch it. No host port published — in-network only,
     # same "join it explicitly" posture as ollama/mosquitto/signal-cli
     # above (`--profile speech`, via `make up-speech` below).
+    #
+    # -l ja (code review Critical C1): whisper-server's own default is
+    # -l en. Without this, the sidecar transcribes Japanese speech as
+    # mis-heard English regardless of what any caller sends — confirmed
+    # against this exact image/model: the SAME audio bytes came back as
+    # "connici ha." with no language set and "コンピッキーは" with -F
+    # language=ja. internal/adapters/whisper.Recognizer ALSO sends an
+    # explicit "language=ja" field on every request (defaultLanguage in
+    # whisper.go) so correctness never depends on this flag alone — but
+    # this is the sidecar's own default for JA-only-until-configured
+    # request paths (e.g. testing /inference directly with curl).
     image: ghcr.io/ggml-org/whisper.cpp:main
     profiles: ["speech"]
     volumes:
@@ -251,7 +262,7 @@ services:
     command:
       - |
         test -f /models/ggml-tiny.bin || (cd /app/models && ./download-ggml-model.sh tiny /models)
-        exec /app/build/bin/whisper-server -m /models/ggml-tiny.bin --host 0.0.0.0 --port 8080 --convert
+        exec /app/build/bin/whisper-server -m /models/ggml-tiny.bin --host 0.0.0.0 --port 8080 --convert -l ja
 
   voicevox:
     # TTS sidecar (Phase 4 Task 8, PRD §66): VOICEVOX Engine, a real,

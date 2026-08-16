@@ -96,6 +96,23 @@ type inferenceResponse struct {
 	Duration float64 `json:"duration"` // seconds
 }
 
+// defaultLanguage is the whisper-server "language" form field this
+// adapter sends on every request (code review Critical C1): without
+// it, whisper-server falls back to ITS OWN default — "en" on the
+// pinned ghcr.io/ggml-org/whisper.cpp:main image — silently
+// transcribing Japanese speech as if it were English mis-heard
+// phonetically (confirmed against the running sidecar: the exact same
+// audio came back as "connici ha." with no language field and
+// "コンピッキーは" with language=ja — same model, same bytes, only the
+// language hint differs). JLP is a Japanese-learning platform, so this
+// is not configurable per call (ai.SpeechRecognizer.Transcribe takes
+// no language parameter — see that port's own doc comment) — every
+// clip this adapter sends is asserted to be Japanese, matching
+// docker-compose.yml's whisper-server -l ja startup flag (belt and
+// suspenders: correctness here must not depend on how the sidecar
+// happens to be launched).
+const defaultLanguage = "ja"
+
 // Transcribe implements ai.SpeechRecognizer. Errors are always wrapped
 // with a "whisper: ..." prefix, the same convention adapters/ollama
 // uses for its own three failure modes (marshal/transport/non-2xx) —
@@ -115,6 +132,9 @@ func (r *Recognizer) Transcribe(ctx context.Context, audio []byte, mime string) 
 	}
 	if err := mw.WriteField("response_format", "verbose_json"); err != nil {
 		return ai.Transcript{}, fmt.Errorf("whisper: write response_format field: %w", err)
+	}
+	if err := mw.WriteField("language", defaultLanguage); err != nil {
+		return ai.Transcript{}, fmt.Errorf("whisper: write language field: %w", err)
 	}
 	if err := mw.Close(); err != nil {
 		return ai.Transcript{}, fmt.Errorf("whisper: close multipart writer: %w", err)

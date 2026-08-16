@@ -747,13 +747,24 @@ never a panic or a silent no-op.
 instance — `POST {url}/inference`, multipart field `file`, `response_
 format=verbose_json` (whisper-server's plain `json` format omits the
 clip's own `duration`, which `ai.Transcript.DurationMS` — and the
-`speech.transcribed` event's evidence — need). The compose `whisper`
-service (the `speech` profile) runs `ghcr.io/ggml-org/whisper.cpp:main`
-with `--convert`, so it accepts a browser `MediaRecorder`'s webm/opus
-blobs directly (ffmpeg, bundled in the image, transcodes internally) —
-no raw-WAV requirement on the browser side. No model ships in the
-image; the service's own startup command downloads `ggml-tiny.bin`
-(~75MB, multilingual) into a named volume on first start only.
+`speech.transcribed` event's evidence — need), and an explicit
+`language=ja` field on every request. That last field is not optional:
+whisper-server's own default is `-l en`, so without it the sidecar
+transcribes Japanese speech as mis-heard English regardless of what any
+caller sends — a real bug this task shipped and an independent code
+review caught (Critical C1), proven against the running sidecar with
+the SAME audio: no language field → `"connici ha."`, `language=ja` →
+correct Japanese. The fix is defense-in-depth: the adapter sends
+`language=ja` on every request (`internal/adapters/whisper.go`'s
+`defaultLanguage`) AND the compose `whisper` service's own
+`whisper-server` invocation sets `-l ja`, so correctness never depends
+on only one of the two. The compose `whisper` service (the `speech`
+profile) runs `ghcr.io/ggml-org/whisper.cpp:main` with `--convert`, so
+it accepts a browser `MediaRecorder`'s webm/opus blobs directly (ffmpeg,
+bundled in the image, transcodes internally) — no raw-WAV requirement
+on the browser side. No model ships in the image; the service's own
+startup command downloads `ggml-tiny.bin` (~75MB, multilingual) into a
+named volume on first start only.
 
 **TTS**: `internal/adapters/tts` targets a local
 [VOICEVOX Engine](https://github.com/VOICEVOX/voicevox_engine) instance
@@ -788,8 +799,8 @@ the `whispermodels` volume, and confirmed the whole stack end to end
 against the running dev app (not a standalone container):
 
 ```
-$ curl -X POST http://localhost:28080/speech/transcribe -F "audio=@ja-clear.wav;type=audio/wav"
-{"text":"Hi.","duration_ms":771}
+$ curl -X POST http://localhost:28080/speech/transcribe -F "audio=@ja-short.wav;type=audio/wav"
+{"text":"はい。","duration_ms":771,"event_id":"e36d416d-62fb-4c66-90d5-19a0f64a2a87"}
 ```
 
 That request went through the ACTUAL route — identity middleware,
@@ -797,23 +808,31 @@ That request went through the ACTUAL route — identity middleware,
 `internal/adapters/whisper.Recognizer` dialing the real `whisper`
 sidecar over the compose network — and this environment has no
 microphone, so the audio was a short `espeak-ng`-synthesized Japanese
-clip ("はい"), per this task's honesty clause. `ggml-tiny` misheard the
-robotic synthesis as "Hi." — reported exactly as it happened, not
-cherry-picked. What this DOES prove, honestly: the full round trip is
-real (real container, real ffmpeg conversion via `--convert`, real
-model inference, a real non-zero `duration_ms`), not a canned response.
+clip ("はい"), per this task's honesty clause. Post-C1-fix, the
+transcription is CORRECT: "はい。" is an exact transcription of what the
+clip actually said. (An earlier draft of this section reported "Hi."
+here and attributed it to `ggml-tiny`'s weakness on synthetic audio —
+that diagnosis was wrong; it was the missing `language=ja` field, not
+the model. Corrected per code review Critical C1; see git history for
+the original if you want the receipts.)
 
 The same fixture was then POSTed through the browser via
 `javascript_tool` (mirroring `record.js`'s own fetch call exactly:
-`FormData` with an `audio` field, `POST /speech/transcribe`), and the
-returned text ("Hi.") was confirmed landing in the conversation pane's
-own input field. Submitting it through the **unchanged** 送信 button
-produced a real conversation turn — a tutor reply rendered in the
-transcript — proving the transcript reuses the SAME
-`application/conversation.Service.Say` pipeline typed text does; no
-second code path was ever written for it. See this task's report for
-the full transcript and screenshots (both themes, 390px width, no
-horizontal overflow).
+`FormData` with `audio` and `session_id` fields, `POST
+/speech/transcribe`), and the returned text ("はい。") was confirmed
+landing in the conversation pane's own input field, with the response's
+`event_id` stashed into the form's hidden `speech_event_id` field.
+Submitting it through the **unchanged** 送信 button produced a real
+conversation turn — a tutor reply rendered in the transcript — proving
+the transcript reuses the SAME `application/conversation.Service.Say`
+pipeline typed text does; no second code path was ever written for it.
+A direct `psql` query against the running dev database confirmed the
+join key code review Important I1 asked for actually landed: the
+`conversation.turn` event's `Evidence.speech_event_id` matched the
+`speech.transcribed` event's own `id` exactly. See this task's report
+for the full transcript and screenshots (both themes, 390px width, no
+horizontal overflow) in `.superpowers/sdd/2026-08-15-jlp-phase4/
+screenshots/task8-*`.
 
 VOICEVOX Engine reachability was also confirmed from INSIDE the app
 container, over the real compose network: `wget -qO-

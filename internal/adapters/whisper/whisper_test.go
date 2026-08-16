@@ -90,6 +90,13 @@ func TestTranscribeSendsMultipartBodyAndParsesResult(t *testing.T) {
 	if captured.fields["response_format"] != "verbose_json" {
 		t.Errorf("response_format field = %q, want verbose_json", captured.fields["response_format"])
 	}
+	// Code review Critical C1: without an explicit language field,
+	// whisper-server falls back to its own "en" default and
+	// transcribes Japanese speech as mis-heard English. This MUST be
+	// sent on every request regardless of how the sidecar was started.
+	if captured.fields["language"] != "ja" {
+		t.Errorf("language field = %q, want ja", captured.fields["language"])
+	}
 
 	if tr.Text != "こんにちは" {
 		t.Errorf("Text = %q, want こんにちは (trimmed)", tr.Text)

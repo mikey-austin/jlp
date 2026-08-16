@@ -117,7 +117,21 @@ type Summary struct {
 // authorization check every other identity-scoped service in this
 // codebase leads with, so a wrong identity fails here with
 // storage.ErrNotFound before anything else runs.
-func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid session.ID, text string) (Turn, error) {
+//
+// sourceEventID is empty for ordinary typed input; when non-empty (set
+// by internal/adapters/http/conversation.go's conversationSay from the
+// conversation form's hidden "speech_event_id" field, which record.js
+// populates from POST /speech/transcribe's own response) it's the ID
+// of the speech.transcribed event that produced text, and is recorded
+// verbatim into the resulting conversation.turn event's Evidence as
+// "speech_event_id" (code review Important I1: without this, a
+// speech.transcribed event and the conversation.turn it became have no
+// key joining them, and Task 9's learning-outcome analytics can't tell
+// spoken production from typed — the entire reason PRD §66 asks for
+// ONE shared pipeline in the first place). This is still the SAME
+// pipeline for both — no branch on whether sourceEventID is set
+// changes what Say does beyond this one Evidence field.
+func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid session.ID, text string, sourceEventID string) (Turn, error) {
 	sess, err := s.sessions.Get(ctx, identity, sid)
 	if err != nil {
 		return Turn{}, err
@@ -195,15 +209,24 @@ func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid sess
 		return Turn{}, fmt.Errorf("conversation: persist turn: %w", err)
 	}
 
+	turnEvidence := map[string]any{
+		"position":    position,
+		"corrections": len(out.Corrections),
+	}
+	if sourceEventID != "" {
+		// The join key I1 asked for: Task 9 (or any future consumer) can
+		// match this conversation.turn back to the exact speech.
+		// transcribed event (internal/application/speech.Service.
+		// Transcribe's own Evidence carries duration_ms/mime/chars) that
+		// produced text, distinguishing spoken from typed production.
+		turnEvidence["speech_event_id"] = sourceEventID
+	}
 	if err := s.rec.Record(ctx, event.LearningEvent{
 		IdentityID: identity,
 		SessionID:  &sid,
 		Type:       event.TypeConversationTurn,
 		Subject:    turnID,
-		Evidence: map[string]any{
-			"position":    position,
-			"corrections": len(out.Corrections),
-		},
+		Evidence:   turnEvidence,
 	}); err != nil {
 		return Turn{}, fmt.Errorf("conversation: record %s: %w", event.TypeConversationTurn, err)
 	}
