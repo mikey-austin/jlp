@@ -17,6 +17,7 @@ import (
 	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appsettings "github.com/mikeyaustin/jlp/internal/application/settings"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
@@ -134,6 +135,15 @@ type Options struct {
 	// end-of-conversation digest, governed by the session's
 	// session.Profile.FeedbackTiming.
 	Conversation *appconversation.Service
+	// Settings drives the /settings page (Phase 4 Task S, linked from
+	// /ai rather than a new top-level nav item — see settings.go's own
+	// doc comment): reading each AI provider's current effective
+	// model/effort and its source (config or override), and saving or
+	// resetting an override. The SAME instance is also the
+	// ports/ai.ModelResolver every AI adapter main.go builds holds and
+	// re-consults on every call — a save here reaches the next AI
+	// request with no restart.
+	Settings *appsettings.Service
 }
 
 type Server struct {
@@ -226,6 +236,14 @@ func (s *Server) routes() http.Handler {
 		// ambiguity here since /ai has no {id} segment of its own.
 		r.Get("/ai/agents", s.agentRunsList)
 		r.Get("/ai/agents/{id}", s.agentRunsDetail)
+		// /settings: Phase 4 Task S — change which AI model/effort each
+		// provider uses at runtime, no restart. Linked from /ai (see
+		// ai.html.tmpl), deliberately NOT a tenth top-level nav item —
+		// the topbar already wraps to its own row on phones (layout.html.tmpl).
+		r.Get("/settings", s.settingsPage)
+		r.Post("/settings/{provider}/model", s.settingsSetModel)
+		r.Post("/settings/{provider}/effort", s.settingsSetEffort)
+		r.Post("/settings/{provider}/reset", s.settingsReset)
 		r.Post("/ratings", s.ratingsCreate)
 		r.Get("/grammar", s.grammarList)
 		r.Get("/grammar/{slug}", s.grammarDetail)

@@ -72,6 +72,13 @@ type AnkiCard struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+// Operator settings (e.g. AI model/effort overrides) — GLOBAL, NOT identity-scoped. Do not add an identity_id column here; see internal/ports/storage.SettingsRepository.
+type AppSetting struct {
+	Key       string
+	Value     string
+	UpdatedAt pgtype.Timestamptz
+}
+
 type Conversation struct {
 	ID         pgtype.UUID
 	SessionID  pgtype.UUID

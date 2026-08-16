@@ -99,7 +99,7 @@ func TestGenerateStructuredForcesToolUseAndParsesResult(t *testing.T) {
 		t.Fatalf("schemas.Get: %v", err)
 	}
 
-	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, nil)
 	req := ai.StructuredRequest{
 		PromptName:    "teacher.feedback",
 		PromptVersion: "v1",
@@ -218,7 +218,7 @@ func TestGenerateStructuredErrorsWhenNoToolUseBlock(t *testing.T) {
 		t.Fatalf("schemas.Get: %v", err)
 	}
 
-	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, nil)
 	_, err = gen.GenerateStructured(context.Background(), ai.StructuredRequest{
 		System:     "system",
 		User:       "user",
@@ -243,7 +243,7 @@ func TestGenerateStructuredErrorsWhenToolUseBlockNamesWrongTool(t *testing.T) {
 		t.Fatalf("schemas.Get: %v", err)
 	}
 
-	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, nil)
 	_, err = gen.GenerateStructured(context.Background(), ai.StructuredRequest{
 		System:     "system",
 		User:       "user",
@@ -271,7 +271,7 @@ func TestGenerateStructuredWrapsNon2xxHTTPError(t *testing.T) {
 		t.Fatalf("schemas.Get: %v", err)
 	}
 
-	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, nil)
 	resp, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{
 		System:     "system",
 		User:       "user",
@@ -302,7 +302,7 @@ func TestGenerateStructuredMaxTokensPassedThrough(t *testing.T) {
 		t.Fatalf("schemas.Get: %v", err)
 	}
 
-	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, nil)
 	_, err = gen.GenerateStructured(context.Background(), ai.StructuredRequest{
 		System:     "system",
 		User:       "user",
@@ -315,5 +315,49 @@ func TestGenerateStructuredMaxTokensPassedThrough(t *testing.T) {
 	}
 	if captured.Body["max_tokens"] != float64(512) {
 		t.Errorf("max_tokens = %v, want 512 (explicit req.MaxTokens, not the 2048 default)", captured.Body["max_tokens"])
+	}
+}
+
+// fakeResolver is a minimal ai.ModelResolver test double whose answer
+// can be changed between calls.
+type fakeResolver struct{ model, effort string }
+
+func (r *fakeResolver) Model(_ string) (string, string) { return r.model, r.effort }
+
+// TestResolverOverrideReachesNextCallWithoutReconstruction is the task
+// brief's Step 1 requirement, asserted directly against this adapter:
+// construct ONE generator with a resolver, change what the resolver
+// reports between two calls, and confirm the SECOND call actually used
+// the new model — no second New() call anywhere in this test.
+func TestResolverOverrideReachesNextCallWithoutReconstruction(t *testing.T) {
+	var captured requestAssertion
+	srv := newTestServer(t, &captured, cannedToolUseResponse)
+	defer srv.Close()
+
+	schema, err := schemas.Get("correction_result.v1")
+	if err != nil {
+		t.Fatalf("schemas.Get: %v", err)
+	}
+
+	resolver := &fakeResolver{} // starts with no override
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, resolver)
+	req := ai.StructuredRequest{System: "s", User: "u", Schema: schema}
+
+	if _, err := gen.GenerateStructured(context.Background(), req); err != nil {
+		t.Fatalf("GenerateStructured (before override): %v", err)
+	}
+	if got := captured.Body["model"]; got != "claude-sonnet-5" {
+		t.Errorf("model before override = %v, want the config value claude-sonnet-5", got)
+	}
+
+	// Change what the resolver reports — simulating a /settings save —
+	// WITHOUT touching gen itself.
+	resolver.model = "claude-opus-5"
+
+	if _, err := gen.GenerateStructured(context.Background(), req); err != nil {
+		t.Fatalf("GenerateStructured (after override): %v", err)
+	}
+	if got := captured.Body["model"]; got != "claude-opus-5" {
+		t.Errorf("model after override = %v, want claude-opus-5 — the SAME generator must pick up the new resolver value with no restart/reconstruction", got)
 	}
 }

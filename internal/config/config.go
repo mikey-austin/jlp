@@ -145,6 +145,50 @@ var (
 	codexEfforts  = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
 )
 
+// ClaudeEfforts and CodexEfforts return copies of each CLI's own
+// accepted effort vocabulary (see claudeEfforts/codexEfforts above) —
+// exported so a caller outside this package (application/settings, for
+// the /settings page's effort selects — Phase 4 Task S) can populate
+// its UI from the exact same list ValidateEffort below checks against,
+// with no risk of a second, hand-copied list drifting out of sync.
+// Copies, not the package-level slices themselves, so a caller can
+// never mutate the vocabulary this package validates against.
+func ClaudeEfforts() []string { return slices.Clone(claudeEfforts) }
+func CodexEfforts() []string  { return slices.Clone(codexEfforts) }
+
+// ValidateEffort checks value against tool's own accepted effort
+// vocabulary ("claudecli" or "codexcli" — the same provider names
+// config.AI's route/resolver machinery already uses). An empty value
+// is always valid — it means "no effort override, let the CLI (or its
+// own configured default) decide" — mirroring ClaudeCLI.Effort/
+// CodexCLI.Effort's own empty-means-unset contract.
+//
+// This is the ONE definition of each vocabulary: validate() below and
+// application/settings.Service (Phase 4 Task S's runtime override path)
+// both call this rather than each keeping its own copy of
+// claudeEfforts/codexEfforts — a second, hand-maintained list is
+// exactly the kind of thing that quietly drifts (see claudeEfforts'
+// own doc comment on why "max" and "none"/"minimal" must never be
+// assumed interchangeable between the two tools).
+func ValidateEffort(tool, value string) error {
+	if value == "" {
+		return nil
+	}
+	switch tool {
+	case "claudecli":
+		if !slices.Contains(claudeEfforts, value) {
+			return fmt.Errorf("effort must be %s, got %q", strings.Join(claudeEfforts, "|"), value)
+		}
+	case "codexcli":
+		if !slices.Contains(codexEfforts, value) {
+			return fmt.Errorf("effort must be %s, got %q", strings.Join(codexEfforts, "|"), value)
+		}
+	default:
+		return fmt.Errorf("unknown effort tool %q, want claudecli|codexcli", tool)
+	}
+	return nil
+}
+
 // Anki configures the optional AnkiConnect push (PRD §19,
 // internal/adapters/ankiconnect). ConnectURL empty (the default) means
 // the feature is dormant: main.go never constructs an ankiconnect.Client,
@@ -397,6 +441,7 @@ var a2aReservedPathPrefixes = map[string]bool{
 	"anki":        true,
 	"lessons":     true,
 	"api":         true,
+	"settings":    true,
 }
 
 // firstPathSegment returns p's first "/"-delimited segment (no leading
@@ -518,13 +563,11 @@ func (c Config) validate() error {
 	// tool's own set: passing an unsupported level would otherwise only
 	// surface as a per-call exec failure, long after boot, on whichever
 	// prompt happened to route there first.
-	if c.AI.ClaudeCLI.Effort != "" && !slices.Contains(claudeEfforts, c.AI.ClaudeCLI.Effort) {
-		return fmt.Errorf("config: APP_AI_CLAUDECLI_EFFORT must be %s, got %q",
-			strings.Join(claudeEfforts, "|"), c.AI.ClaudeCLI.Effort)
+	if err := ValidateEffort("claudecli", c.AI.ClaudeCLI.Effort); err != nil {
+		return fmt.Errorf("config: APP_AI_CLAUDECLI_EFFORT: %w", err)
 	}
-	if c.AI.CodexCLI.Effort != "" && !slices.Contains(codexEfforts, c.AI.CodexCLI.Effort) {
-		return fmt.Errorf("config: APP_AI_CODEXCLI_EFFORT must be %s, got %q",
-			strings.Join(codexEfforts, "|"), c.AI.CodexCLI.Effort)
+	if err := ValidateEffort("codexcli", c.AI.CodexCLI.Effort); err != nil {
+		return fmt.Errorf("config: APP_AI_CODEXCLI_EFFORT: %w", err)
 	}
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("config: invalid port %d", c.Server.Port)

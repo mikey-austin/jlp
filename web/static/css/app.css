@@ -237,6 +237,45 @@ main p.description {
   flex-direction: column;
   gap: 1rem;
 }
+
+/* ============================== Settings (Phase 4 Task S) =============== */
+/* .settings-row: one AI provider's line on /settings — .card supplies
+ * the border/background/shadow, this adds the padding + vertical
+ * stacking of its header and the one-or-two forms inside (model,
+ * optionally effort). .settings-form is the compact inline row each
+ * form itself lays out as (label+input/select, then its buttons),
+ * distinct from .session-form's own full-column layout (sessions.html.tmpl)
+ * since these live inside an already-narrow card, not a standalone
+ * page section. flex-wrap on both means a narrow phone viewport wraps
+ * the controls onto their own lines rather than overflowing — the
+ * same responsive contract every other design-system form on this app
+ * already relies on. Tokens only, no colour literals — .badge/.error/
+ * .btn/.input/.select/.field already carry every color this page
+ * needs. */
+.settings-row {
+  padding: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+.settings-row__header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.settings-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.settings-form .field {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+}
 .concepts {
   margin: 0.3rem 0;
   display: flex;

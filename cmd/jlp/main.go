@@ -37,6 +37,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
+	appsettings "github.com/mikeyaustin/jlp/internal/application/settings"
 	appsummary "github.com/mikeyaustin/jlp/internal/application/summary"
 	"github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
@@ -108,6 +109,25 @@ func main() {
 		bus.Subscribe(event.TypeCorrectionPresented, obsUpdater.HandleEvent)
 		bus.Subscribe(event.TypeGrammarConceptEncountered, obsUpdater.HandleEvent)
 
+		// settingsSvc is the ports/ai.ModelResolver every AI adapter
+		// buildAIGenerator/buildToolCaller construct below holds and
+		// re-consults on every single call (Phase 4 Task S): it loads
+		// whatever operator overrides already exist in app_settings once,
+		// here, into an in-memory snapshot (never the other direction —
+		// cfg's own APP_AI_* values are never written INTO the database,
+		// see that package's doc comment on why), then keeps that
+		// snapshot in sync with every subsequent /settings save. This is
+		// what lets a model/effort change from /settings take effect on
+		// the next AI request with no restart: the SAME aiGen/toolCaller
+		// instances below just resolve a different value on their next
+		// call.
+		settingsRepo := postgres.NewSettingsRepository(pool)
+		settingsSvc, err := appsettings.NewService(context.Background(), settingsRepo, cfg.AI)
+		if err != nil {
+			slog.Error("settings", "err", err)
+			os.Exit(1)
+		}
+
 		// Every AI call is observed, whichever provider is behind it: the
 		// audit trail (latency, cost, success) must never depend on
 		// remembering to wrap a specific adapter. The same repository
@@ -118,9 +138,11 @@ func main() {
 		// configured), then wraps them in an airouter.New — so
 		// APP_AI_ROUTES-directed requests, and the APP_AI_PROVIDER
 		// fallback, are both just different chains of already-observed
-		// generators (Task 11/12, PRD §23/§24).
+		// generators (Task 11/12, PRD §23/§24). settingsSvc is threaded
+		// through so every one of those adapters can resolve a /settings
+		// override at call time (Phase 4 Task S).
 		aiRequestRepo := postgres.NewAIRequestRepository(pool)
-		aiGen, err := buildAIGenerator(cfg, aiRequestRepo)
+		aiGen, err := buildAIGenerator(cfg, aiRequestRepo, settingsSvc)
 		if err != nil {
 			slog.Error("ai", "err", err)
 			os.Exit(1)
@@ -135,7 +157,7 @@ func main() {
 		// is set: it's cheap (no network call at construction) and the
 		// agent-run loop below needs it regardless of which teacher path
 		// ends up calling it.
-		toolCaller, err := buildToolCaller(cfg, aiRequestRepo)
+		toolCaller, err := buildToolCaller(cfg, aiRequestRepo, settingsSvc)
 		if err != nil {
 			slog.Error("ai", "err", err)
 			os.Exit(1)
@@ -432,6 +454,7 @@ func main() {
 			A2A:                a2aServer,
 			A2APath:            cfg.A2A.Path,
 			Conversation:       conversationSvc,
+			Settings:           settingsSvc,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

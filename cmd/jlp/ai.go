@@ -167,7 +167,15 @@ func warnForUnknownPromptNames(routes map[string][]string) {
 // asked for a specific chain and deserves to find out at startup that
 // a link in it is missing, not on the first request that happens to
 // need it.
-func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestRepository) (ai.StructuredGenerator, error) {
+// resolver, when non-nil, is consulted by every constructed adapter on
+// every call (ports/ai.ModelResolver — Phase 4 Task S) so a /settings
+// override reaches the very next AI request without reconstructing
+// anything buildAIGenerator built. nil is a legitimate value (`jlp
+// eval`'s one-shot corpus run has no database connection to load
+// overrides from, so it passes nil and always uses cfg verbatim,
+// exactly like before this task) — every adapter treats a nil
+// resolver as "no override capability", not an error.
+func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestRepository, resolver ai.ModelResolver) (ai.StructuredGenerator, error) {
 	routes, err := config.ParseRoutes(cfg.AI.Routes)
 	if err != nil {
 		return nil, err
@@ -190,8 +198,8 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 		// are, so there's no "configured but maybe unused" case to warn
 		// about, and their tokens are always 0 regardless (cost is $0
 		// either way — see aiPricing's "cli" entry doc comment).
-		"claudecli": clicmd.NewClaude(cfg.AI.ClaudeCLI),
-		"codexcli":  clicmd.NewCodex(cfg.AI.CodexCLI),
+		"claudecli": clicmd.NewClaude(cfg.AI.ClaudeCLI, resolver),
+		"codexcli":  clicmd.NewCodex(cfg.AI.CodexCLI, resolver),
 	}
 	// anthropic and ollama are gated differently ON PURPOSE, per the
 	// task brief: anthropic only needs one field (APIKey) to become
@@ -209,11 +217,11 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 	// this asymmetry only affects whether its startup pricing warning
 	// (below) fires for a configured-but-unused provider.
 	if cfg.AI.Anthropic.APIKey != "" {
-		raw["anthropic"] = anthropic.New(cfg.AI.Anthropic)
+		raw["anthropic"] = anthropic.New(cfg.AI.Anthropic, resolver)
 		warnIfUnpriced(pricing, "anthropic", cfg.AI.Anthropic.Model)
 	}
 	if needed["ollama"] && cfg.AI.Ollama.Model != "" {
-		raw["ollama"] = ollama.New(cfg.AI.Ollama)
+		raw["ollama"] = ollama.New(cfg.AI.Ollama, resolver)
 		warnIfUnpriced(pricing, "ollama", cfg.AI.Ollama.Model)
 	}
 
@@ -268,7 +276,7 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 // (APP_AI_AGENTICTEACHER), but the ToolCaller itself is built once at
 // boot regardless, so turning the flag on later never needs a restart
 // bug hunt.
-func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepository) (ai.ToolCaller, error) {
+func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepository, resolver ai.ModelResolver) (ai.ToolCaller, error) {
 	routes, err := config.ParseRoutes(cfg.AI.Routes)
 	if err != nil {
 		return nil, err
@@ -279,7 +287,7 @@ func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepositor
 		"fake": fakeai.New(),
 	}
 	if cfg.AI.Anthropic.APIKey != "" {
-		raw["anthropic"] = anthropic.New(cfg.AI.Anthropic)
+		raw["anthropic"] = anthropic.New(cfg.AI.Anthropic, resolver)
 	}
 	needed := map[string]bool{cfg.AI.Provider: true}
 	for _, chain := range routes {
@@ -288,7 +296,7 @@ func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepositor
 		}
 	}
 	if needed["ollama"] && cfg.AI.Ollama.Model != "" {
-		raw["ollama"] = ollama.New(cfg.AI.Ollama)
+		raw["ollama"] = ollama.New(cfg.AI.Ollama, resolver)
 	}
 
 	providers := make(map[string]ai.ToolCaller, len(raw))

@@ -195,31 +195,43 @@ func searchJSONValue(v any) ([]byte, bool) {
 	return nil, false
 }
 
+// codexArgs assembles the Codex CLI's argv tail for a resolved
+// model/effort pair (same empty-means-CLI-default contract as
+// claudeArgs). Codex has no `--effort` flag: reasoning effort is a
+// config key, overridden per invocation with `-c`. The value is
+// emitted as a quoted TOML string because `-c` parses its value as
+// TOML and only falls back to a raw literal when that parse fails —
+// relying on the fallback would be depending on an error path.
+func codexArgs(model, effort string) []string {
+	args := []string{"exec", "--json"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", effort))
+	}
+	return args
+}
+
 // NewCodex returns an ai.StructuredGenerator that shells out to the
 // OpenAI Codex CLI (`codex exec --json`, prompt on stdin) as a
 // host-mode AI fallback (PRD §23). See the package doc comment for the
 // host-mode-only caveat: cfg.Bin not being installed is not a
 // construction-time error, only a per-call one.
-// Model and Effort are appended only when set (same
-// empty-means-CLI-default contract as NewClaude). Codex has no
-// `--effort` flag: reasoning effort is a config key, overridden per
-// invocation with `-c`. The value is emitted as a quoted TOML string
-// because `-c` parses its value as TOML and only falls back to a raw
-// literal when that parse fails — relying on the fallback would be
-// depending on an error path.
-func NewCodex(cfg config.CodexCLI) ai.StructuredGenerator {
-	args := []string{"exec", "--json"}
-	if cfg.Model != "" {
-		args = append(args, "--model", cfg.Model)
-	}
-	if cfg.Effort != "" {
-		args = append(args, "-c", fmt.Sprintf("model_reasoning_effort=%q", cfg.Effort))
-	}
+//
+// resolver (may be nil) is consulted fresh on every GenerateStructured
+// call for a /settings override on "codexcli" — Phase 4 Task S — so
+// cfg.Model/cfg.Effort are only the fallback used when resolver is nil
+// or reports no override, never baked in as fixed args here.
+func NewCodex(cfg config.CodexCLI, resolver ai.ModelResolver) ai.StructuredGenerator {
 	return &generator{
 		bin:        cfg.Bin,
-		args:       args,
 		provider:   codexProvider,
 		extract:    extractCodexTrailingLine,
+		buildArgs:  codexArgs,
+		baseModel:  cfg.Model,
+		baseEffort: cfg.Effort,
+		resolver:   resolver,
 		modelLabel: cfg.Model,
 	}
 }

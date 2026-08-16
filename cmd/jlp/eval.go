@@ -609,7 +609,12 @@ func printEvalSummary(report Report, ts string, prev *reportSummary) {
 // os.Exit(1), same as every other subcommand — when either the run
 // itself fails or PRD §49's regression gate trips.
 func runEvalCommand(ctx context.Context, cfg config.Config) error {
-	aiGen, err := buildAIGenerator(cfg, noopAIRequestRepo{})
+	// resolver is nil: `jlp eval` is a one-shot, offline corpus run with
+	// no database connection to load /settings overrides from (see
+	// buildAIGenerator's own doc comment on why nil is a legitimate,
+	// intentional value here) — it always scores against cfg's own
+	// APP_AI_* values, exactly like before Phase 4 Task S.
+	aiGen, err := buildAIGenerator(cfg, noopAIRequestRepo{}, nil)
 	if err != nil {
 		return fmt.Errorf("eval: build ai generator: %w", err)
 	}

@@ -141,7 +141,13 @@ func runSendSummary(ctx context.Context, cfg config.Config) error {
 	defer pool.Close()
 
 	aiRequestRepo := postgres.NewAIRequestRepository(pool)
-	aiGen, err := buildAIGenerator(cfg, aiRequestRepo)
+	// resolver is nil: `jlp send-summary` is a manual, one-shot trigger
+	// (see this function's own doc comment) — it always summarizes
+	// using cfg's own APP_AI_* values, same as before Phase 4 Task S.
+	// A live /settings override still applies to `jlp serve`'s own
+	// long-running aiGen (see main.go), which is what every actual AI
+	// request in the app goes through.
+	aiGen, err := buildAIGenerator(cfg, aiRequestRepo, nil)
 	if err != nil {
 		return fmt.Errorf("send-summary: ai: %w", err)
 	}

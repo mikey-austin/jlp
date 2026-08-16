@@ -38,6 +38,11 @@ const (
 type generator struct {
 	client anthropic.Client
 	model  string
+	// resolver, when non-nil, is consulted on every call (see
+	// resolveModel below) so a /settings override reaches the very
+	// next request without reconstructing this generator (Phase 4 Task
+	// S). nil means "no resolver wired up" — model is always cfg.Model.
+	resolver ai.ModelResolver
 }
 
 // New returns a value implementing BOTH ai.StructuredGenerator (forced
@@ -50,19 +55,37 @@ type generator struct {
 // cfg.APIKey are always passed explicitly to the SDK client, so this
 // generator never falls back to ambient ANTHROPIC_* environment
 // variables — the caller's config is the only source of truth for
-// where requests go and what credentials they carry.
-func New(cfg config.Anthropic) *generator {
+// where requests go and what credentials they carry. resolver (may be
+// nil) is checked at CALL time (resolveModel), not just here at
+// construction — see that method's doc comment.
+func New(cfg config.Anthropic, resolver ai.ModelResolver) *generator {
 	return &generator{
 		client: anthropic.NewClient(
 			option.WithAPIKey(cfg.APIKey),
 			option.WithBaseURL(cfg.BaseURL),
 		),
-		model: cfg.Model,
+		model:    cfg.Model,
+		resolver: resolver,
 	}
+}
+
+// resolveModel returns the model this call should use: resolver's
+// current override for "anthropic" when one is set, else g.model (the
+// APP_AI_ANTHROPIC_MODEL config value g was constructed with). Called
+// fresh on every GenerateStructured/CallWithTools invocation — never
+// cached — so a settings change takes effect on the very next call.
+func (g *generator) resolveModel() string {
+	if g.resolver != nil {
+		if m, _ := g.resolver.Model(provider); m != "" {
+			return m
+		}
+	}
+	return g.model
 }
 
 func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
 	start := time.Now()
+	reqModel := g.resolveModel()
 
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
@@ -77,7 +100,7 @@ func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredReq
 	tool := anthropic.ToolUnionParamOfTool(inputSchema, toolName)
 
 	resp, err := g.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:      anthropic.Model(g.model),
+		Model:      anthropic.Model(reqModel),
 		MaxTokens:  int64(maxTokens),
 		System:     []anthropic.TextBlockParam{{Text: req.System}},
 		Messages:   []anthropic.MessageParam{anthropic.NewUserMessage(anthropic.NewTextBlock(req.User))},
@@ -85,7 +108,7 @@ func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredReq
 		ToolChoice: anthropic.ToolChoiceParamOfTool(toolName),
 	})
 	if err != nil {
-		return ai.StructuredResponse{Provider: provider, Model: g.model},
+		return ai.StructuredResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("anthropic: messages.new: %w", err)
 	}
 
@@ -114,6 +137,7 @@ func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredReq
 // for, as opposed to StructuredGenerator's single forced call.
 func (g *generator) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.ToolResponse, error) {
 	start := time.Now()
+	reqModel := g.resolveModel()
 
 	maxTokens := req.MaxTokens
 	if maxTokens == 0 {
@@ -121,14 +145,14 @@ func (g *generator) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.T
 	}
 
 	resp, err := g.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     anthropic.Model(g.model),
+		Model:     anthropic.Model(reqModel),
 		MaxTokens: int64(maxTokens),
 		System:    []anthropic.TextBlockParam{{Text: req.System}},
 		Messages:  toAnthropicMessages(req.Messages),
 		Tools:     toAnthropicTools(req.Tools),
 	})
 	if err != nil {
-		return ai.ToolResponse{Provider: provider, Model: g.model},
+		return ai.ToolResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("anthropic: messages.new: %w", err)
 	}
 

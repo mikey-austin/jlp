@@ -30,22 +30,47 @@ type generator struct {
 	url    string
 	model  string
 	client *http.Client
+	// resolver, when non-nil, is consulted on every call (see
+	// resolveModel below) so a /settings override reaches the very
+	// next request without reconstructing this generator (Phase 4 Task
+	// S). nil means "no resolver wired up" — model is always cfg.Model,
+	// the pre-Task-S behavior.
+	resolver ai.ModelResolver
 }
 
 // New returns a value implementing BOTH ai.StructuredGenerator and
-// ai.ToolCaller against a local Ollama server at cfg.URL, always
-// requesting cfg.Model — same "concrete type, not either interface
-// alone" reasoning as adapters/anthropic.New's own doc comment.
-func New(cfg config.Ollama) *generator {
+// ai.ToolCaller against a local Ollama server at cfg.URL, requesting
+// cfg.Model UNLESS resolver (may be nil) currently has an override for
+// "ollama" — same "concrete type, not either interface alone"
+// reasoning as adapters/anthropic.New's own doc comment. resolver is
+// checked at CALL time (resolveModel), not just here at construction,
+// which is what lets an operator change the model from /settings
+// without restarting this process.
+func New(cfg config.Ollama, resolver ai.ModelResolver) *generator {
 	timeout := cfg.Timeout
 	if timeout <= 0 {
 		timeout = defaultTimeout
 	}
 	return &generator{
-		url:    cfg.URL,
-		model:  cfg.Model,
-		client: &http.Client{Timeout: timeout},
+		url:      cfg.URL,
+		model:    cfg.Model,
+		client:   &http.Client{Timeout: timeout},
+		resolver: resolver,
 	}
+}
+
+// resolveModel returns the model this call should use: resolver's
+// current override for "ollama" when one is set, else g.model (the
+// APP_AI_OLLAMA_MODEL config value g was constructed with). Called
+// fresh on every GenerateStructured/CallWithTools invocation — never
+// cached — so a settings change takes effect on the very next call.
+func (g *generator) resolveModel() string {
+	if g.resolver != nil {
+		if m, _ := g.resolver.Model(provider); m != "" {
+			return m
+		}
+	}
+	return g.model
 }
 
 // defaultTimeout backstops a zero/negative cfg.Timeout so a
@@ -157,9 +182,10 @@ type chatResponse struct {
 
 func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
 	start := time.Now()
+	reqModel := g.resolveModel()
 
 	body := chatRequest{
-		Model:  g.model,
+		Model:  reqModel,
 		Stream: false,
 		Messages: []chatMessage{
 			{Role: "system", Content: req.System},
@@ -171,44 +197,44 @@ func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredReq
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return ai.StructuredResponse{Provider: provider, Model: g.model},
+		return ai.StructuredResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.url+"/api/chat", bytes.NewReader(payload))
 	if err != nil {
-		return ai.StructuredResponse{Provider: provider, Model: g.model},
+		return ai.StructuredResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpResp, err := g.client.Do(httpReq)
 	if err != nil {
-		return ai.StructuredResponse{Provider: provider, Model: g.model},
+		return ai.StructuredResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: chat: %w", err)
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 
 	raw, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return ai.StructuredResponse{Provider: provider, Model: g.model},
+		return ai.StructuredResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: read response: %w", err)
 	}
 
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return ai.StructuredResponse{Provider: provider, Model: g.model},
+		return ai.StructuredResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: chat: status %d: %s", httpResp.StatusCode, raw)
 	}
 
 	var resp chatResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return ai.StructuredResponse{Provider: provider, Model: g.model},
+		return ai.StructuredResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: unmarshal response: %w", err)
 	}
 
 	model := resp.Model
 	if model == "" {
-		model = g.model
+		model = reqModel
 	}
 
 	return ai.StructuredResponse{
@@ -227,6 +253,7 @@ func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredReq
 // JSON object — the model decides, turn by turn, whether to call one.
 func (g *generator) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.ToolResponse, error) {
 	start := time.Now()
+	reqModel := g.resolveModel()
 
 	messages := make([]chatMessage, 0, len(req.Messages)+1)
 	if req.System != "" {
@@ -235,7 +262,7 @@ func (g *generator) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.T
 	messages = append(messages, toOllamaMessages(req.Messages)...)
 
 	body := chatRequest{
-		Model:    g.model,
+		Model:    reqModel,
 		Stream:   false,
 		Messages: messages,
 		Tools:    toOllamaTools(req.Tools),
@@ -244,43 +271,43 @@ func (g *generator) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.T
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return ai.ToolResponse{Provider: provider, Model: g.model},
+		return ai.ToolResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: marshal request: %w", err)
 	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, g.url+"/api/chat", bytes.NewReader(payload))
 	if err != nil {
-		return ai.ToolResponse{Provider: provider, Model: g.model},
+		return ai.ToolResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: new request: %w", err)
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	httpResp, err := g.client.Do(httpReq)
 	if err != nil {
-		return ai.ToolResponse{Provider: provider, Model: g.model},
+		return ai.ToolResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: chat: %w", err)
 	}
 	defer func() { _ = httpResp.Body.Close() }()
 
 	raw, err := io.ReadAll(httpResp.Body)
 	if err != nil {
-		return ai.ToolResponse{Provider: provider, Model: g.model},
+		return ai.ToolResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: read response: %w", err)
 	}
 	if httpResp.StatusCode < 200 || httpResp.StatusCode >= 300 {
-		return ai.ToolResponse{Provider: provider, Model: g.model},
+		return ai.ToolResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: chat: status %d: %s", httpResp.StatusCode, raw)
 	}
 
 	var resp chatResponse
 	if err := json.Unmarshal(raw, &resp); err != nil {
-		return ai.ToolResponse{Provider: provider, Model: g.model},
+		return ai.ToolResponse{Provider: provider, Model: reqModel},
 			fmt.Errorf("ollama: unmarshal response: %w", err)
 	}
 
 	model := resp.Model
 	if model == "" {
-		model = g.model
+		model = reqModel
 	}
 
 	turn := ai.ToolTurn{Text: resp.Message.Content}

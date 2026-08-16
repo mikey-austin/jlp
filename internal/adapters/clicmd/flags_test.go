@@ -35,7 +35,8 @@ func TestModelAndEffortReachTheCommandLine(t *testing.T) {
 				[]string{"-p", "--output-format", "json", "--effort", "low"}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				got := NewClaude(tc.cfg).(*generator).args
+				g := NewClaude(tc.cfg, nil).(*generator)
+				got := g.buildArgs(g.baseModel, g.baseEffort)
 				if !slices.Equal(got, tc.want) {
 					t.Errorf("args = %q, want %q", got, tc.want)
 				}
@@ -63,7 +64,8 @@ func TestModelAndEffortReachTheCommandLine(t *testing.T) {
 				[]string{"exec", "--json", "-c", `model_reasoning_effort="minimal"`}},
 		} {
 			t.Run(tc.name, func(t *testing.T) {
-				got := NewCodex(tc.cfg).(*generator).args
+				g := NewCodex(tc.cfg, nil).(*generator)
+				got := g.buildArgs(g.baseModel, g.baseEffort)
 				if !slices.Equal(got, tc.want) {
 					t.Errorf("args = %q, want %q", got, tc.want)
 				}
@@ -77,13 +79,13 @@ func TestModelAndEffortReachTheCommandLine(t *testing.T) {
 // and ai_requests should record it rather than a placeholder that makes
 // every CLI run look identical on the AI dashboard.
 func TestReportedModelPrefersThePinnedModel(t *testing.T) {
-	if got := NewClaude(config.ClaudeCLI{Bin: "claude"}).(*generator).reportedModel(); got != "cli" {
+	if got := NewClaude(config.ClaudeCLI{Bin: "claude"}, nil).(*generator).reportedModel(); got != "cli" {
 		t.Errorf("unpinned model = %q, want %q", got, "cli")
 	}
-	if got := NewClaude(config.ClaudeCLI{Bin: "claude", Model: "opus"}).(*generator).reportedModel(); got != "opus" {
+	if got := NewClaude(config.ClaudeCLI{Bin: "claude", Model: "opus"}, nil).(*generator).reportedModel(); got != "opus" {
 		t.Errorf("pinned model = %q, want %q", got, "opus")
 	}
-	if got := NewCodex(config.CodexCLI{Bin: "codex", Model: "gpt-5.5-codex"}).(*generator).reportedModel(); got != "gpt-5.5-codex" {
+	if got := NewCodex(config.CodexCLI{Bin: "codex", Model: "gpt-5.5-codex"}, nil).(*generator).reportedModel(); got != "gpt-5.5-codex" {
 		t.Errorf("pinned model = %q, want %q", got, "gpt-5.5-codex")
 	}
 }

@@ -74,31 +74,46 @@ func extractClaudeResult(stdout []byte) (cliOutput, error) {
 	return out, nil
 }
 
+// claudeArgs assembles the Claude Code CLI's argv tail for a resolved
+// model/effort pair — Model and Effort are appended only when set, so
+// an operator who has already configured the CLI to their taste (or
+// left both unset) keeps that behavior: an empty value means "whatever
+// the tool would do on its own", never a value this adapter invented.
+func claudeArgs(model, effort string) []string {
+	args := []string{"-p", "--output-format", "json"}
+	if model != "" {
+		args = append(args, "--model", model)
+	}
+	if effort != "" {
+		args = append(args, "--effort", effort)
+	}
+	return args
+}
+
 // NewClaude returns an ai.StructuredGenerator that shells out to the
 // Claude Code CLI (`claude -p --output-format json`, prompt on stdin)
 // as a host-mode AI fallback (PRD §23). See the package doc comment
 // for the host-mode-only caveat: cfg.Bin not being installed is not a
 // construction-time error, only a per-call one.
-// Model and Effort are appended only when set, so an operator who has
-// already configured the CLI to their taste keeps that configuration —
-// an unset field means "whatever the tool would do on its own", never
-// a value this adapter invented.
-func NewClaude(cfg config.ClaudeCLI) ai.StructuredGenerator {
-	args := []string{"-p", "--output-format", "json"}
-	if cfg.Model != "" {
-		args = append(args, "--model", cfg.Model)
-	}
-	if cfg.Effort != "" {
-		args = append(args, "--effort", cfg.Effort)
-	}
+//
+// resolver (may be nil) is consulted fresh on every GenerateStructured
+// call for a /settings override on "claudecli" — Phase 4 Task S — so
+// cfg.Model/cfg.Effort are only the fallback used when resolver is nil
+// or reports no override, never baked in as fixed args here.
+func NewClaude(cfg config.ClaudeCLI, resolver ai.ModelResolver) ai.StructuredGenerator {
 	return &generator{
-		bin:      cfg.Bin,
-		args:     args,
-		provider: claudeProvider,
-		extract:  extractClaudeResult,
+		bin:        cfg.Bin,
+		provider:   claudeProvider,
+		extract:    extractClaudeResult,
+		buildArgs:  claudeArgs,
+		baseModel:  cfg.Model,
+		baseEffort: cfg.Effort,
+		resolver:   resolver,
 		// Unlike Anthropic's API adapter, the CLI never names the model
 		// that answered — but when the operator PINNED one, that pin is
-		// what ran, so report it instead of the "cli" placeholder.
+		// what ran, so report it instead of the "cli" placeholder. Kept
+		// for the pinned reportedModel() test only — the request path
+		// itself resolves model/effort per call (resolveModelEffort).
 		modelLabel: cfg.Model,
 	}
 }

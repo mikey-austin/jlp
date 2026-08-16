@@ -266,6 +266,29 @@ route naming a provider with missing configuration (e.g. `ollama`
 without `APP_AI_OLLAMA_MODEL` set) fails the app at startup, not on the
 first request that needs it.
 
+### Changing model/effort at runtime (`/settings`)
+
+`APP_AI_*` (above) is the seed and the fallback — but an operator can
+override which model each provider uses, and the effort level for the
+two CLI providers, from **`/settings`** (linked from `/ai`) without
+restarting anything: the change applies to the *next* AI request,
+whichever request is already in flight when you save keeps running
+with the old value. Each row shows the provider's current effective
+value and whether it came from config or an override, plus a "reset to
+config" action that deletes the override. Effort is validated against
+the exact same per-CLI vocabulary `APP_AI_CLAUDECLI_EFFORT`/
+`APP_AI_CODEXCLI_EFFORT` are (`config.ValidateEffort` — one shared
+definition, not a second hand-copied list) — an invalid value is
+rejected in the form and never written to the database.
+
+Overrides live in the `app_settings` table (global, not per-learner)
+and are loaded once at boot into an in-memory snapshot every AI
+adapter re-consults on every call; a save updates that same snapshot,
+which is what makes the change visible immediately, with no
+reconstruction of any adapter. `APP_AI_*` itself is never copied into
+the database — an absent override row always means "use config",
+exactly as if `/settings` had never been touched.
+
 ### Agentic teacher (`APP_AI_AGENTICTEACHER`)
 
 `APP_AI_AGENTICTEACHER=true` (default `false`) opts every feedback

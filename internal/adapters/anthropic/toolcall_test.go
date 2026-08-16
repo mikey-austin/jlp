@@ -31,7 +31,7 @@ func TestCallWithToolsSendsToolDefsAndMapsToolUseResponse(t *testing.T) {
 	srv := newTestServer(t, &captured, cannedToolCallTurn)
 	defer srv.Close()
 
-	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, nil)
 	req := ai.ToolRequest{
 		PromptName: "teacher.agentic",
 		System:     "You are an agentic Japanese writing teacher.",
@@ -110,7 +110,7 @@ func TestCallWithToolsSendsToolResultsAndMapsFinalProse(t *testing.T) {
 	srv := newTestServer(t, &captured, cannedFinalProseTurn)
 	defer srv.Close()
 
-	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, nil)
 	req := ai.ToolRequest{
 		System: "You are an agentic Japanese writing teacher.",
 		Messages: []ai.ToolMessage{
@@ -169,7 +169,7 @@ func TestCallWithToolsPropagatesHTTPError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL})
+	gen := New(config.Anthropic{APIKey: "sk-test", Model: "claude-sonnet-5", BaseURL: srv.URL}, nil)
 	_, err := gen.CallWithTools(context.Background(), ai.ToolRequest{System: "s", Messages: []ai.ToolMessage{{Role: "user", Text: "hi"}}})
 	if err == nil {
 		t.Fatal("CallWithTools() err = nil, want an error for a non-2xx response")

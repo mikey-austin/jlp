@@ -1,0 +1,39 @@
+{{define "content"}}<section class="settings">
+  <h1>AIモデル設定</h1>
+  <p class="description">変更は<strong>次回のAIリクエスト</strong>から適用されます。すでに実行中のリクエストは、開始時点の設定のまま完了します。再起動は不要です。</p>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+
+  <div class="cards">
+    {{range .Rows}}{{$row := .}}<div class="card settings-row">
+      <div class="settings-row__header">
+        <h2>{{$row.Label}}</h2>
+        {{if or (eq $row.ModelSource "override") (and $row.HasEffort (eq $row.EffortSource "override"))}}
+        <form method="post" action="/settings/{{$row.Provider}}/reset">
+          <button type="submit" class="btn btn--secondary btn--sm">設定に戻す</button>
+        </form>
+        {{end}}
+      </div>
+
+      <form method="post" action="/settings/{{$row.Provider}}/model" class="settings-form">
+        <label class="field">モデル
+          <input class="input" type="text" name="model" value="{{$row.Model}}" required>
+        </label>
+        <span class="badge">{{if eq $row.ModelSource "override"}}override{{else}}config{{end}}</span>
+        <button type="submit" class="btn btn--sm">保存</button>
+      </form>
+
+      {{if $row.HasEffort}}
+      <form method="post" action="/settings/{{$row.Provider}}/effort" class="settings-form">
+        <label class="field">エフォート
+          <select class="select" name="effort">
+            <option value="">（未指定）</option>
+            {{range $row.EffortOptions}}<option value="{{.}}" {{if eq . $row.Effort}}selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
+        <span class="badge">{{if eq $row.EffortSource "override"}}override{{else}}config{{end}}</span>
+        <button type="submit" class="btn btn--sm">保存</button>
+      </form>
+      {{end}}
+    </div>{{end}}
+  </div>
+</section>{{end}}

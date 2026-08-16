@@ -70,7 +70,7 @@ func TestGenerateStructuredSendsWireContractAndParsesResult(t *testing.T) {
 		t.Fatalf("schemas.Get: %v", err)
 	}
 
-	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"}, nil)
 	req := ai.StructuredRequest{
 		PromptName: "teacher.feedback",
 		System:     "You are a Japanese writing teacher.",
@@ -177,7 +177,7 @@ func TestGenerateStructuredPassesThroughInvalidContentJSONRaw(t *testing.T) {
 		t.Fatalf("schemas.Get: %v", err)
 	}
 
-	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"}, nil)
 	resp, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{
 		System:     "system",
 		User:       "user",
@@ -204,7 +204,7 @@ func TestGenerateStructuredWrapsNon2xxHTTPError(t *testing.T) {
 		t.Fatalf("schemas.Get: %v", err)
 	}
 
-	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"}, nil)
 	resp, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{
 		System:     "system",
 		User:       "user",
@@ -248,7 +248,7 @@ func TestBothCallPathsDisableThinking(t *testing.T) {
 		srv := newTestServer(t, &captured, cannedChatResponse)
 		defer srv.Close()
 
-		gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+		gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"}, nil)
 		if _, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{
 			PromptName: "teacher.feedback",
 			System:     "You are a Japanese writing teacher.",
@@ -274,7 +274,7 @@ func TestBothCallPathsDisableThinking(t *testing.T) {
 		srv := newTestServer(t, &captured, cannedToolCallResponse)
 		defer srv.Close()
 
-		gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+		gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"}, nil)
 		if _, err := gen.CallWithTools(context.Background(), ai.ToolRequest{
 			PromptName: "teacher.agentic",
 			System:     "You are a Japanese writing teacher.",
@@ -313,9 +313,51 @@ func TestNewAlwaysSetsAClientTimeout(t *testing.T) {
 		{"negative falls back", config.Ollama{URL: "u", Model: "m", Timeout: -1}, defaultTimeout},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := New(tc.cfg).client.Timeout; got != tc.want {
+			if got := New(tc.cfg, nil).client.Timeout; got != tc.want {
 				t.Errorf("client.Timeout = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+// fakeResolver is a minimal ai.ModelResolver test double whose answer
+// can be changed between calls — the direct way to assert Phase 4 Task
+// S's whole point: an override reaches the very next
+// GenerateStructured call WITHOUT reconstructing the adapter.
+type fakeResolver struct{ model, effort string }
+
+func (r *fakeResolver) Model(_ string) (string, string) { return r.model, r.effort }
+
+// TestResolverOverrideReachesNextCallWithoutReconstruction is the task
+// brief's Step 1 requirement, asserted directly against this adapter:
+// construct ONE generator with a resolver, change what the resolver
+// reports between two calls, and confirm the SECOND call actually used
+// the new model — no second New() call anywhere in this test.
+func TestResolverOverrideReachesNextCallWithoutReconstruction(t *testing.T) {
+	var captured requestAssertion
+	srv := newTestServer(t, &captured, cannedChatResponse)
+	defer srv.Close()
+
+	resolver := &fakeResolver{} // starts with no override
+	gen := New(config.Ollama{URL: srv.URL, Model: "gemma4:12b"}, resolver)
+
+	req := ai.StructuredRequest{Schema: []byte(`{"type":"object"}`)}
+
+	if _, err := gen.GenerateStructured(context.Background(), req); err != nil {
+		t.Fatalf("GenerateStructured (before override): %v", err)
+	}
+	if got := captured.Body["model"]; got != "gemma4:12b" {
+		t.Errorf("model before override = %v, want the config value gemma4:12b", got)
+	}
+
+	// Change what the resolver reports — simulating a /settings save —
+	// WITHOUT touching gen itself.
+	resolver.model = "gemma4:latest"
+
+	if _, err := gen.GenerateStructured(context.Background(), req); err != nil {
+		t.Fatalf("GenerateStructured (after override): %v", err)
+	}
+	if got := captured.Body["model"]; got != "gemma4:latest" {
+		t.Errorf("model after override = %v, want gemma4:latest — the SAME generator must pick up the new resolver value with no restart/reconstruction", got)
 	}
 }

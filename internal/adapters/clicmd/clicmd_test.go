@@ -57,7 +57,7 @@ func testRequest() ai.StructuredRequest {
 
 func TestNewClaudeExtractsResultFromJSONEnvelope(t *testing.T) {
 	bin := writeStub(t, "claude", claudeStub)
-	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: bin})
+	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: bin}, nil)
 
 	resp, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err != nil {
@@ -79,7 +79,7 @@ func TestNewClaudeExtractsResultFromJSONEnvelope(t *testing.T) {
 
 func TestNewCodexExtractsTrailingJSONLine(t *testing.T) {
 	bin := writeStub(t, "codex", codexStub)
-	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin}, nil)
 
 	resp, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err != nil {
@@ -114,7 +114,7 @@ cat >/dev/null
 printf '{"type":"turn.started"}\n{"type":"item.completed","item":{"type":"agent_message","text":"{\"exercises\":[{\"prompt\":\"x\"}]}"}}\n'
 `
 	bin := writeStub(t, "codex", script)
-	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin}, nil)
 
 	resp, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err != nil {
@@ -144,7 +144,7 @@ func TestNewCodexDoesNotDescendIntoAnswerProseContainingBraces(t *testing.T) {
 	answer := `{"corrections":[{"original":"foo","corrected":"bar","explanation":"Use the JSON shape {\"key\":\"val\"}"}]}`
 	script := "#!/bin/sh\ncat >/dev/null\necho '" + answer + "'\n"
 	bin := writeStub(t, "codex", script)
-	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin}, nil)
 
 	resp, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err != nil {
@@ -167,7 +167,7 @@ func TestNewCodexDoesNotDescendIntoExerciseAnswerWithTopLevelTypeField(t *testin
 	answer := `{"type":"multiple-choice","instructions":"Fill in the blank, e.g. {\"answer\":\"x\"}","choices":["a","b"]}`
 	script := "#!/bin/sh\ncat >/dev/null\necho '" + answer + "'\n"
 	bin := writeStub(t, "codex", script)
-	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin}, nil)
 
 	resp, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err != nil {
@@ -188,7 +188,7 @@ cat >/dev/null
 printf '{"type":"agent_message","msg":"{\"exercises\":[]}"}\n'
 `
 	bin := writeStub(t, "codex", script)
-	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin}, nil)
 
 	resp, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err != nil {
@@ -211,7 +211,7 @@ func TestPromptOnStdinIsSystemUserAndSchema(t *testing.T) {
 	script := "#!/bin/sh\ncat > " + captured + "\necho '{\"result\":\"{}\"}'\n"
 	bin := writeStub(t, "claude", script)
 
-	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: bin})
+	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: bin}, nil)
 	req := ai.StructuredRequest{
 		System: "SYS",
 		User:   "USR",
@@ -239,7 +239,7 @@ func TestPromptOnStdinIsSystemUserAndSchema(t *testing.T) {
 func TestGenerateStructuredTimesOutWhenCLIHangs(t *testing.T) {
 	script := "#!/bin/sh\ncat >/dev/null\nsleep 3\necho '{\"result\":\"{}\"}'\n"
 	bin := writeStub(t, "claude", script)
-	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: bin})
+	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: bin}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -265,7 +265,7 @@ func TestGenerateStructuredTimesOutWhenCLIHangs(t *testing.T) {
 // GenerateStructured actually tries to exec a binary that isn't
 // installed — the expected in-container failure mode.
 func TestGenerateStructuredErrorsCleanlyWhenBinaryMissing(t *testing.T) {
-	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: "jlp-test-definitely-not-a-real-cli-binary-zzz"})
+	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: "jlp-test-definitely-not-a-real-cli-binary-zzz"}, nil)
 
 	_, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err == nil {
@@ -274,7 +274,7 @@ func TestGenerateStructuredErrorsCleanlyWhenBinaryMissing(t *testing.T) {
 }
 
 func TestNewCodexErrorsCleanlyWhenBinaryMissing(t *testing.T) {
-	gen := clicmd.NewCodex(config.CodexCLI{Bin: "jlp-test-definitely-not-a-real-cli-binary-zzz"})
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: "jlp-test-definitely-not-a-real-cli-binary-zzz"}, nil)
 
 	_, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err == nil {
@@ -288,7 +288,7 @@ func TestNewCodexErrorsCleanlyWhenBinaryMissing(t *testing.T) {
 func TestNewCodexTimesOutWhenCLIHangs(t *testing.T) {
 	script := "#!/bin/sh\ncat >/dev/null\nsleep 3\nprintf '{}\\n'\n"
 	bin := writeStub(t, "codex", script)
-	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin})
+	gen := clicmd.NewCodex(config.CodexCLI{Bin: bin}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
@@ -312,7 +312,7 @@ cat >/dev/null
 echo '{"result":"I cannot help with that."}'
 `
 	bin := writeStub(t, "claude", script)
-	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: bin})
+	gen := clicmd.NewClaude(config.ClaudeCLI{Bin: bin}, nil)
 
 	_, err := gen.GenerateStructured(context.Background(), testRequest())
 	if err == nil {

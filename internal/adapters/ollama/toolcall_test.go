@@ -25,7 +25,7 @@ func TestCallWithToolsSendsToolDefsAndMapsToolCallResponse(t *testing.T) {
 	srv := newTestServer(t, &captured, cannedToolCallResponse)
 	defer srv.Close()
 
-	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"}, nil)
 	req := ai.ToolRequest{
 		System: "You are an agentic Japanese writing teacher.",
 		Messages: []ai.ToolMessage{
@@ -83,7 +83,7 @@ func TestCallWithToolsSendsToolResultsAsToolRoleMessages(t *testing.T) {
 	srv := newTestServer(t, &captured, cannedToolFinalResponse)
 	defer srv.Close()
 
-	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+	gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"}, nil)
 	req := ai.ToolRequest{
 		System: "sys",
 		Messages: []ai.ToolMessage{
