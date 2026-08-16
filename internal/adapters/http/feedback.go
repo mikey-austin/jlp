@@ -45,6 +45,29 @@ type correctionCardView struct {
 	HasHint                                   bool
 	Attempts                                  int
 	Revealed                                  bool
+	// Gated is THE socratic pre-reveal decision for this card, computed
+	// once here by whoever builds the view and rendered by
+	// correction_card.html.tmpl as a plain `{{if .Gated}}`. The template
+	// used to re-derive the predicate itself
+	// (`and .HasHint (eq .Status "presented") (not .Revealed)`) — the
+	// 4th copy of a definition that has leaked in this project before,
+	// and load-bearing for three surfaces since Phase 4 Task 6 (writing
+	// pane, conversation turns, conversation digest). Every producer
+	// now calls through to domain correction.IsGated (via
+	// isGatedCorrection for the writing pane, directly in
+	// conversation.go for turns) or states an explicit policy in one
+	// place (the digest — see toConversationDigestCardView), so there
+	// is exactly one definition of "hidden" and the template holds
+	// none of it.
+	Gated bool
+	// GatedNote is optional copy rendered INSIDE the gated branch, in
+	// place of the retry/reveal forms, for a surface where those forms
+	// don't exist. Empty for a writing-pane correction, which has real
+	// forms; set for a conversation turn's correction, which has none —
+	// see conversationGatedNote. A gate the learner cannot open, with
+	// nothing saying where the answer comes from, is a dead end; this
+	// field is what stops the card implying a reveal that cannot happen.
+	GatedNote string
 	// Interactive gates correction_card.html.tmpl's retry/reveal <form>s
 	// (Finding I-2): true for every writing-pane correction (backed by a
 	// real corrections table row, so /corrections/{id}/retry|reveal
@@ -112,6 +135,7 @@ func toCorrectionCardView(cv feedback.CorrectionView) correctionCardView {
 		HasHint:       cv.HasHint(),
 		Attempts:      cv.Attempts,
 		Revealed:      cv.Revealed,
+		Gated:         isGatedCorrection(cv),
 		Interactive:   true,
 	}
 }

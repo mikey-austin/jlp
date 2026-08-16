@@ -14,50 +14,48 @@ import (
 )
 
 // conversationCorrectionStatusGated/conversationCorrectionStatusNoted
-// are the two Status values toConversationCardView assigns a
-// conversation correction's correctionCardView — see that function's
-// doc comment for exactly when each applies and why.
+// are the two Status values a conversation correction's
+// correctionCardView carries — see toConversationTurnCardView's doc
+// comment for exactly when each applies and why.
 const (
 	conversationCorrectionStatusGated = "presented"
 	conversationCorrectionStatusNoted = "noted"
 )
 
-// toConversationCardView maps a domain correction.Correction (Phase 4
-// Task 6, PRD §17.4) onto the SAME correctionCardView the writing
-// feedback pane's correction_card partial already renders (see
-// feedback.go) — one partial, one IsGated-respecting template, for both
-// surfaces. A conversation correction has no accept/reject/retry/reveal
-// lifecycle of its own — application/conversation's package doc comment
+// conversationGatedNote is the copy a GATED conversation turn card
+// carries where the writing pane's card carries its 答えを見る/retry
+// forms (whole-branch review C-2).
+//
+// A conversation correction has no corrections-table row, so it has no
+// per-correction reveal route and none is being added here. Without
+// this line the card was a permanent dead end in the DEFAULT
+// configuration (socratic teacher mode + "end" feedback timing): a hint
+// with no affordance, no explanation, and — before this round — a
+// digest that re-gated the same correction, so the answer was
+// unreachable on every surface. The fix is to make the conversation's
+// EXISTING end-of-conversation digest the reveal (see
+// toConversationDigestCardView) and to say so here, on the card that
+// withholds, naming the exact button that opens it. The wording is
+// deliberately concrete about which control to press: "not available
+// yet" without a destination is the same dead end with an apology
+// attached.
+const conversationGatedNote = "答えは会話の最後に「会話をまとめる」を押すと表示されます。"
+
+// toConversationCardView maps a domain correction.Correction onto the
+// SAME correctionCardView the writing feedback pane's correction_card
+// partial renders — the fields that are identical for BOTH conversation
+// surfaces. Status/Gated/GatedNote are the two surfaces' only
+// difference and are set by the two callers below, never here, so
+// "which surface reveals" is stated once per surface rather than being
+// re-derived by a shared helper that would then need a flag.
+//
+// Attempts is always 0, Revealed always false and Interactive always
+// false: a conversation correction has no accept/reject/retry/reveal
+// lifecycle of its own (application/conversation's package doc comment
 // explains why corrections are persisted whole on the turn rather than
-// as their own row — so this always sets Attempts 0, Revealed false,
-// and picks Status by whether the correction is socratically hinted:
-//
-//   - HasHint() true (Task 8 socratic mode): Status is "presented" —
-//     the ONLY value that, combined with HasHint, satisfies
-//     correction.IsGated (see that function's doc comment: hasHint &&
-//     status=="presented" && !revealed) — so correction_card's
-//     pre-reveal gate hides Replacement/Explanation and shows only the
-//     hint, exactly like a writing correction's card would. This is
-//     the task's mandated pin: a gated correction surfaced in a
-//     conversation shows the hint and NOT the replacement (see
-//     conversation_test.go).
-//   - Otherwise: Status is "noted", a value correction_card.html.tmpl
-//     has no case for except its trailing `{{else}}<footer
-//     class="resolved">` branch — the full explanation is shown, but
-//     with NO interactive footer at all (not even accept/reject).
-//
-// Interactive is left false (Finding I-2 — see correctionCardView's own
-// doc comment): a conversation correction has no corrections-table row
-// backing its ID, so correction_card.html.tmpl's retry/reveal <form>s
-// (rendered inside the gated branch above) would 404 if submitted.
-// Interactive:false guards both forms out of the rendered HTML
-// entirely — the gate itself (which branch renders) is untouched, only
-// whether that branch's buttons are present.
+// as their own row), so correction_card.html.tmpl's retry/reveal
+// <form>s — which post to /corrections/{id}/… — would 404 if rendered.
 func toConversationCardView(c correction.Correction) correctionCardView {
-	status := conversationCorrectionStatusNoted
-	if c.HasHint() {
-		status = conversationCorrectionStatusGated
-	}
 	return correctionCardView{
 		ID:            c.ID,
 		Type:          string(c.Type),
@@ -66,7 +64,6 @@ func toConversationCardView(c correction.Correction) correctionCardView {
 		Replacement:   c.Replacement,
 		ExplanationJA: c.Explanation.JA,
 		ExplanationEN: c.Explanation.EN,
-		Status:        status,
 		DiffSpans:     toDiffSpans(diff.Runes(c.Original, c.Replacement)),
 		Concepts:      c.Concepts,
 		HintJA:        c.Hint.JA,
@@ -74,6 +71,59 @@ func toConversationCardView(c correction.Correction) correctionCardView {
 		HasHint:       c.HasHint(),
 		Interactive:   false,
 	}
+}
+
+// toConversationTurnCardView is a correction as it appears INSIDE the
+// running conversation — the surface that still withholds.
+//
+//   - HasHint() true (socratic teacher mode): Status is "presented",
+//     the only value that, with HasHint and !Revealed, satisfies
+//     domain correction.IsGated — called here directly rather than
+//     restated, so this surface cannot drift from the definition every
+//     other surface uses. The card shows the hint, never Replacement or
+//     Explanation, plus conversationGatedNote naming where the answer
+//     will come from.
+//   - Otherwise: Status is "noted" — the full explanation, with no
+//     interactive footer at all (correction_card.html.tmpl has no case
+//     for "noted" except its trailing `<footer class="resolved">`).
+func toConversationTurnCardView(c correction.Correction) correctionCardView {
+	v := toConversationCardView(c)
+	v.Status = conversationCorrectionStatusNoted
+	if c.HasHint() {
+		v.Status = conversationCorrectionStatusGated
+	}
+	v.Gated = correction.IsGated(v.HasHint, v.Status, v.Revealed)
+	if v.Gated {
+		v.GatedNote = conversationGatedNote
+	}
+	return v
+}
+
+// toConversationDigestCardView is a correction as it appears in the
+// end-of-conversation digest — the surface that REVEALS.
+//
+// This is the whole-branch review's C-2 ruling, and it is a product
+// decision, so it is stated here rather than implied: pressing
+// 会話をまとめる IS the conversation's reveal. A per-correction 答えを見る
+// has nothing to flip (no row), and a gate with no ungate anywhere is
+// not a gate — it is a deletion. The digest is a deliberate learner
+// action, taken once the conversation (where the tutor's own socratic
+// follow-ups do the eliciting) is over, and it is the last surface a
+// conversation correction ever reaches; withholding here withholds
+// forever. So Gated is false unconditionally — NOT a re-derivation of
+// correction.IsGated with different inputs, but the explicit statement
+// that this surface is past the gate — and Status is "noted" so the
+// card renders the answer with no accept/reject footer pointing at
+// routes that would 404.
+//
+// The socratic contract is intact where it does work: every turn card
+// during the conversation still withholds (toConversationTurnCardView),
+// and nothing reveals until the learner asks.
+func toConversationDigestCardView(c correction.Correction) correctionCardView {
+	v := toConversationCardView(c)
+	v.Status = conversationCorrectionStatusNoted
+	v.Gated = false
+	return v
 }
 
 // conversationTurnView is one exchange as the "conversation_turn"
@@ -100,7 +150,7 @@ type conversationTurnView struct {
 func toConversationTurnView(t appconversation.Turn) conversationTurnView {
 	cards := make([]correctionCardView, 0, len(t.Corrections))
 	for _, c := range t.Corrections {
-		cards = append(cards, toConversationCardView(c))
+		cards = append(cards, toConversationTurnCardView(c))
 	}
 	return conversationTurnView{
 		ID:          t.ID,
@@ -123,7 +173,7 @@ type conversationSummaryView struct {
 func toConversationSummaryView(sum appconversation.Summary) conversationSummaryView {
 	cards := make([]correctionCardView, 0, len(sum.Corrections))
 	for _, c := range sum.Corrections {
-		cards = append(cards, toConversationCardView(c))
+		cards = append(cards, toConversationDigestCardView(c))
 	}
 	return conversationSummaryView{Turns: sum.Turns, Cards: cards}
 }

@@ -180,21 +180,53 @@ func TestConversationSayGatedCorrectionHasNoInteractiveControls(t *testing.T) {
 	}
 }
 
-// TestConversationSummariseGatedCorrectionShowsHintNotReplacement pins
-// Finding I-3: the digest path shares toConversationCardView with the
-// turn path (see that function's doc comment), but until now only the
-// turn path had a test proving the socratic gate actually withholds the
-// replacement — the digest is untested at exactly the property that has
-// leaked six times before in this project (see domain/correction.IsGated's
-// doc comment). A socratic session's ONLY route to a correction, once
-// "end" timing withholds it from every individual turn, is this digest.
-func TestConversationSummariseGatedCorrectionShowsHintNotReplacement(t *testing.T) {
+// TestConversationGatedTurnCardSaysWhereTheAnswerComesFrom pins half of
+// whole-branch review C-2: a gated conversation card has no reveal
+// control of its own (see the test above), so if it also says nothing
+// about where the answer comes from it is a hint the learner can never
+// resolve — the exact dead end the Task 6 fix removed a 404ing button
+// for, one layer up. The card must name the surface that reveals.
+func TestConversationGatedTurnCardSaysWhereTheAnswerComesFrom(t *testing.T) {
+	h := NewServer(testOptionsWithSessions()).HandlerForTest()
+	sid := createTestSession(t, h, "socratic", "immediate")
+
+	rec := postConversationSay(t, h, sid, "昨日の映画はとても面白いでした。")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST conversation status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	if !strings.Contains(body, conversationGatedNote) {
+		t.Fatalf("gated conversation card gives the learner no route to the answer (expected %q): %s", conversationGatedNote, body)
+	}
+}
+
+// TestConversationSummariseRevealsTheAnswerToAGatedCorrection is the
+// other half of C-2, and it deliberately REPLACES an earlier test that
+// pinned the opposite (the digest re-gating). That test pinned a
+// permanent dead end: a conversation correction has no corrections-table
+// row, so there is no per-correction reveal route and never was one, and
+// the digest is the last surface such a correction ever reaches. With
+// the digest gating too, a learner in the DEFAULT configuration
+// (socratic + "end" timing) could be shown a hint whose answer existed
+// on no surface at all.
+//
+// The ruling (see toConversationDigestCardView) is that pressing
+// 会話をまとめる IS the conversation's reveal — a deliberate learner
+// action, after the conversation where the socratic eliciting actually
+// happens. This test pins that the answer arrives, and the test above
+// pins that nothing leaks before the learner asks.
+func TestConversationSummariseRevealsTheAnswerToAGatedCorrection(t *testing.T) {
 	h := NewServer(testOptionsWithSessions()).HandlerForTest()
 	sid := createTestSession(t, h, "socratic", "end")
 
 	rec := postConversationSay(t, h, sid, "昨日の映画はとても面白いでした。")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("POST conversation status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	// Precondition: the turn itself withheld, so the digest is genuinely
+	// this correction's first and only sight of the answer.
+	if strings.Contains(rec.Body.String(), "面白かったです") {
+		t.Fatalf("precondition failed: the turn surface already showed the replacement: %s", rec.Body.String())
 	}
 
 	summaryReq := httptest.NewRequest(http.MethodPost, "/sessions/"+sid+"/conversation/summary", nil)
@@ -204,10 +236,71 @@ func TestConversationSummariseGatedCorrectionShowsHintNotReplacement(t *testing.
 		t.Fatalf("POST conversation/summary status = %d, body=%s", summaryRec.Code, summaryRec.Body.String())
 	}
 	body := summaryRec.Body.String()
-	if !strings.Contains(body, "い形容詞の過去形の作り方を思い出してください") {
-		t.Fatalf("gated digest correction missing its hint: %s", body)
+	if !strings.Contains(body, "面白かったです") {
+		t.Fatalf("digest withheld the replacement — a socratic conversation correction's answer is reachable on NO surface: %s", body)
 	}
-	if strings.Contains(body, "面白かったです") {
-		t.Fatalf("gated digest correction leaked the replacement into the digest: %s", body)
+	if !strings.Contains(body, "い形容詞の過去形は") {
+		t.Fatalf("digest withheld the explanation: %s", body)
+	}
+	// And no dead affordance: the digest card must not offer controls
+	// that post to routes a conversation correction has no row behind.
+	for _, dead := range []string{"/retry", "/reveal", "/status"} {
+		if strings.Contains(body, dead) {
+			t.Fatalf("digest card rendered a control pointing at %s, which 404s for a conversation correction: %s", dead, body)
+		}
+	}
+	// Nor the internal lifecycle sentinel: "noted" is a value this
+	// adapter invents for a card with no lifecycle, not a word for the
+	// learner — and every digest card now goes through that branch.
+	if strings.Contains(body, `class="resolved"`) {
+		t.Errorf("digest card printed its internal status sentinel as a footer: %s", body)
+	}
+}
+
+// TestCorrectionCardRendersTheComputedGateNotItsOwnPredicate pins the
+// E1/F1 collapse: correction_card.html.tmpl must branch on the
+// PRE-COMPUTED correctionCardView.Gated field and hold no copy of the
+// socratic predicate itself. It used to spell out
+// `and .HasHint (eq .Status "presented") (not .Revealed)` — a fourth
+// copy of domain correction.IsGated, and, since Phase 4 Task 6, the
+// single gate for three surfaces (writing pane, conversation turns,
+// conversation digest) whose view builders both copy Replacement and
+// Explanation into the view unconditionally.
+//
+// Both directions are asserted with deliberately CONTRADICTORY inputs —
+// a view whose raw fields say one thing and whose Gated says the other —
+// because that is the only way to tell "the template consumed the
+// computed field" apart from "the template happened to agree". Against
+// the old template each half fails.
+func TestCorrectionCardRendersTheComputedGateNotItsOwnPredicate(t *testing.T) {
+	render := func(t *testing.T, v correctionCardView) string {
+		t.Helper()
+		rec := httptest.NewRecorder()
+		RenderPartial(rec, httptest.NewRequest(http.MethodGet, "/", nil), "correction_card", v)
+		return rec.Body.String()
+	}
+
+	// Gated true, but the raw fields the old inline predicate read say
+	// "not gated" (Status is not "presented", and Revealed is true).
+	withheld := render(t, correctionCardView{
+		ID: "c1", Original: "面白いでした", Replacement: "面白かったです",
+		ExplanationJA: "説明", HintJA: "ヒント",
+		Status: "accepted", HasHint: true, Revealed: true, Gated: true,
+	})
+	if strings.Contains(withheld, "面白かったです") {
+		t.Fatalf("card ignored Gated=true and re-derived the gate from Status/Revealed, leaking the replacement: %s", withheld)
+	}
+	if !strings.Contains(withheld, "ヒント") {
+		t.Fatalf("gated card did not render its hint: %s", withheld)
+	}
+
+	// Gated false, but the raw fields say "gated".
+	shown := render(t, correctionCardView{
+		ID: "c2", Original: "面白いでした", Replacement: "面白かったです",
+		ExplanationJA: "説明", HintJA: "ヒント",
+		Status: "noted", HasHint: true, Revealed: false, Gated: false,
+	})
+	if !strings.Contains(shown, "面白かったです") {
+		t.Fatalf("card ignored Gated=false and re-derived the gate from HasHint/Status/Revealed, withholding the replacement: %s", shown)
 	}
 }

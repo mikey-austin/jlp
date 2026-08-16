@@ -2,7 +2,7 @@
 <article class="correction correction--{{.Status}}" id="corr-{{.ID}}" data-status="{{.Status}}">
   <header><span class="badge badge--type">{{.Type}}</span>
           <span class="badge badge--severity-{{.Severity}}">{{.Severity}}</span></header>
-  {{if and .HasHint (eq .Status "presented") (not .Revealed)}}
+  {{if .Gated}}
   {{/* Socratic pre-reveal gate (Phase 2 Task 8, PRD §9/§53): Replacement,
        the inline diff, and Explanation are ALL withheld here — not just
        <ins>{{.Replacement}}</ins> — because Explanation routinely spells
@@ -10,7 +10,16 @@
        would leak the answer into the DOM just as surely as showing the
        diff would. Only the hint, the learner's own original text, and a
        retry/reveal affordance are rendered until Status leaves
-       "presented" or Revealed flips true (the "else" branch below). */}}
+       "presented" or Revealed flips true (the "else" branch below).
+
+       .Gated is COMPUTED, not re-derived here: this branch used to
+       spell out `and .HasHint (eq .Status "presented") (not .Revealed)`
+       itself — a 4th copy of domain correction.IsGated, and since Phase
+       4 Task 6 the single gate for three surfaces. Every view builder
+       now calls through to the domain predicate (or, for the
+       conversation digest, states its reveal policy in one documented
+       place) and hands the answer here as a bool. See
+       correctionCardView.Gated in internal/adapters/http/feedback.go. */}}
   <p class="pair"><del>{{.Original}}</del></p>
   <p class="hint ja">💡 {{.HintJA}}</p>
   <p class="hint en">{{.HintEN}}</p>
@@ -30,6 +39,15 @@
   <form hx-post="/corrections/{{.ID}}/reveal" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
     <button type="submit" class="btn btn--ghost btn--sm">答えを見る</button>
   </form>
+  {{else if .GatedNote}}
+  {{/* Whole-branch review C-2: a non-interactive gated card has no
+       reveal control of its own, so without this line it is a hint the
+       learner can never resolve and no copy explaining why. GatedNote
+       names the surface that WILL show the answer — see
+       conversationGatedNote in internal/adapters/http/conversation.go.
+       Empty (and this branch absent) for the writing pane, whose forms
+       above are the affordance. */}}
+  <p class="hint">{{.GatedNote}}</p>
   {{end}}
   {{else}}
   {{if and (eq .Status "accepted") (gt .Attempts 0)}}<p class="correct-banner">正解！</p>{{end}}
@@ -51,7 +69,14 @@
   </form>
   {{if gt .Attempts 0}}<p class="attempts">試行回数: {{.Attempts}}</p>{{end}}
   {{end}}
-  {{else}}<footer class="resolved">{{.Status}}</footer>{{end}}
+  {{else if .Interactive}}<footer class="resolved">{{.Status}}</footer>{{end}}
+  {{/* The resolved footer prints the raw lifecycle Status, which is
+       meaningful for a writing correction ("accepted"/"rejected") and
+       meaningless for a conversation one — those carry the internal
+       "noted" sentinel and have no lifecycle at all. Gated on
+       .Interactive so the digest (whole-branch review C-2, now the
+       surface that reveals) doesn't show every card an English
+       "noted" label in a Japanese UI. */}}
   {{end}}
   {{if eq .Status "accepted"}}
   <div class="confidence" x-data="{ score: 0 }">
