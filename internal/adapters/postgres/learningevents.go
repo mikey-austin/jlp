@@ -3,9 +3,11 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -13,7 +15,14 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
+
+// pgUniqueViolation is Postgres's own SQLSTATE for a unique-constraint
+// violation (23505) — the code migrationsfs/00025_speech_event_id_
+// unique.sql's partial index raises when two concurrent Append calls
+// race to record the same evidence->>'speech_event_id'.
+const pgUniqueViolation = "23505"
 
 // LearningEventRepository stores immutable learning_events rows: Append
 // only ever inserts, never updates.
@@ -41,7 +50,7 @@ func (r *LearningEventRepository) Append(ctx context.Context, ev event.LearningE
 		return fmt.Errorf("evidence: %w", err)
 	}
 
-	return r.q.AppendLearningEvent(ctx, sqlcgen.AppendLearningEventParams{
+	if err := r.q.AppendLearningEvent(ctx, sqlcgen.AppendLearningEventParams{
 		ID:         id,
 		IdentityID: string(ev.IdentityID),
 		SessionID:  sid,
@@ -49,7 +58,21 @@ func (r *LearningEventRepository) Append(ctx context.Context, ev event.LearningE
 		Subject:    ev.Subject,
 		Evidence:   evidenceJSON,
 		OccurredAt: pgtype.Timestamptz{Time: ev.OccurredAt, Valid: true},
-	})
+	}); err != nil {
+		// Translate the driver-specific unique_violation into
+		// storage.ErrDuplicate so application code (application/
+		// conversation.Service.Say's post-I1 speech_event_id race
+		// handling) can react to it without importing pgx itself —
+		// the same "sentinel error, not a driver type" contract
+		// storage.ErrNotFound already establishes for pgx.ErrNoRows
+		// elsewhere in this package.
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
+			return storage.ErrDuplicate
+		}
+		return err
+	}
+	return nil
 }
 
 // ListRecent returns up to limit events for identity, newest first. If sid

@@ -19,6 +19,7 @@ package conversation
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -242,13 +243,32 @@ func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid sess
 		// simply never gets the key), never an error.
 		turnEvidence["speech_event_id"] = sourceEventID
 	}
-	if err := s.rec.Record(ctx, event.LearningEvent{
+	err = s.rec.Record(ctx, event.LearningEvent{
 		IdentityID: identity,
 		SessionID:  &sid,
 		Type:       event.TypeConversationTurn,
 		Subject:    turnID,
 		Evidence:   turnEvidence,
-	}); err != nil {
+	})
+	if errors.Is(err, storage.ErrDuplicate) {
+		// validSourceEvent's check-then-write left a narrow window: another
+		// concurrent Say call for the SAME sourceEventID could Record its
+		// own turn between our check and this write, and the database's
+		// own migrationsfs/00025_speech_event_id_unique.sql partial index —
+		// not just our application-level check — is what actually caught
+		// it. Losing this race must behave EXACTLY like an invalid id
+		// (Say's own doc comment): downgrade to typed and retry once,
+		// never surface a database error to the learner.
+		delete(turnEvidence, "speech_event_id")
+		err = s.rec.Record(ctx, event.LearningEvent{
+			IdentityID: identity,
+			SessionID:  &sid,
+			Type:       event.TypeConversationTurn,
+			Subject:    turnID,
+			Evidence:   turnEvidence,
+		})
+	}
+	if err != nil {
 		return Turn{}, fmt.Errorf("conversation: record %s: %w", event.TypeConversationTurn, err)
 	}
 

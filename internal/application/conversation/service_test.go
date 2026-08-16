@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -72,6 +73,14 @@ func (f *fakeSessionRepo) List(_ context.Context, identity learner.IdentityID) (
 // created it, and InsertTurn/ListTurns both refuse any other identity
 // with storage.ErrNotFound.
 type fakeConversationRepo struct {
+	// mu guards every field below — needed for
+	// TestSayHandlesConcurrentDuplicateSpeechEventIDRace, the only test
+	// that calls Say from more than one goroutine at once; a real
+	// postgres.ConversationRepository gets this for free from the
+	// database's own locking, but this in-memory fake needs it spelled
+	// out or concurrent map writes panic for a reason that has nothing
+	// to do with what that test is actually pinning.
+	mu       sync.Mutex
 	byConvID map[string]convRow
 	// bySession keys conversation ID by identity+"/"+session, mirroring
 	// the real schema's UNIQUE(session_id) — one conversation per
@@ -89,6 +98,8 @@ func newFakeConversationRepo() *fakeConversationRepo {
 }
 
 func (f *fakeConversationRepo) GetOrCreateForSession(_ context.Context, identity learner.IdentityID, sid session.ID) (string, bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	key := string(sid)
 	if id, ok := f.bySession[key]; ok {
 		row := f.byConvID[id]
@@ -104,6 +115,8 @@ func (f *fakeConversationRepo) GetOrCreateForSession(_ context.Context, identity
 }
 
 func (f *fakeConversationRepo) InsertTurn(_ context.Context, identity learner.IdentityID, conversationID string, turn storage.ConversationTurn) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	row, ok := f.byConvID[conversationID]
 	if !ok || row.identity != identity {
 		return storage.ErrNotFound
@@ -113,18 +126,88 @@ func (f *fakeConversationRepo) InsertTurn(_ context.Context, identity learner.Id
 }
 
 func (f *fakeConversationRepo) ListTurns(_ context.Context, identity learner.IdentityID, conversationID string) ([]storage.ConversationTurn, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	row, ok := f.byConvID[conversationID]
 	if !ok || row.identity != identity {
 		return nil, storage.ErrNotFound
 	}
-	return f.turns[conversationID], nil
+	out := make([]storage.ConversationTurn, len(f.turns[conversationID]))
+	copy(out, f.turns[conversationID])
+	return out, nil
 }
 
 type fakeEventStore struct {
+	mu     sync.Mutex
 	events []event.LearningEvent
+	// onAppendWithSpeechEventID, when set, is called BEFORE the
+	// duplicate check for any Append whose evidence carries a
+	// "speech_event_id" — used only by TestSayHandlesConcurrentDuplicate
+	// SpeechEventIDRace, via raceBarrier below, to hold BOTH goroutines'
+	// writes at the same point until both have arrived. Gating the
+	// WRITE side (not the read side) is what makes this deterministic:
+	// each goroutine only reaches this point after its OWN
+	// validSourceEvent read has already completed, so by construction
+	// neither can have observed the other's write yet (that write is
+	// what's being held back) — reproducing the exact check-then-write
+	// gap migrationsfs/00025_speech_event_id_unique.sql's partial index
+	// closes, every run, rather than hoping Go's scheduler happens to
+	// interleave two very fast goroutines that way on its own (it
+	// usually won't — gating the READ side instead was tried first and
+	// only reproduced the race ~1 run in 10, because the first
+	// goroutine to resume typically runs Say to completion, INCLUDING
+	// its own write, before the second goroutine's read even acquires
+	// this store's mutex, which makes the second read correctly (but
+	// uninterestingly) see "already attached" instead of racing at
+	// Append — a false negative for what this test needs to pin).
+	onAppendWithSpeechEventID func()
 }
 
+// raceBarrier returns a func that blocks until it has been called
+// exactly n times, then releases every caller — a minimal cyclic
+// barrier, used to line up N goroutines at the same point before
+// letting any of them proceed past it.
+func raceBarrier(n int) func() {
+	var mu sync.Mutex
+	count := 0
+	release := make(chan struct{})
+	return func() {
+		mu.Lock()
+		count++
+		reached := count == n
+		mu.Unlock()
+		if reached {
+			close(release)
+		} else {
+			<-release
+		}
+	}
+}
+
+// Append mirrors the REAL postgres repository's uniqueness enforcement
+// for evidence["speech_event_id"] (migrationsfs/00025_speech_event_id_
+// unique.sql's partial index, translated to storage.ErrDuplicate by
+// postgres.LearningEventRepository.Append) — not just an unconditional
+// append. This is what lets TestSayHandlesConcurrentDuplicateSpeech
+// EventIDRace below genuinely exercise the check-then-write race two
+// goroutines can hit: the mutex here plays the same "only one writer
+// wins" role a real unique index does at the database level, so the
+// SAME code path Say uses in production (catch storage.ErrDuplicate,
+// downgrade, retry) is what's actually under test, not a fake that
+// happens to never conflict.
 func (f *fakeEventStore) Append(_ context.Context, ev event.LearningEvent) error {
+	if _, ok := ev.Evidence["speech_event_id"]; ok && f.onAppendWithSpeechEventID != nil {
+		f.onAppendWithSpeechEventID()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if id, ok := ev.Evidence["speech_event_id"]; ok {
+		for _, existing := range f.events {
+			if existingID, ok2 := existing.Evidence["speech_event_id"]; ok2 && existingID == id {
+				return storage.ErrDuplicate
+			}
+		}
+	}
 	f.events = append(f.events, ev)
 	return nil
 }
@@ -138,6 +221,8 @@ func (f *fakeEventStore) Append(_ context.Context, ev event.LearningEvent) error
 // pass for the wrong reason (see TestSayIgnoresSpeechEventIDBelonging
 // ToAnotherIdentity's own doc comment).
 func (f *fakeEventStore) ListRecent(_ context.Context, identity learner.IdentityID, sid *session.ID, limit int) ([]event.LearningEvent, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []event.LearningEvent
 	for i := len(f.events) - 1; i >= 0; i-- { // newest first, like the real repo
 		ev := f.events[i]
@@ -155,7 +240,11 @@ func (f *fakeEventStore) ListRecent(_ context.Context, identity learner.Identity
 	return out, nil
 }
 func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.LearningEvent, error) {
-	return f.events, nil
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]event.LearningEvent, len(f.events))
+	copy(out, f.events)
+	return out, nil
 }
 
 // fakeVocabRepo is a minimal in-memory storage.VocabularyRepository
@@ -694,6 +783,72 @@ func TestSayIgnoresSpeechEventIDAlreadyAttachedToAnotherTurn(t *testing.T) {
 	}
 	if tagged != 1 {
 		t.Fatalf("turns tagged with the reused speech_event_id = %d, want exactly 1 (the first)", tagged)
+	}
+}
+
+// TestSayHandlesConcurrentDuplicateSpeechEventIDRace is the genuine
+// concurrency pin the fourth validSourceEvent condition needs — not
+// just "the index exists", but that two ACTUAL goroutines racing the
+// same real event id through Say both come out the other side
+// correctly. Sequentially (TestSayIgnoresSpeechEventIDAlreadyAttached
+// ToAnotherTurn above) the second call's own validSourceEvent read
+// already sees the first call's write and downgrades before ever
+// attempting to record — that never touches the retry-on-storage.
+// ErrDuplicate path in service.go's Say at all. Two goroutines started
+// together can both pass validSourceEvent's read BEFORE either write
+// lands (the exact race migrationsfs/00025_speech_event_id_unique.sql
+// closes at the database level — see fakeEventStore.Append's own doc
+// comment for how this fake reproduces that same enforcement under a
+// mutex), which is what actually exercises Say's storage.ErrDuplicate
+// catch-and-retry.
+func TestSayHandlesConcurrentDuplicateSpeechEventIDRace(t *testing.T) {
+	h := newHarness("immediate")
+	sourceID := seedSpeechEvent(t, h, testIdentity, testSessionID)
+	// Hold both goroutines' writes at the same point until both have
+	// arrived — see fakeEventStore.onAppendWithSpeechEventID's own doc
+	// comment for why gating the write side (not the read side) is
+	// what makes this deterministic rather than dependent on how Go's
+	// scheduler happens to interleave two fast goroutines.
+	h.events.onAppendWithSpeechEventID = raceBarrier(2)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	msgs := [2]string{"昨日の映画はとても面白いでした。", "今日は楽しいでした。"}
+	wg.Add(2)
+	for i := range 2 {
+		go func(i int) {
+			defer wg.Done()
+			_, err := h.svc.Say(context.Background(), testIdentity, testSessionID, msgs[i], sourceID)
+			errs[i] = err
+		}(i)
+	}
+	wg.Wait()
+
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("goroutine %d: Say returned error %v — a lost race must downgrade silently, never fail the request", i, err)
+		}
+	}
+
+	h.events.mu.Lock()
+	all := append([]event.LearningEvent(nil), h.events.events...)
+	h.events.mu.Unlock()
+
+	var turns, tagged int
+	for _, ev := range all {
+		if ev.Type != event.TypeConversationTurn {
+			continue
+		}
+		turns++
+		if id, ok := ev.Evidence["speech_event_id"]; ok && id == sourceID {
+			tagged++
+		}
+	}
+	if turns != 2 {
+		t.Fatalf("conversation.turn events = %d, want 2 — both messages must be recorded, race or not", turns)
+	}
+	if tagged != 1 {
+		t.Fatalf("turns tagged with the raced speech_event_id = %d, want exactly 1 — the loser must downgrade to typed, not vanish or double-tag", tagged)
 	}
 }
 

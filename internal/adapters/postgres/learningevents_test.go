@@ -4,6 +4,8 @@ package postgres
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
+	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
 func TestLearningEventAppendAndListRecentScopedByIdentity(t *testing.T) {
@@ -126,5 +129,91 @@ func TestLearningEventAppendAndListRecentScopedByIdentity(t *testing.T) {
 	}
 	if len(limited) != 1 {
 		t.Fatalf("ListRecent limit=1 returned %d rows, want 1", len(limited))
+	}
+}
+
+// TestLearningEventAppendConcurrentDuplicateSpeechEventIDRace pins
+// migrationsfs/00025_speech_event_id_unique.sql's partial unique index
+// under GENUINE concurrency against the real database — not just
+// "the index exists" — the follow-up code review specifically asked
+// for two actual goroutines racing the same evidence["speech_event_id"]
+// value into real INSERTs. Application/conversation.Service.Say's own
+// check-then-write (validSourceEvent, then Record) has a window where
+// two concurrent calls can both pass the read; this test proves what
+// closes that window at the database level: of two concurrent Append
+// calls carrying the SAME speech_event_id, Postgres itself lets
+// exactly one succeed and rejects the other with storage.ErrDuplicate
+// (Append's own translation of the driver's 23505 unique_violation —
+// see that method's doc comment), regardless of which one the
+// scheduler happened to run first.
+func TestLearningEventAppendConcurrentDuplicateSpeechEventIDRace(t *testing.T) {
+	ctx := context.Background()
+	url := testURL(t)
+	if err := Migrate(ctx, url); err != nil {
+		t.Fatal(err)
+	}
+	pool, err := NewPool(ctx, url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pool.Close()
+
+	identities := NewIdentityRepository(pool)
+	identity := learner.Identity{ID: learner.IdentityID("test-event-race-" + uuid.NewString()), DisplayName: "Racer"}
+	if err := identities.Upsert(ctx, identity); err != nil {
+		t.Fatal(err)
+	}
+
+	events := NewLearningEventRepository(pool)
+	sharedSpeechEventID := uuid.NewString()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	wg.Add(2)
+	for i := range 2 {
+		go func(i int) {
+			defer wg.Done()
+			errs[i] = events.Append(ctx, event.LearningEvent{
+				ID:         uuid.NewString(),
+				IdentityID: identity.ID,
+				Type:       event.TypeConversationTurn,
+				Subject:    "turn-" + uuid.NewString(),
+				Evidence:   map[string]any{"position": float64(i + 1), "speech_event_id": sharedSpeechEventID},
+				OccurredAt: now,
+			})
+		}(i)
+	}
+	wg.Wait()
+
+	var successes, duplicates int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, storage.ErrDuplicate):
+			duplicates++
+		default:
+			t.Fatalf("unexpected error: %v, want nil or storage.ErrDuplicate", err)
+		}
+	}
+	if successes != 1 || duplicates != 1 {
+		t.Fatalf("successes=%d duplicates=%d, want exactly 1 of each — the index must let exactly one concurrent writer win", successes, duplicates)
+	}
+
+	// Belt and suspenders: confirm the database itself agrees only one
+	// row carries this speech_event_id, not just that Append reported it.
+	rows, err := events.ListRecent(ctx, identity.ID, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var withKey int
+	for _, ev := range rows {
+		if ev.Evidence["speech_event_id"] == sharedSpeechEventID {
+			withKey++
+		}
+	}
+	if withKey != 1 {
+		t.Fatalf("rows carrying the raced speech_event_id = %d, want exactly 1", withKey)
 	}
 }
