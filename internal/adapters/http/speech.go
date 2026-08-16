@@ -55,6 +55,18 @@ type speechTranscribeResponse struct {
 func (s *Server) speechTranscribe(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
+	// Options.Speech is nil-guarded (whole-branch review F8, Task 8 M2)
+	// rather than assumed: this route is registered unconditionally, and
+	// speech is dormant in the DEFAULT configuration, so a wiring slip
+	// that left the service unset would panic on a public route instead
+	// of declining. The answer is the same 503 an unconfigured
+	// recognizer produces — from the caller's side "speech isn't
+	// available here" is one condition, not two.
+	if s.opts.Speech == nil {
+		writeAPIError(w, http.StatusServiceUnavailable, "speech recognition is not configured")
+		return
+	}
+
 	r.Body = http.MaxBytesReader(w, r.Body, speechMaxBytes)
 	if err := r.ParseMultipartForm(speechMaxBytes); err != nil {
 		var tooLarge *http.MaxBytesError

@@ -541,9 +541,14 @@ func main() {
 			A2APath:            cfg.A2A.Path,
 			Conversation:       conversationSvc,
 			Speech:             speechSvc,
-			Settings:           settingsSvc,
-			AIProviders:        aiProviders,
-			AIDefaultProvider:  aiDefaultProvider,
+			// Same source of truth the recognizer is built from above, so
+			// the button and the route can never disagree about whether
+			// speech is configured (whole-branch review F8) — the
+			// AnkiConnectEnabled line above is the same shape.
+			SpeechEnabled:     cfg.Speech.STTURL != "",
+			Settings:          settingsSvc,
+			AIProviders:       aiProviders,
+			AIDefaultProvider: aiDefaultProvider,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

@@ -87,6 +87,30 @@ func TestSpeechTranscribeDormantReturns503(t *testing.T) {
 	}
 }
 
+// TestSpeechTranscribeWithNoServiceWiredReturns503NotAPanic pins the
+// nil guard from whole-branch review F8 (Task 8 M2). Options.Speech is
+// set unconditionally by main.go today, but the route is registered
+// unconditionally too and speech is dormant in the DEFAULT
+// configuration — so a wiring slip would panic on a PUBLIC route rather
+// than decline. This asserts on the handler's own behaviour with the
+// field left at its zero value, which is exactly the shape a future
+// refactor would produce.
+func TestSpeechTranscribeWithNoServiceWiredReturns503NotAPanic(t *testing.T) {
+	opts := testOptions()
+	opts.Speech = nil
+	h := NewServer(opts).HandlerForTest()
+
+	body, ct := buildMultipartAudio(t, 100, "")
+	rec := postSpeechTranscribe(h, body, ct)
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503, body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "not configured") {
+		t.Fatalf("body = %s, want a clear \"not configured\" message", rec.Body.String())
+	}
+}
+
 // TestSpeechTranscribeSuccessReturnsTextAndDuration pins the response
 // shape the brief specifies (text, duration_ms), plus event_id (code
 // review Important I1's join key) — sent with no session_id field,

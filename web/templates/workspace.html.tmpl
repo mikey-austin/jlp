@@ -52,10 +52,16 @@
                entirely when the browser has no MediaRecorder/
                getUserMedia support, so typed input always works
                regardless. */}}
-          {{template "speech_record" .}}
+          {{/* Gated on SpeechEnabled (whole-branch review F8/W-2), the
+               same way /anki gates 「Ankiへ送信」 on AnkiConnectEnabled:
+               with APP_SPEECH_STTURL unset — the DEFAULT — the button
+               used to render anyway, so the learner granted microphone
+               permission, recorded, uploaded, and only then read a 503.
+               Typed input is unaffected either way. */}}
+          {{if .SpeechEnabled}}{{template "speech_record" .}}{{end}}
           <button type="submit" class="btn btn--sm">送信</button>
         </form>
-        {{template "speech_status" .}}
+        {{if .SpeechEnabled}}{{template "speech_status" .}}{{end}}
         <form hx-post="/sessions/{{.Session.ID}}/conversation/summary" hx-target="#conversation-digest" hx-swap="innerHTML">
           <button type="submit" class="btn btn--secondary btn--sm">会話をまとめる</button>
         </form>

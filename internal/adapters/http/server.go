@@ -181,6 +181,18 @@ type Options struct {
 	// doc comment and ErrNotConfigured, which speechTranscribe maps to
 	// a 503.
 	Speech *appspeech.Service
+	// SpeechEnabled gates the conversation pane's 🎙 録音 button, the
+	// same way AnkiConnectEnabled gates 「Ankiへ送信」 — the in-tree
+	// precedent for "optional integration, so don't render its control
+	// until it's configured". True only when main.go was given
+	// APP_SPEECH_STTURL and built a real recognizer.
+	//
+	// Whole-branch review F8/W-2: speech is dormant by DEFAULT, and
+	// without this the learner granted microphone permission, recorded a
+	// sentence, waited for the upload, and only then read a 503 in the
+	// status line. Every other optional integration in this app declines
+	// up front instead.
+	SpeechEnabled bool
 }
 
 type Server struct {

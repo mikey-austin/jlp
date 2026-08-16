@@ -323,6 +323,33 @@ reconstruction of any adapter. `APP_AI_*` itself is never copied into
 the database — an absent override row always means "use config",
 exactly as if `/settings` had never been touched.
 
+> **Deployment constraint — `/settings` is global and unprivileged.**
+> `app_settings` has **no identity column** (`db/queries/settings.sql`)
+> and the handlers perform **no role check**: any authenticated learner
+> who can reach `/settings` changes the AI model and effort **for every
+> learner in the deployment**, immediately. There is no admin role in
+> JLP — it is single-learner by design (PRD §2), and this page is
+> written for the person who also owns the `.env` file. In a deployment
+> with more than one identity this is a real cross-learner write
+> surface, and the only mitigation today is not to give `/settings` to
+> anyone you would not give `APP_AI_*` to; put it behind your reverse
+> proxy or Authelia policy if that matters to you. Tightening it needs a
+> port change (`SettingsRepository.List` takes no identity) plus a role
+> system, and neither is in scope for this phase — it is documented here
+> rather than half-built. Same table, same caveat, for anything added to
+> `app_settings` later.
+
+**`/settings` only offers providers this process actually built.** The
+overridable catalog is fixed (ollama, anthropic, claudecli, codexcli,
+agycli), but `cmd/jlp`'s construction gates are not: Anthropic needs an
+API key, Ollama needs `APP_AI_OLLAMA_MODEL`. A provider the process
+never constructed shows its row with an explanation and **no controls**,
+and its `POST` routes reject with a `422` — saving an override for a
+provider no request can reach would be a success-shaped no-op. Note the
+gates are read at boot, so making a provider available means setting its
+`APP_AI_*` variables and restarting; `/settings` cannot bootstrap a
+provider into existence.
+
 Where a provider can genuinely enumerate what it's able to serve,
 `/settings` shows a dropdown instead of a bare text field: Ollama via
 `GET /api/tags` (filtered to completion-capable models — an
@@ -738,7 +765,9 @@ parallel path into the conversation pipeline.
 **Dormant by default**: `APP_SPEECH_STTURL` and `APP_SPEECH_TTSURL` are
 each independently empty by default — unlike Slack/Signal's paired
 tokens, either can be set without the other. Empty `STTURL` means
-`cmd/jlp/main.go` never constructs a recognizer and every `POST
+`cmd/jlp/main.go` never constructs a recognizer, the conversation pane
+renders no 🎙 録音 button at all (`Options.SpeechEnabled`, the same gate
+`AnkiConnectEnabled` applies to 「Ankiへ送信」), and every `POST
 /speech/transcribe` answers `503 speech recognition is not configured`,
 never a panic or a silent no-op.
 
@@ -782,11 +811,23 @@ left to a future task, the same way `internal/adapters/ankiconnect.
 Client` sits unused until `appanki.Service.SetConnector` is called.
 
 ```sh
-make up-speech    # starts postgres + app + whisper + voicevox (app stays dormant — Speech config is still unset)
-# first start downloads the whisper model (~75MB) — give it a minute, then:
-# set APP_SPEECH_STTURL=http://whisper:8080 and/or APP_SPEECH_TTSURL=http://voicevox:50021 in .env, then:
-make restart
+make up-speech    # starts postgres + app + whisper + voicevox, with the app already pointed at both
+# first start downloads the whisper model (~75MB) — give it a minute
 ```
+
+`make up-speech` exports `APP_SPEECH_STTURL=http://whisper:8080` and
+`APP_SPEECH_TTSURL=http://voicevox:50021` for that one compose
+invocation (see the Makefile target), so the app comes up with speech
+**already configured** — you do not need to edit `.env` first, and there
+is nothing to restart. To make it permanent across a plain `make up`,
+put those two variables in `.env` yourself.
+
+Speech stays dormant in every other configuration, and the UI says so by
+omission rather than by failing late: with `APP_SPEECH_STTURL` unset the
+conversation pane renders **no 🎙 録音 button at all** (the same way
+`/anki` hides 「Ankiへ送信」 without AnkiConnect), and `POST
+/speech/transcribe` answers `503 speech recognition is not configured`.
+Typed conversation practice is unaffected either way.
 
 **Honesty — what was actually verified**: both adapters have full
 offline `httptest` suites (`internal/adapters/whisper/whisper_test.go`,

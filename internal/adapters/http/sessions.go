@@ -171,6 +171,7 @@ func (s *Server) sessionsWorkspace(w http.ResponseWriter, r *http.Request) {
 		"FeedbackTimingCopy": feedbackTimingCopy(sess.Profile.FeedbackTiming),
 		"FeedbackHistory":    toFeedbackHistoryView(sess.ID, "", feedbackHistory, false),
 		"AIProviders":        aiProviderOptions(s.opts.AIProviders, s.opts.AIDefaultProvider),
+		"SpeechEnabled":      s.opts.SpeechEnabled,
 	})
 }
 

@@ -233,6 +233,12 @@ func (f *fakeConversationRepo) ListTurns(_ context.Context, identity learner.Ide
 
 func testOptionsWithSessions() Options {
 	opts := testOptions()
+	// SpeechEnabled mirrors a deployment WITH APP_SPEECH_STTURL set, so
+	// the workspace tests that assert on the record button keep testing
+	// the configured case. The dormant-by-default case (whole-branch
+	// review F8) is covered by
+	// TestWorkspaceHidesTheRecordButtonWhenSpeechIsNotConfigured.
+	opts.SpeechEnabled = true
 	sessRepo := newFakeSessionRepo()
 	opts.Sessions = sessions.NewService(sessRepo)
 	events := newFakeEventRepo()
@@ -311,6 +317,38 @@ func TestSessionsCreateThenListShowsNewSession(t *testing.T) {
 	}
 	if !strings.Contains(recWorkspace.Body.String(), `data-transcribe-url="/speech/transcribe"`) {
 		t.Fatalf("workspace body missing the record button's transcribe URL: %s", recWorkspace.Body.String())
+	}
+}
+
+// TestWorkspaceHidesTheRecordButtonWhenSpeechIsNotConfigured pins
+// whole-branch review F8/W-2: speech is dormant by DEFAULT
+// (APP_SPEECH_STTURL unset), and until now the workspace rendered the
+// 🎙 録音 button anyway — so the learner granted microphone permission,
+// recorded a sentence, waited for the upload and only THEN read a 503 in
+// the status line. AnkiConnectEnabled is the in-tree precedent: an
+// optional integration's control is not rendered at all until it is
+// configured. Typed conversation input must be unaffected.
+func TestWorkspaceHidesTheRecordButtonWhenSpeechIsNotConfigured(t *testing.T) {
+	opts := testOptionsWithSessions()
+	opts.SpeechEnabled = false
+	h := NewServer(opts).HandlerForTest()
+	sid := createTestSession(t, h, "socratic", "end")
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions/"+sid, nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET workspace status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, dead := range []string{`id="record-btn"`, `data-transcribe-url`, `id="record-status"`} {
+		if strings.Contains(body, dead) {
+			t.Errorf("workspace rendered %s with speech unconfigured — the learner records before learning it can't work: %s", dead, body)
+		}
+	}
+	// The conversation form itself must still be there: gating speech
+	// must not gate typed practice.
+	if !strings.Contains(body, `id="conversation-form"`) {
+		t.Errorf("workspace lost the conversation form along with the record button: %s", body)
 	}
 }
 

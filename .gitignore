@@ -7,3 +7,11 @@ deploy/authelia/users.prod.yml
 deploy/.env.prod
 eval/reports/
 dist/
+
+# `go build ./cmd/jlp` drops a ~43MB binary named after the package in
+# the repo root. Nothing covered it before, so a single `git add -A`
+# would commit it — and this project has already had one cross-commit
+# incident from exactly that command (see the Phase 4 ledger's
+# one-writer policy). Anchored to the root so a future internal/jlp/
+# directory is unaffected.
+/jlp

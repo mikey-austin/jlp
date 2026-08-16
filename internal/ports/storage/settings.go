@@ -21,6 +21,22 @@ type AppSetting struct {
 // application/settings.Service, the only caller, is what implements
 // that fallback; this port only ever reports what IS or ISN'T
 // currently overridden.
+//
+// PRIVILEGE SCOPE — stated here because it is not obvious from the
+// method set (whole-branch review I-1/F7). "Global" means global in
+// BOTH directions: there is no identity column to scope a read by, and
+// there is no role check above this port either
+// (internal/adapters/http/settings.go). Any authenticated learner who
+// can reach /settings changes the AI model and effort for EVERY learner
+// in the deployment. That is acceptable under JLP's documented
+// single-learner posture (PRD §2) and is the intended design — the
+// migration's table comment is right that a future reader must not
+// "fix" this into being per-identity — but it IS a cross-learner write
+// surface, and a multi-identity deployment must be aware of it. See the
+// deployment-constraint note in README's "Changing model/effort at
+// runtime" section. Tightening it would need a role system AND a change
+// to this port (List takes no identity), neither of which is in scope
+// for Phase 4; documented rather than half-built.
 type SettingsRepository interface {
 	// Set upserts key=value — the "change this provider's model/effort"
 	// action.
