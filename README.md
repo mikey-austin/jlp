@@ -225,16 +225,49 @@ the `/ai` page).
   "not supported when using Codex with a ChatGPT account", so leaving
   `APP_AI_CODEXCLI_MODEL` empty is the safer default.
 
-  **Antigravity is not usable as a provider.** Its CLI is the
-  VS Code–derived editor launcher, not a headless generator: the only
-  prompt-shaped subcommand, `antigravity chat`, hands the prompt to the
-  GUI (`--maximize`, `--reuse-window`, `--new-window`) and returns
-  immediately, printing only `Reading from stdin via: /tmp/code-stdin-…`
-  with no way to get the model's answer back on stdout. There is no
-  adapter for it, and one cannot be written against this interface.
-  If you want a third CLI provider, the `gemini` CLI is a real
-  candidate — it has a documented headless mode (`-p/--prompt`,
-  `-m/--model`, `-o/--output-format json`).
+- **`agycli`** — the Antigravity CLI (`agy`), a third host-mode CLI
+  adapter with the same host-mode-only caveat as the two above. Reach
+  it through `APP_AI_ROUTES`:
+
+  ```
+  APP_AI_ROUTES=teacher.feedback=agycli
+  APP_AI_AGYCLI_BIN=            # optional override; defaults to "agy"
+  APP_AI_AGYCLI_MODEL=          # optional; see `agy models`
+  APP_AI_AGYCLI_EFFORT=         # optional; low|medium|high
+  APP_AI_AGYCLI_TIMEOUT=        # optional; bounds one run (default 3m)
+  ```
+
+  Note the editor binary (`antigravity`) is NOT this — that one is the
+  VS Code–derived launcher whose `chat` subcommand hands a prompt to
+  the GUI and returns nothing on stdout. `agy` is the headless CLI.
+
+  Three details of the invocation are load-bearing, each established by
+  live experiment rather than assumption, and all three are why the
+  adapter is its own package rather than a third file in `clicmd`:
+
+  1. **The prompt rides `-p`, not stdin.** Print mode ignores stdin
+     entirely.
+  2. **The process runs in a fresh temp directory.** Pointed at a real
+     project, `agy` behaves like the coding agent it is and reaches for
+     shell tools to explore it.
+  3. **`--mode plan`** keeps the agent read-only.
+
+  Get any of those wrong and every run ends with the CLI attempting a
+  tool that needs the `command` permission — which headless mode cannot
+  prompt for — and emitting **zero bytes** on stdout. Measured: 0 of 6
+  identical runs produced output before the invocation was corrected,
+  3 of 3 after. No change to your Antigravity `settings.json` is needed.
+  The adapter treats empty output as a hard error, so a route falls
+  through to the next provider instead of returning nothing.
+
+  Unlike the other two CLIs, `agy` enforces the JSON Schema itself via
+  `--json-schema`, so the answer arrives already parsed in the
+  envelope's `structured_output` field, and its `usage` block gives the
+  dashboard real token counts. Measured live (agy 1.1.9,
+  `gemini-3.6-flash-low`, effort `low`): ~8 s per feedback round.
+
+  Effort maps onto agy's own ladder, which stops at `high` — there is
+  no `xhigh` or `max` tier, and `none` is not one either.
 
   Both send the prompt (system + user text, plus a trailing instruction
   naming the JSON schema to answer with) on the CLI's stdin —

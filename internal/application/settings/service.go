@@ -46,6 +46,8 @@ const (
 	KeyClaudeCLIEffort = "ai.claudecli.effort"
 	KeyCodexCLIModel   = "ai.codexcli.model"
 	KeyCodexCLIEffort  = "ai.codexcli.effort"
+	KeyAgyCLIModel     = "ai.agycli.model"
+	KeyAgyCLIEffort    = "ai.agycli.effort"
 )
 
 // ErrUnknownProvider is returned by every mutating method when
@@ -77,6 +79,7 @@ var providers = []providerInfo{
 	{"anthropic", "Anthropic", false},
 	{"claudecli", "Claude Code CLI", true},
 	{"codexcli", "Codex CLI", true},
+	{"agycli", "Antigravity CLI", true},
 }
 
 // keysFor returns provider's model/effort override keys. effortKey is
@@ -92,6 +95,8 @@ func keysFor(provider string) (modelKey, effortKey string) {
 		return KeyClaudeCLIModel, KeyClaudeCLIEffort
 	case "codexcli":
 		return KeyCodexCLIModel, KeyCodexCLIEffort
+	case "agycli":
+		return KeyAgyCLIModel, KeyAgyCLIEffort
 	default:
 		return "", ""
 	}
@@ -164,6 +169,8 @@ func (s *Service) configModel(provider string) string {
 		return s.cfg.ClaudeCLI.Model
 	case "codexcli":
 		return s.cfg.CodexCLI.Model
+	case "agycli":
+		return s.cfg.AgyCLI.Model
 	default:
 		return ""
 	}
@@ -175,6 +182,8 @@ func (s *Service) configEffort(provider string) string {
 		return s.cfg.ClaudeCLI.Effort
 	case "codexcli":
 		return s.cfg.CodexCLI.Effort
+	case "agycli":
+		return s.cfg.AgyCLI.Effort
 	default:
 		return ""
 	}
@@ -224,10 +233,13 @@ func (s *Service) Rows() []Row {
 		}
 
 		if p.hasEffort {
-			if p.name == "claudecli" {
+			switch p.name {
+			case "claudecli":
 				row.EffortOptions = config.ClaudeEfforts()
-			} else {
+			case "codexcli":
 				row.EffortOptions = config.CodexEfforts()
+			case "agycli":
+				row.EffortOptions = config.AgyEfforts()
 			}
 			if v, ok := s.overrides[effortKey]; ok {
 				row.Effort, row.EffortSource = v, "override"

@@ -51,6 +51,7 @@ type AI struct {
 	Ollama    Ollama
 	ClaudeCLI ClaudeCLI
 	CodexCLI  CodexCLI
+	AgyCLI    AgyCLI
 	// Routes is the raw APP_AI_ROUTES string — "prompt.name=prov1,prov2;
 	// other.name=prov" — parsed by ParseRoutes. Kept as a string here
 	// (validate below only checks it parses, fail-fast, same as every
@@ -128,6 +129,19 @@ type CodexCLI struct {
 	Effort string
 }
 
+// AgyCLI configures internal/adapters/agycli, the host-mode Antigravity
+// CLI fallback. Bin defaults to "agy"; same construction-never-fails and
+// empty-means-CLI-default contract as ClaudeCLI/CodexCLI above.
+//
+// Timeout bounds one invocation and is also passed to the CLI as
+// --print-timeout, so both sides agree on when to give up.
+type AgyCLI struct {
+	Bin     string
+	Model   string
+	Effort  string
+	Timeout time.Duration
+}
+
 // claudeEfforts/codexEfforts are each CLI's own accepted effort levels.
 // Claude Code's come from `claude --help` ("low, medium, high, xhigh,
 // max"); Codex's come from the Codex backend itself, which enumerated
@@ -143,6 +157,11 @@ type CodexCLI struct {
 var (
 	claudeEfforts = []string{"low", "medium", "high", "xhigh", "max"}
 	codexEfforts  = []string{"none", "minimal", "low", "medium", "high", "xhigh"}
+	// agy's ladder genuinely stops at high — it has no xhigh or max tier,
+	// and "none" is not one either. Accepting only what the CLI takes
+	// means a bad value fails at startup rather than making every routed
+	// request die at exec time.
+	agyEfforts = []string{"low", "medium", "high"}
 )
 
 // ClaudeEfforts and CodexEfforts return copies of each CLI's own
@@ -155,6 +174,7 @@ var (
 // never mutate the vocabulary this package validates against.
 func ClaudeEfforts() []string { return slices.Clone(claudeEfforts) }
 func CodexEfforts() []string  { return slices.Clone(codexEfforts) }
+func AgyEfforts() []string    { return slices.Clone(agyEfforts) }
 
 // ValidateEffort checks value against tool's own accepted effort
 // vocabulary ("claudecli" or "codexcli" — the same provider names
@@ -183,8 +203,12 @@ func ValidateEffort(tool, value string) error {
 		if !slices.Contains(codexEfforts, value) {
 			return fmt.Errorf("effort must be %s, got %q", strings.Join(codexEfforts, "|"), value)
 		}
+	case "agycli":
+		if !slices.Contains(agyEfforts, value) {
+			return fmt.Errorf("effort must be %s, got %q", strings.Join(agyEfforts, "|"), value)
+		}
 	default:
-		return fmt.Errorf("unknown effort tool %q, want claudecli|codexcli", tool)
+		return fmt.Errorf("unknown effort tool %q, want claudecli|codexcli|agycli", tool)
 	}
 	return nil
 }
@@ -477,6 +501,8 @@ func Load() (Config, error) {
 	v.SetDefault("ai.ollama.url", "http://ollama:11434")
 	v.SetDefault("ai.claudecli.bin", "claude")
 	v.SetDefault("ai.codexcli.bin", "codex")
+	v.SetDefault("ai.agycli.bin", "agy")
+	v.SetDefault("ai.agycli.timeout", 3*time.Minute)
 	v.SetDefault("database.url", "")
 	// summary.enabled has no explicit default (Go's bool zero value,
 	// false, IS the "dormant by default" contract — see Summary's doc
@@ -506,6 +532,7 @@ func Load() (Config, error) {
 		"ai.ollama.url", "ai.ollama.model", "ai.ollama.timeout",
 		"ai.claudecli.bin", "ai.claudecli.model", "ai.claudecli.effort",
 		"ai.codexcli.bin", "ai.codexcli.model", "ai.codexcli.effort",
+		"ai.agycli.bin", "ai.agycli.model", "ai.agycli.effort", "ai.agycli.timeout",
 		"ai.routes", "ai.agenticteacher",
 		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url",
 		"a2a.enabled", "a2a.path",
@@ -568,6 +595,9 @@ func (c Config) validate() error {
 	}
 	if err := ValidateEffort("codexcli", c.AI.CodexCLI.Effort); err != nil {
 		return fmt.Errorf("config: APP_AI_CODEXCLI_EFFORT: %w", err)
+	}
+	if err := ValidateEffort("agycli", c.AI.AgyCLI.Effort); err != nil {
+		return fmt.Errorf("config: APP_AI_AGYCLI_EFFORT: %w", err)
 	}
 	if c.Server.Port < 1 || c.Server.Port > 65535 {
 		return fmt.Errorf("config: invalid port %d", c.Server.Port)
@@ -694,7 +724,7 @@ func ParseAllowFrom(s string) (map[string]string, error) {
 // the NAME is spellable; whether cmd/jlp/main.go can actually build an
 // instance for it is a separate, later check (a boot error there, not
 // a config-parse error here) — see the AI.Routes field comment.
-var routeProviders = []string{"fake", "anthropic", "ollama", "claudecli", "codexcli"}
+var routeProviders = []string{"fake", "anthropic", "ollama", "claudecli", "codexcli", "agycli"}
 
 // ParseRoutes parses APP_AI_ROUTES: semicolon-separated
 // "prompt.name=prov1,prov2" entries, each naming an ordered fallback

@@ -388,11 +388,11 @@ func TestParseRoutesEmptyStringIsNoRoutes(t *testing.T) {
 // Task 12; see internal/adapters/clicmd) is a separate, later check,
 // not ParseRoutes's job.
 func TestParseRoutesAcceptsCLIProviderNames(t *testing.T) {
-	got, err := ParseRoutes("teacher.feedback=claudecli,codexcli")
+	got, err := ParseRoutes("teacher.feedback=claudecli,codexcli,agycli")
 	if err != nil {
 		t.Fatalf("ParseRoutes: %v", err)
 	}
-	want := []string{"claudecli", "codexcli"}
+	want := []string{"claudecli", "codexcli", "agycli"}
 	if !reflect.DeepEqual(got["teacher.feedback"], want) {
 		t.Fatalf("ParseRoutes = %+v, want teacher.feedback: %v", got, want)
 	}

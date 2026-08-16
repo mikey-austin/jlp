@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/agycli"
 	"github.com/mikeyaustin/jlp/internal/adapters/airouter"
 	"github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/clicmd"
@@ -200,6 +201,12 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 		// either way — see aiPricing's "cli" entry doc comment).
 		"claudecli": clicmd.NewClaude(cfg.AI.ClaudeCLI, resolver),
 		"codexcli":  clicmd.NewCodex(cfg.AI.CodexCLI, resolver),
+		// agycli is the same kind of host-mode CLI adapter, constructible
+		// unconditionally for the same reason. Unlike the other two it
+		// reports real token counts (the CLI's envelope carries a usage
+		// block), but its model names aren't in the pricing table, so
+		// cost still records as $0.
+		"agycli": agycli.New(cfg.AI.AgyCLI, resolver),
 	}
 	// anthropic and ollama are gated differently ON PURPOSE, per the
 	// task brief: anthropic only needs one field (APIKey) to become
