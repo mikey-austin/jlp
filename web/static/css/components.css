@@ -467,6 +467,24 @@ p.hint {
   margin-bottom: 0;
 }
 
+/* .empty-state is the block-level counterpart of .table-card's
+ * `td.empty` row: a standalone "there is nothing here, and here is why"
+ * panel for a section whose empty case replaces a CHART rather than a
+ * table row. Dashed border and muted text so it reads as an absence of
+ * data rather than as a card of content — the distinction matters on
+ * /outcomes, where drawing a chart from too little data would be a
+ * claim the data does not support. */
+.empty-state {
+  margin: var(--space-4) 0 var(--space-6);
+  padding: var(--space-4);
+  border: 1px dashed var(--border-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
 /* .table-card is the table's scroll container, not a clipping mask.
  * It used to be `overflow: hidden` (to round the corners over the
  * table's own square edges), which silently made every column past the

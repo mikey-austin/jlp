@@ -38,6 +38,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
+	appoutcomes "github.com/mikeyaustin/jlp/internal/application/outcomes"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	appretrieval "github.com/mikeyaustin/jlp/internal/application/retrieval"
@@ -310,6 +311,11 @@ func main() {
 			retrievalSched,
 		)
 		analyticsSvc := analytics.NewService(postgres.NewAnalyticsRepository(pool))
+		// The /outcomes capstone (Phase 4 Task 9, PRD §52/§72/§73). It
+		// takes time.Now the same way retrievalSched does — every
+		// window boundary it judges against comes from the injected
+		// clock, never from a call inside the analyser.
+		outcomesAnalyser := appoutcomes.NewAnalyser(postgres.NewOutcomeRepository(pool), time.Now)
 		aiRatingRepo := postgres.NewAIRatingRepository(pool)
 		aiQualityRepo := postgres.NewAIQualityRepository(pool)
 
@@ -509,6 +515,7 @@ func main() {
 			Events:             eventRepo,
 			Feedback:           feedbackSvc,
 			Analytics:          analyticsSvc,
+			Outcomes:           outcomesAnalyser,
 			AI:                 aiGen,
 			AIRequests:         aiRequestRepo,
 			AIRatings:          aiRatingRepo,

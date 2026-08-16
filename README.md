@@ -821,6 +821,81 @@ http://voicevox:50021/version` returned `"latest"`. No end-to-end
 `Speak` call was exercised beyond the adapter's own `httptest` suite,
 since nothing consumes it yet (see above).
 
+## Learning outcomes — `/outcomes` (PRD §52, §72, §73)
+
+This is the page the whole product exists to justify: **did being
+corrected lead to better later production?** Everything else in JLP
+produces evidence; this reads it back.
+
+**How a concept is judged.** For every grammar concept the learner has
+actually been corrected on, `internal/adapters/postgres/outcomes.go`
+returns raw counts only — corrections in the 30 days after the FIRST
+correction (the baseline), corrections in the most recent 30 days,
+independent solves, correct later productions, totals and dates.
+`internal/application/outcomes` then classifies, in this order:
+
+| Group | Rule |
+| --- | --- |
+| **収束 (retired)** | ≥3 corrections, then 60 days with none |
+| **判定外 (excluded)** | first corrected <60 days ago — the two 30-day windows still overlap, so comparing them measures nothing |
+| **判定外 (excluded)** | <3 corrections in the baseline window — too thin a rate to compare against |
+| **改善 (improving)** | strictly fewer corrections in the recent window than the baseline |
+| **継続中 (persistent)** | the same number or more |
+
+Retired is checked first because it is self-contained: "three
+corrections then sixty silent days" never needed the before/after
+comparison, so a thin baseline must not demote it. Equal counts are
+*persistent*, not improving — no change is no evidence of change.
+
+**Honesty is the feature, not a caveat.** A concept with too little
+data is neither improving nor persistent; it is excluded, and the page
+states how many were excluded **and the specific reason for each one**
+("only 12 days of history…", "only 2 corrections in the first 30
+days…") rather than quietly shrinking the denominator. The headline is
+one sentence of plain fact — counts, and the direction the
+corrections-per-1,000-characters rate moved — and there is no score, no
+percentage-improved, no streak, and no encouragement anywhere on the
+page (PRD §56, enforced by tests in both
+`internal/application/outcomes` and `internal/adapters/http`).
+
+The zero-data case gets the most care, because it is what every new
+learner sees:
+
+> Not enough data yet to say whether corrections are improving later
+> production.
+
+Not "0% improvement", not an empty chart implying decline. A trend is
+drawn only when at least **two** weeks actually carried data — one
+point plotted across a full-width sparkline reads as a flat line, which
+is a claim nothing supports — and a week with nothing measured renders
+as `—`, never `0.0` or `0%`.
+
+**What each number measures.** `修正/1000字` divides by characters
+*submitted for review* (`feedback_requests.selection_text`), not every
+character ever typed, so it answers "does the same amount of reviewed
+writing now need less help?". That deliberately differs from the home
+dashboard's lifetime `Statistics.CorrectionsPer1000`, which uses whole
+documents; the two are different measures and `/outcomes` never shows
+them side by side. `語彙の正用` counts `vocabulary.produced-correctly`
+events for expressions that literally appear in the replacement text of
+a correction tagged with that concept — a conservative link (it can
+miss, but it cannot invent one), and the only link the schema offers.
+
+Every threshold above lives in Go, in `application/outcomes`, never in
+SQL — see that package's doc comment and `analyser_test.go`, which
+walks every boundary (exactly-60-days, exactly-3-corrections,
+exactly-equal counts) explicitly.
+
+**Honesty — what the dev database can actually show**: this repo's dev
+database has real accumulated history, but all of it was written
+*today*, so every corrected concept legitimately falls under the
+"<60 days of history" exclusion. `/outcomes` therefore renders
+"No concept has enough history to judge yet; 1 concept excluded for
+insufficient data." against it — which is the correct answer, not a
+gap in the feature. No backdated demo data was inserted to make the
+page look busier; the improving/persistent/retired groups are proven by
+the analyser's boundary tests and the handler tests instead.
+
 ## WhatsApp: deferred, documented, not stubbed
 
 WhatsApp shares the same `ports/channels.Channel` port Slack and Signal

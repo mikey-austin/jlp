@@ -716,6 +716,47 @@ p.empty {
   gap: var(--space-3);
 }
 
+/* ============================== Learning outcomes (Phase 4 Task 9) ====== */
+/* /outcomes answers the product's own question — did the correction
+ * lead to better later production? Two things shape the styling.
+ * First, the headline is the one sentence a learner is most likely to
+ * read, so it is the largest text on the page and nothing competes with
+ * it. Second, every caveat (.outcome-note: what a group means, how many
+ * concepts were left unjudged and why) is quiet but ALWAYS visible —
+ * never behind a disclosure, never smaller than the body text it
+ * qualifies, because a caveat nobody reads is the same as no caveat. */
+.outcome-headline {
+  font-size: var(--text-lg);
+  line-height: 1.5;
+  font-weight: 600;
+}
+.outcome-note {
+  margin: var(--space-2) 0 var(--space-4);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+/* .trend-chart wraps a sparkline in its own card alongside the label
+ * that says what is being plotted and how many weeks actually carried
+ * data — an unlabelled line is not a fact, it is a shape. It wraps at
+ * narrow widths so the 120px sparkline never forces the page to scroll
+ * sideways. */
+.trend-chart {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-4);
+}
+.trend-chart__label {
+  font-weight: 500;
+}
+.trend-chart__note {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
 /* ============================== Responsive ============================== */
 /* Two breakpoints, matching the --gutter steps in tokens.css: 1024px
  * (tablet) and 640px (phone). Before this pass the only breakpoint in

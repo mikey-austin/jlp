@@ -15,6 +15,7 @@ import (
 	appconversation "github.com/mikeyaustin/jlp/internal/application/conversation"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
+	"github.com/mikeyaustin/jlp/internal/application/outcomes"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appsettings "github.com/mikeyaustin/jlp/internal/application/settings"
@@ -40,6 +41,14 @@ type Options struct {
 	// Analytics drives the home dashboard's stat tiles and よくある間違い
 	// list (Task 14).
 	Analytics *analytics.Service
+	// Outcomes drives /outcomes (Phase 4 Task 9, PRD §52/§72/§73) — the
+	// capstone view: did being corrected lead to better later
+	// production? An application-layer analyser rather than a raw
+	// repository (unlike Priorities/Observations/Retrieval above)
+	// because every classification and every honest "not enough data
+	// yet" lives in that package, and an HTTP handler must never
+	// re-derive them.
+	Outcomes *outcomes.Analyser
 	// AI is the always-observed structured generator (fake or Anthropic
 	// underneath). No route consumes it directly — the teacher feedback
 	// pipeline (Task 12/13) goes through Feedback above — but it's
@@ -288,6 +297,12 @@ func (s *Server) routes() http.Handler {
 		r.Get("/grammar", s.grammarList)
 		r.Get("/grammar/{slug}", s.grammarDetail)
 		r.Get("/learner", s.learnerPage)
+		// /outcomes: Phase 4 Task 9's capstone (PRD §52/§72/§73) —
+		// listed right after /learner because the two are the same
+		// question at different depths: /learner shows what the model
+		// currently believes, /outcomes shows whether acting on those
+		// beliefs changed anything.
+		r.Get("/outcomes", s.outcomesPage)
 		r.Get("/vocabulary", s.vocabularyPage)
 		r.Get("/practice", s.practicePage)
 		r.Post("/practice/start", s.practiceStart)

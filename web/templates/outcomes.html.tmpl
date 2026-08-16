@@ -1,0 +1,134 @@
+{{define "content"}}<section class="outcomes">
+  <h1>成果</h1>
+
+  <div class="card">
+    <p class="outcome-headline">{{.Headline}}</p>
+    <p class="outcome-note">この一文は事実だけを述べます。評価点やご褒美の演出はありません。</p>
+  </div>
+
+  <h2>概念の内訳</h2>
+  <div class="stat-grid">
+    <div class="stat"><span class="stat__value">{{len .Improving}}</span><span class="stat__label">改善</span></div>
+    <div class="stat"><span class="stat__value">{{len .Persistent}}</span><span class="stat__label">継続中</span></div>
+    <div class="stat"><span class="stat__value">{{len .Retired}}</span><span class="stat__label">収束</span></div>
+    <div class="stat"><span class="stat__value">{{.ExcludedCount}}</span><span class="stat__label">判定外（データ不足）</span></div>
+  </div>
+  <p class="outcome-note">判定できた概念は{{.JudgedCount}}件、データ不足で判定しなかった概念は{{.ExcludedCount}}件です。</p>
+
+  <h2>改善した概念</h2>
+  <p class="outcome-note">最初の30日より直近30日の修正が少ない概念です。</p>
+  <div class="table-card table-card--stack">
+    <table>
+      <thead><tr><th>概念</th><th>最初の30日</th><th>直近30日</th><th>自力正答</th><th>語彙の正用</th></tr></thead>
+      <tbody>
+        {{range .Improving}}<tr>
+          <td data-label="概念"><a href="/grammar/{{.Slug}}">{{.Name}}</a></td>
+          <td data-label="最初の30日">{{.CorrectionsBefore}}</td>
+          <td data-label="直近30日">{{.CorrectionsAfter}}</td>
+          <td data-label="自力正答">{{.IndependentSolves}}</td>
+          <td data-label="語彙の正用">{{.ProducedCorrectly}}</td>
+        </tr>{{else}}<tr><td colspan="5" class="empty">改善と判定できた概念はまだありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>まだ続いている概念</h2>
+  <p class="outcome-note">直近30日の修正が最初の30日と同じか、それ以上の概念です。</p>
+  <div class="table-card table-card--stack">
+    <table>
+      <thead><tr><th>概念</th><th>最初の30日</th><th>直近30日</th><th>自力正答</th><th>語彙の正用</th></tr></thead>
+      <tbody>
+        {{range .Persistent}}<tr>
+          <td data-label="概念"><a href="/grammar/{{.Slug}}">{{.Name}}</a></td>
+          <td data-label="最初の30日">{{.CorrectionsBefore}}</td>
+          <td data-label="直近30日">{{.CorrectionsAfter}}</td>
+          <td data-label="自力正答">{{.IndependentSolves}}</td>
+          <td data-label="語彙の正用">{{.ProducedCorrectly}}</td>
+        </tr>{{else}}<tr><td colspan="5" class="empty">継続中と判定できた概念はまだありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>収束した概念</h2>
+  <p class="outcome-note">3回以上修正されたあと、60日間まったく修正されていない概念です。</p>
+  <div class="table-card table-card--stack">
+    <table>
+      <thead><tr><th>概念</th><th>修正回数</th><th>最終修正日</th><th>自力正答</th><th>語彙の正用</th></tr></thead>
+      <tbody>
+        {{range .Retired}}<tr>
+          <td data-label="概念"><a href="/grammar/{{.Slug}}">{{.Name}}</a></td>
+          <td data-label="修正回数">{{.TotalCorrections}}</td>
+          <td data-label="最終修正日">{{.LastCorrectedAt.Format "2006-01-02"}}</td>
+          <td data-label="自力正答">{{.IndependentSolves}}</td>
+          <td data-label="語彙の正用">{{.ProducedCorrectly}}</td>
+        </tr>{{else}}<tr><td colspan="5" class="empty">収束と判定できた概念はまだありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>判定しなかった概念（{{.ExcludedCount}}件）</h2>
+  <p class="outcome-note">
+    データが足りない概念は「改善」とも「継続」とも判定しません。判定を保留した理由をそのまま示します。
+  </p>
+  <div class="table-card table-card--stack">
+    <table>
+      <thead><tr><th>概念</th><th>修正回数</th><th>初回修正日</th><th>判定しなかった理由</th></tr></thead>
+      <tbody>
+        {{range .Excluded}}<tr>
+          <td data-label="概念"><a href="/grammar/{{.Slug}}">{{.Name}}</a></td>
+          <td data-label="修正回数">{{.TotalCorrections}}</td>
+          <td data-label="初回修正日">{{.FirstCorrectedAt.Format "2006-01-02"}}</td>
+          <td data-label="判定しなかった理由">{{.Reason}}</td>
+        </tr>{{else}}<tr><td colspan="4" class="empty">データ不足で判定を保留した概念はありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+
+  <h2>支援の逓減</h2>
+  <p class="outcome-note">添削に出した1000文字あたりの修正数。同じ量の文章がより少ない修正で済むようになれば下がります。</p>
+  {{if .ShowFadingChart}}
+  <div class="card trend-chart">
+    <span class="trend-chart__label">修正/1000字</span>
+    {{template "sparkline" .FadingSpark}}
+    <span class="trend-chart__note">直近{{len .Fading}}週のうち計測できた週：{{.FadingWeeks}}</span>
+  </div>
+  {{else}}
+  <p class="empty-state">添削に出した文章が2週分に届いていないため、推移はまだ描けません。</p>
+  {{end}}
+  {{if .ShowFadingTable}}
+  <div class="table-card table-card--stack">
+    <table>
+      <thead><tr><th>週</th><th>添削した文字数</th><th>修正数</th><th>修正/1000字</th></tr></thead>
+      <tbody>
+        {{range .Fading}}<tr>
+          <td data-label="週">{{.WeekStart.Format "01-02"}}</td>
+          <td data-label="添削した文字数">{{.Runes}}</td>
+          <td data-label="修正数">{{.Corrections}}</td>
+          <td data-label="修正/1000字">{{if .Runes}}{{printf "%.1f" .Per1000}}{{else}}—{{end}}</td>
+        </tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+  {{end}}
+
+  <h2>自信の較正</h2>
+  <p class="outcome-note">自信と正答率のずれ。プラスは自信が実力を上回っている週、マイナスはその逆です。</p>
+  {{if .ShowCalibration}}
+  <div class="table-card table-card--stack">
+    <table>
+      <thead><tr><th>週</th><th>試行数</th><th>平均自信</th><th>正答率</th><th>ずれ</th></tr></thead>
+      <tbody>
+        {{range .Calibration}}<tr>
+          <td data-label="週">{{.WeekStart.Format "01-02"}}</td>
+          <td data-label="試行数">{{.Attempts}}</td>
+          <td data-label="平均自信">{{if .Attempts}}{{printf "%.1f" .MeanConfidence}} / 5{{else}}—{{end}}</td>
+          <td data-label="正答率">{{if .Attempts}}{{percent .CorrectRate}}%{{else}}—{{end}}</td>
+          <td data-label="ずれ">{{if .Attempts}}{{percent .Overconfidence}}pt{{else}}—{{end}}</td>
+        </tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+  {{else}}
+  <p class="empty-state">自信を記録した練習がまだないため、較正は測れません。</p>
+  {{end}}
+</section>{{end}}
