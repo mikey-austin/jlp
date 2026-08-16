@@ -122,7 +122,10 @@ type CalibrationTrend struct {
 	// CorrectRate is Corrects/Attempts (0 when Attempts is 0).
 	CorrectRate float64
 	// Overconfidence is the calibration error itself: the mean
-	// confidence expressed on the same 0..1 scale as CorrectRate, minus
+	// confidence rescaled from the 1..5 self-rating onto the same 0..1
+	// scale as CorrectRate — (mean-1)/4, so the BOTTOM of the scale maps
+	// to 0 and not to 0.2 (see application/outcomes' confidenceScaleMin
+	// for why that distinction is load-bearing) — minus
 	// CorrectRate. Positive means the learner was surer than they were
 	// right; negative means they knew more than they thought. 0 when
 	// Attempts is 0 — which is "not measured", not "perfectly
@@ -150,8 +153,15 @@ type WeeklyRate struct {
 	Runes int
 	// Corrections is how many corrections those submissions produced.
 	Corrections int
-	// Per1000 is Corrections/Runes*1000 (0 when Runes is 0), derived by
-	// application/outcomes — never by SQL.
+	// Measurable is whether Runes clears the minimum sample size below
+	// which a "per 1,000 characters" figure is not a rate at all (see
+	// application/outcomes' minMeasurableRunes). Derived there, never by
+	// SQL. Runes and Corrections are raw facts and are always displayed;
+	// Per1000 is only meaningful — and only computed — when this is true.
+	Measurable bool
+	// Per1000 is Corrections/Runes*1000, derived by
+	// application/outcomes — never by SQL. Left 0 when Measurable is
+	// false, which display code must render as "no rate", never as 0.0.
 	Per1000 float64
 }
 

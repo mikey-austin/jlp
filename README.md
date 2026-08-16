@@ -858,6 +858,7 @@ independent solves, correct later productions, totals and dates.
 | **収束 (retired)** | ≥3 corrections, then 60 days with none |
 | **判定外 (excluded)** | first corrected <60 days ago — the two 30-day windows still overlap, so comparing them measures nothing |
 | **判定外 (excluded)** | <3 corrections in the baseline window — too thin a rate to compare against |
+| **判定外 (excluded)** | <1,000 characters submitted for review in the last 30 days — with no new writing, "fewer corrections" is just "less writing" |
 | **改善 (improving)** | strictly fewer corrections in the recent window than the baseline |
 | **継続中 (persistent)** | the same number or more |
 
@@ -865,6 +866,26 @@ Retired is checked first because it is self-contained: "three
 corrections then sixty silent days" never needed the before/after
 comparison, so a thin baseline must not demote it. Equal counts are
 *persistent*, not improving — no change is no evidence of change.
+
+**Inactivity is never improvement.** The third exclusion is the one that
+matters most: without it, a learner who simply *stopped writing* has
+zero corrections on every concept and every one of them is reported as
+improving. Because the retired rule deliberately needs no recent
+activity, that path can still produce counts for a learner who has gone
+quiet — so when less than 1,000 characters were reviewed in the last 30
+days, the headline leads with exactly that and the page repeats it
+above the tables.
+
+**Thin data is not a rate.** `修正/1000字` is quoted per 1,000
+characters to one decimal place, so a week holding fewer than 1,000
+characters cannot support the figure — one correction would move it by
+more than 1.0. Such a week gets no rate in the table (`—`), no point on
+the chart, and can never be an endpoint of the trend sentence. Without
+that floor a five-character week produced "fell from 200.0 to 3.4", and
+a 120-character week produced "to 0.0" — the very figure the zero-data
+guard forbids because it reads as "no corrections needed". The week's
+own character and correction counts are still shown: those are measured
+facts, and only the derived rate is withheld.
 
 **Honesty is the feature, not a caveat.** A concept with too little
 data is neither improving nor persistent; it is excluded, and the page
@@ -900,6 +921,17 @@ events for expressions that literally appear in the replacement text of
 a correction tagged with that concept — a conservative link (it can
 miss, but it cannot invent one), and the only link the schema offers.
 
+**What the page cannot see, and says so.** Conversation-tutor and
+spoken-practice corrections are stored as jsonb on `conversation_turns`
+(the `00021` migration), not in the `corrections` table, so **no number
+on this page includes them**. Every concept group, the `修正/1000字`
+denominator and the fading trend describe document review only. The
+page states this above the tables rather than burying it here, because
+it compounds the inactivity problem: a learner who moves from written
+review to conversation practice would otherwise show falling correction
+counts everywhere and be told they improved, when the corrections
+simply moved somewhere this page cannot read.
+
 Every threshold above lives in Go, in `application/outcomes`, never in
 SQL — see that package's doc comment and `analyser_test.go`, which
 walks every boundary (exactly-60-days, exactly-3-corrections,
@@ -907,13 +939,18 @@ exactly-equal counts) explicitly.
 
 **Honesty — what the dev database can actually show**: this repo's dev
 database has real accumulated history, but all of it was written
-*today*, so every corrected concept legitimately falls under the
-"<60 days of history" exclusion. `/outcomes` therefore renders
-"No concept has enough history to judge yet; 1 concept excluded for
-insufficient data." against it — which is the correct answer, not a
-gap in the feature. No backdated demo data was inserted to make the
-page look busier; the improving/persistent/retired groups are proven by
-the analyser's boundary tests and the handler tests instead.
+*today*, and it amounts to 632 characters of reviewed text. So every
+corrected concept legitimately falls under the "<60 days of history"
+exclusion, and no week clears the 1,000-character floor.
+`/outcomes` renders "No concept has enough history to judge yet; 1
+concept excluded for insufficient data.", shows the 632 characters and
+every weekly count, and prints `—` for every rate — which is the
+correct answer, not a gap in the feature. (Before the minimum-sample
+rule existed, that same 632 characters was being reported as "45.9
+corrections per 1,000 characters".) No backdated demo data was inserted
+to make the page look busier; the improving/persistent/retired groups
+are proven by the analyser's boundary tests and the handler tests
+instead.
 
 ## WhatsApp: deferred, documented, not stubbed
 

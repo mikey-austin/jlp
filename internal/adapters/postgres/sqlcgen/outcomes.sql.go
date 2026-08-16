@@ -179,6 +179,13 @@ JOIN correction_concepts cc ON cc.correction_id = c.id AND cc.resolved
 WHERE le.identity_id = $1
   AND le.type = 'vocabulary.produced-correctly'
   AND le.occurred_at >= c.created_at
+  -- Not defensive noise: position('' IN anything) returns 1, so a
+  -- single blank expression row would silently "link" every concept to
+  -- every production event and inflate this count everywhere. Nothing
+  -- in the schema forbids an empty expression (vocabulary_items.
+  -- expression is NOT NULL but is not CHECKed non-empty), so the guard
+  -- belongs here rather than in an assumption.
+  AND vi.expression <> ''
 GROUP BY cc.concept_slug
 ORDER BY cc.concept_slug
 `

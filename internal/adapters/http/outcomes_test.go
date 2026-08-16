@@ -58,6 +58,31 @@ func (f *fakeOutcomeRepo) AssistanceFading(_ context.Context, _ learner.Identity
 	return out, nil
 }
 
+// weeklyFading builds a full TrendWeeks-long fading series from
+// per-week runes and correction counts — the shape the real repository
+// always returns (it zero-fills to exactly the requested week count),
+// so no test here feeds a slice production could not produce.
+func weeklyFading(runes, corrections []int) []storage.WeeklyRate {
+	out := make([]storage.WeeklyRate, len(runes))
+	for i := range runes {
+		out[i] = storage.WeeklyRate{
+			WeekStart:   outcomesNow.Add(-time.Duration(len(runes)-1-i) * 7 * outcomesDay),
+			Runes:       runes[i],
+			Corrections: corrections[i],
+		}
+	}
+	return out
+}
+
+// activeFading is a learner who is still writing — enough reviewed text
+// in the recent window that concepts may be judged at all. Page tests
+// that are about rendering, not about the inactivity guard, use it.
+func activeFading() []storage.WeeklyRate {
+	return weeklyFading(
+		[]int{4000, 4000, 4000, 4000, 4000, 4000, 4000, 4000},
+		[]int{12, 12, 12, 12, 12, 12, 12, 12})
+}
+
 func outcomesTestOptions(repo *fakeOutcomeRepo) Options {
 	opts := testOptions()
 	opts.Outcomes = outcomes.NewAnalyser(repo, func() time.Time { return outcomesNow })
@@ -129,7 +154,7 @@ func TestOutcomesPageRendersEveryGroupAndTheExcludedCount(t *testing.T) {
 		outcomeRow("retired-slug", 200*outcomesDay, 90*outcomesDay, 4, 4, 0),
 		outcomeRow("thin-slug", 200*outcomesDay, outcomesDay, 2, 1, 1),
 		outcomeRow("recent-slug", 3*outcomesDay, outcomesDay, 9, 5, 5),
-	}}
+	}, fading: activeFading()}
 	body := getOutcomes(t, outcomesTestOptions(repo))
 
 	for _, want := range []string{
@@ -157,18 +182,127 @@ func TestOutcomesPageRendersEveryGroupAndTheExcludedCount(t *testing.T) {
 	}
 
 	// The headline states every group AND the exclusions.
-	if !strings.Contains(body, "1 concept retired, 1 improving, 1 still recurring, 2 excluded for insufficient data.") {
+	if !strings.Contains(body, "1 concept retired, 1 improving, 1 still recurring, 2 excluded for insufficient data;") {
 		t.Errorf("headline missing or wrong: %s", body)
+	}
+}
+
+// TestOutcomesPageDisclosesWhatItCannotSee: conversation and spoken
+// practice corrections live as jsonb on conversation_turns, not in the
+// corrections table, so no number on this page can see them. A page
+// whose whole claim is honesty must say that — especially since a
+// learner who moves to conversation practice would otherwise look like
+// they improved.
+func TestOutcomesPageDisclosesWhatItCannotSee(t *testing.T) {
+	body := getOutcomes(t, outcomesTestOptions(&fakeOutcomeRepo{fading: activeFading()}))
+	for _, want := range []string{"添削に出した文章だけ", "会話練習", "音声練習"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/outcomes does not disclose that %q is out of scope: %s", want, body)
+		}
+	}
+}
+
+// TestOutcomesPageWarnsWhenTheLearnerHasBarelyWritten is the page-level
+// half of the "inactivity is not improvement" fix: the caveat must be
+// on the page itself, not only inside the headline sentence.
+func TestOutcomesPageWarnsWhenTheLearnerHasBarelyWritten(t *testing.T) {
+	quiet := &fakeOutcomeRepo{
+		concepts: []storage.ConceptOutcome{outcomeRow("gone-quiet", 200*outcomesDay, 61*outcomesDay, 4, 4, 0)},
+		fading:   weeklyFading([]int{0, 0, 0, 0, 0, 0, 0, 0}, []int{0, 0, 0, 0, 0, 0, 0, 0}),
+	}
+	body := getOutcomes(t, outcomesTestOptions(quiet))
+	if !strings.Contains(body, "直近30日に添削へ出した文章は0文字です。") {
+		t.Errorf("no inactivity caveat on a page with no recent writing: %s", body)
+	}
+	if !strings.Contains(body, "Less than 1,000 characters were submitted for review in the last 30 days;") {
+		t.Errorf("headline does not lead with the inactivity caveat: %s", body)
+	}
+
+	// ...and it is absent when the learner is writing.
+	active := &fakeOutcomeRepo{
+		concepts: []storage.ConceptOutcome{outcomeRow("improving-slug", 120*outcomesDay, outcomesDay, 9, 5, 1)},
+		fading:   activeFading(),
+	}
+	if body := getOutcomes(t, outcomesTestOptions(active)); strings.Contains(body, "直近30日に添削へ出した文章は") {
+		t.Errorf("inactivity caveat shown to an active learner: %s", body)
+	}
+}
+
+// TestOutcomesPageDoesNotPlotUnmeasuredWeeksAtTheChartFloor: a week
+// with nothing submitted has no rate, and 0 is the BOTTOM of the axis
+// — plotting it would draw a gap as "corrections fell to zero".
+func TestOutcomesPageDoesNotPlotUnmeasuredWeeksAtTheChartFloor(t *testing.T) {
+	repo := &fakeOutcomeRepo{fading: weeklyFading(
+		[]int{10000, 0, 0, 0, 0, 0, 0, 10000},
+		[]int{81, 0, 0, 0, 0, 0, 0, 34})}
+	body := getOutcomes(t, outcomesTestOptions(repo))
+
+	// Two measurable weeks at the two ends of an 8-week axis: exactly
+	// two points, at x=0 and x=120, and nothing in between. The six
+	// unmeasured weeks contribute no coordinate at all.
+	if !strings.Contains(body, `<polyline points="0.0,2.0 120.0,13.6" />`) {
+		t.Errorf("sparkline plots weeks it has no value for: %s", body)
+	}
+	// 22.0 is the chart floor (pad 2 + plot height 20). Nothing may sit
+	// there: no week in this series has the minimum rate of zero.
+	if strings.Contains(body, "22.0") {
+		t.Errorf("an unmeasured week was plotted at the chart floor: %s", body)
+	}
+}
+
+// TestOutcomesPageGivesNoRateToUndersizedWeeks: the table still shows
+// the raw runes and corrections (facts), but withholds the per-1,000
+// rate, which a sub-1,000-character sample cannot support.
+func TestOutcomesPageGivesNoRateToUndersizedWeeks(t *testing.T) {
+	repo := &fakeOutcomeRepo{fading: weeklyFading(
+		[]int{10000, 5, 0, 0, 0, 0, 0, 10000},
+		[]int{81, 1, 0, 0, 0, 0, 0, 34})}
+	body := getOutcomes(t, outcomesTestOptions(repo))
+
+	if strings.Contains(body, "200.0") {
+		t.Errorf("a 5-character week was given a per-1,000 rate: %s", body)
+	}
+	// Its raw counts are still there — they are facts, and only the
+	// derived rate is unsupported.
+	if !strings.Contains(body, `<td data-label="添削した文字数">5</td>`) {
+		t.Errorf("the undersized week's raw character count was hidden: %s", body)
+	}
+}
+
+// TestOutcomesPageStillShowsCountsWhenNoWeekCarriesARate: a learner who
+// submitted a little text every week, but never 1,000 characters in one
+// week, has no rate anywhere — and must still see what they actually
+// wrote. Only the derived figure is withheld, never the measurement.
+// (This is the dev database's own shape: 632 reviewed characters across
+// the window, which before this fix was reported as "45.9 corrections
+// per 1,000 characters".)
+func TestOutcomesPageStillShowsCountsWhenNoWeekCarriesARate(t *testing.T) {
+	repo := &fakeOutcomeRepo{fading: weeklyFading(
+		[]int{0, 0, 0, 0, 0, 0, 300, 332},
+		[]int{0, 0, 0, 0, 0, 0, 12, 17})}
+	body := getOutcomes(t, outcomesTestOptions(repo))
+
+	if strings.Contains(body, `<polyline`) {
+		t.Errorf("drew a trend with no week carrying a rate: %s", body)
+	}
+	for _, want := range []string{
+		`<td data-label="添削した文字数">300</td>`,
+		`<td data-label="添削した文字数">332</td>`,
+		`<td data-label="修正数">17</td>`,
+		`<td data-label="修正/1000字">—</td>`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("fading table missing %q: %s", want, body)
+		}
 	}
 }
 
 // TestOutcomesPageDrawsTheFadingTrendOnlyWithTwoMeasurableWeeks pins
 // the chart's own honesty rule, on both sides of the boundary.
 func TestOutcomesPageDrawsTheFadingTrendOnlyWithTwoMeasurableWeeks(t *testing.T) {
-	oneWeek := &fakeOutcomeRepo{fading: []storage.WeeklyRate{
-		{WeekStart: outcomesNow.Add(-7 * outcomesDay)},
-		{WeekStart: outcomesNow, Runes: 10000, Corrections: 34},
-	}}
+	oneWeek := &fakeOutcomeRepo{fading: weeklyFading(
+		[]int{0, 0, 0, 0, 0, 0, 0, 10000},
+		[]int{0, 0, 0, 0, 0, 0, 0, 34})}
 	body := getOutcomes(t, outcomesTestOptions(oneWeek))
 	if strings.Contains(body, `<polyline`) {
 		t.Errorf("drew a trend from a single measurable week: %s", body)
@@ -182,10 +316,9 @@ func TestOutcomesPageDrawsTheFadingTrendOnlyWithTwoMeasurableWeeks(t *testing.T)
 		t.Errorf("the one measurable week's numbers were hidden with the chart: %s", body)
 	}
 
-	twoWeeks := &fakeOutcomeRepo{fading: []storage.WeeklyRate{
-		{WeekStart: outcomesNow.Add(-7 * outcomesDay), Runes: 10000, Corrections: 81},
-		{WeekStart: outcomesNow, Runes: 10000, Corrections: 34},
-	}}
+	twoWeeks := &fakeOutcomeRepo{fading: weeklyFading(
+		[]int{0, 0, 0, 0, 0, 0, 10000, 10000},
+		[]int{0, 0, 0, 0, 0, 0, 81, 34})}
 	body = getOutcomes(t, outcomesTestOptions(twoWeeks))
 	if !strings.Contains(body, `<polyline`) {
 		t.Errorf("did not draw a trend from two measurable weeks: %s", body)
@@ -193,7 +326,7 @@ func TestOutcomesPageDrawsTheFadingTrendOnlyWithTwoMeasurableWeeks(t *testing.T)
 	for _, want := range []string{
 		"Corrections per 1,000 characters fell from 8.1 to 3.4 over 2 weeks.",
 		"8.1", "3.4", "修正/1000字",
-		"直近2週のうち計測できた週：2",
+		"直近8週のうち計測できた週：2",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("fading section missing %q: %s", want, body)
@@ -206,11 +339,9 @@ func TestOutcomesPageDrawsTheFadingTrendOnlyWithTwoMeasurableWeeks(t *testing.T)
 // claim a week of flawless writing that never happened.
 func TestOutcomesPageShowsUnmeasuredWeeksAsDashesNotZeroes(t *testing.T) {
 	repo := &fakeOutcomeRepo{
-		fading: []storage.WeeklyRate{
-			{WeekStart: outcomesNow.Add(-14 * outcomesDay), Runes: 10000, Corrections: 81},
-			{WeekStart: outcomesNow.Add(-7 * outcomesDay)},
-			{WeekStart: outcomesNow, Runes: 10000, Corrections: 34},
-		},
+		fading: weeklyFading(
+			[]int{0, 0, 0, 0, 0, 10000, 0, 10000},
+			[]int{0, 0, 0, 0, 0, 81, 0, 34}),
 		calibration: []storage.CalibrationTrend{
 			{WeekStart: outcomesNow.Add(-7 * outcomesDay)},
 			{WeekStart: outcomesNow, Attempts: 4, ConfidenceTotal: 16, Corrects: 2},
@@ -228,8 +359,9 @@ func TestOutcomesPageShowsUnmeasuredWeeksAsDashesNotZeroes(t *testing.T) {
 	if !strings.Contains(body, `<td data-label="修正/1000字">—</td>`) {
 		t.Errorf("the unmeasured week is not rendered as a dash: %s", body)
 	}
-	// 16/4 = 4.0 mean confidence, 2/4 = 50% correct: 0.8 - 0.5 = +30pt.
-	for _, want := range []string{"4.0 / 5", "50%", "30pt"} {
+	// 16/4 = 4.0 mean confidence, 2/4 = 50% correct. The 1..5 scale maps
+	// onto 0..1 in four steps, so (4.0-1)/4 = 0.75 against 0.50 = +25pt.
+	for _, want := range []string{"4.0 / 5", "50%", "25pt"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("calibration row missing %q: %s", want, body)
 		}
@@ -239,9 +371,10 @@ func TestOutcomesPageShowsUnmeasuredWeeksAsDashesNotZeroes(t *testing.T) {
 // TestOutcomesPageHasNoGamification is a standing PRD §56 guard on the
 // rendered page, not just on the headline string.
 func TestOutcomesPageHasNoGamification(t *testing.T) {
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
-		outcomeRow("improving-slug", 120*outcomesDay, outcomesDay, 9, 5, 1),
-	}}
+	repo := &fakeOutcomeRepo{
+		concepts: []storage.ConceptOutcome{outcomeRow("improving-slug", 120*outcomesDay, outcomesDay, 9, 5, 1)},
+		fading:   activeFading(),
+	}
 	body := getOutcomes(t, outcomesTestOptions(repo))
 
 	for _, forbidden := range []string{"連続", "ストリーク", "streak", "バッジ", "レベルアップ", "おめでとう", "🎉", "🔥"} {

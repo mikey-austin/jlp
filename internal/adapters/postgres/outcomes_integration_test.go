@@ -306,7 +306,9 @@ func TestConceptOutcomesCountsIndependentSolvesOnly(t *testing.T) {
 func TestConceptOutcomesCountsProducedCorrectlyForLinkedExpressions(t *testing.T) {
 	f := newOutcomeFixture(t)
 	identity := f.identity("outcome-produced")
+	other := f.identity("outcome-produced-other")
 	session := f.session(identity)
+	otherSession := f.session(other)
 	slug := f.concept("keigo", "敬語")
 
 	now := time.Now().UTC()
@@ -328,12 +330,38 @@ func TestConceptOutcomesCountsProducedCorrectlyForLinkedExpressions(t *testing.T
 	// Produced, but NOT correctly.
 	f.learningEvent(identity, event.TypeVocabularyProduced, "伺います", `{}`, now.Add(-time.Hour))
 
+	// A SECOND identity, corrected on the same concept with the same
+	// expression in the replacement, producing it correctly three times.
+	// The query joins learning_events to vocabulary_items and to
+	// feedback_requests on identity, so a dropped predicate on any of
+	// those three would show up here as an inflated count for the first
+	// identity — the reason every other method in this file has a
+	// cross-identity case too.
+	f.correctionOn(other, otherSession, slug, "明日伺います", 50, corrected)
+	f.vocabItem(other, "伺います", corrected)
+	for i := 0; i < 3; i++ {
+		f.learningEvent(other, event.TypeVocabularyProducedCorrectly, "伺います", `{}`, now.Add(-time.Duration(i)*time.Hour))
+	}
+
+	// An empty-expression vocabulary row: position('' IN anything)
+	// returns 1, so without the query's `vi.expression <> ''` guard this
+	// single row would link EVERY correction to every production event.
+	f.vocabItem(identity, "", corrected)
+
 	got, err := f.repo.ConceptOutcomes(context.Background(), identity)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if n := outcomeBySlug(t, got, slug).ProducedCorrectly; n != 1 {
 		t.Errorf("ProducedCorrectly = %d, want 1", n)
+	}
+
+	otherGot, err := f.repo.ConceptOutcomes(context.Background(), other)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := outcomeBySlug(t, otherGot, slug).ProducedCorrectly; n != 3 {
+		t.Errorf("second identity's ProducedCorrectly = %d, want 3", n)
 	}
 }
 

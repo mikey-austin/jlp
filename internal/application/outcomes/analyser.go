@@ -15,10 +15,15 @@
 //
 // Three rules govern everything below.
 //
-//  1. Silence is not evidence. A concept whose two measurement windows
-//     still overlap, or whose baseline holds one or two corrections, is
-//     EXCLUDED — not "improving", not "persistent". The Report carries
-//     those exclusions with a per-concept reason so the page can say how
+//  1. Silence is not evidence — on BOTH sides of the comparison. A
+//     concept whose two measurement windows still overlap, or whose
+//     baseline holds one or two corrections, or whose recent window
+//     contains no meaningful amount of reviewed writing, is EXCLUDED —
+//     not "improving", not "persistent". The third of those is the one
+//     that matters most: a learner who simply stopped writing has zero
+//     corrections everywhere, and calling that improvement would be
+//     telling someone who quit that they got better. The Report carries
+//     every exclusion with a per-concept reason so the page can say how
 //     many were dropped and why, rather than quietly shrinking the
 //     denominator.
 //  2. The headline is a fact, never a verdict. It states counts and, if
@@ -33,6 +38,7 @@ package outcomes
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -67,6 +73,34 @@ const (
 	retiredSilence        = 60 * 24 * time.Hour
 	minRetiredCorrections = 3
 )
+
+// MinMeasurableRunes is the smallest amount of reviewed writing from
+// which anything at all may be said about a correction rate. It is
+// exported so tests can pin the boundary at exactly the threshold
+// rather than restating the number.
+//
+// It is not a taste judgement: the rate this package reports is
+// "corrections per 1,000 characters", quoted to one decimal place. In a
+// sample SMALLER than 1,000 characters, a single correction moves that
+// figure by more than 1.0 — the quoted decimal is then pure noise, and
+// the headline ends up saying things like "fell from 200.0 to 3.4"
+// off the back of one reviewed clause. Requiring the denominator to be
+// at least as large as the unit the rate is quoted in is the smallest
+// floor that makes the number mean what it says.
+//
+// The same constant does two jobs, deliberately, because it is the same
+// question in both:
+//
+//   - a week must clear it before it can be an endpoint of the fading
+//     trend (or be plotted, or be given a rate in the table), and
+//   - the RECENT window must clear it before any concept may be judged
+//     improving or persistent — otherwise "fewer corrections" is just
+//     "less writing".
+const MinMeasurableRunes = 1000
+
+// weekSpan is how much time one storage.WeeklyRate bucket covers. Used
+// only to decide which buckets overlap the recent window.
+const weekSpan = 7 * 24 * time.Hour
 
 // minimumHistory is how old a concept's first correction must be before
 // its baseline and recent windows stop overlapping — the point at which
@@ -113,6 +147,11 @@ type Report struct {
 	// ratios filled in here.
 	Calibration []storage.CalibrationTrend
 	Fading      []storage.WeeklyRate
+	// RecentRunes is how many characters were submitted for review
+	// inside the recent window — the evidence that the learner is still
+	// producing anything at all. Below MinMeasurableRunes no concept is
+	// judged improving or persistent, and the headline says so.
+	RecentRunes int
 	// Headline is one sentence of plain fact. See the package doc
 	// comment's rule 2, and headline() below.
 	Headline string
@@ -154,13 +193,18 @@ func (a *Analyser) Report(ctx context.Context, identity learner.IdentityID) (Rep
 		Calibration: deriveCalibration(calibration),
 		Fading:      deriveFading(fading),
 	}
+	// Computed BEFORE classification, and consulted by it: the fading
+	// data the analyser already holds is exactly the evidence that
+	// disproves "they improved" for a learner who stopped writing.
+	rep.RecentRunes = recentReviewedRunes(rep.Fading, now)
+
 	for _, c := range concepts {
 		// Copied by value before anything is written to it: the
 		// repository's slice is the caller's, and Retired below is a
 		// judgement this package owns, not data the repository handed
 		// over.
 		outcome := c
-		switch group, reason := classify(outcome, now); group {
+		switch group, reason := classify(outcome, now, rep.RecentRunes); group {
 		case groupRetired:
 			outcome.Retired = true
 			rep.Retired = append(rep.Retired, outcome)
@@ -191,12 +235,22 @@ const (
 //     corrections, then sixty silent days" needs no window comparison,
 //     so neither a short history (impossible: sixty silent days implies
 //     at least sixty days of history) nor a thin baseline can refute it.
-//  2. Then the two exclusions, because a concept that cannot be
+//  2. Then the three exclusions, because a concept that cannot be
 //     measured must never fall through into a judged group.
 //  3. Only then the before/after comparison.
 //
+// recentRunes is how much reviewed writing the learner produced inside
+// the recent window. It gates the comparison for the same reason
+// minBaselineCorrections gates the baseline: without new production,
+// "fewer corrections" is not a measurement of anything. In practice
+// this can only ever move a concept out of *improving* — a concept
+// with as many corrections as before necessarily had writing to be
+// corrected — but it is applied before the comparison rather than
+// inside its improving arm, because the honest statement is "this
+// window cannot be compared", not "this window cannot be praised".
+//
 // The returned reason is non-empty only for groupExcluded.
-func classify(c storage.ConceptOutcome, now time.Time) (group, string) {
+func classify(c storage.ConceptOutcome, now time.Time, recentRunes int) (group, string) {
 	if c.TotalCorrections >= minRetiredCorrections && !c.LastCorrectedAt.After(now.Add(-retiredSilence)) {
 		return groupRetired, ""
 	}
@@ -212,6 +266,11 @@ func classify(c storage.ConceptOutcome, now time.Time) (group, string) {
 			"only %s in the first %d days — too few to compare a later rate against",
 			countOf(c.CorrectionsBefore, "correction"), int(storage.OutcomeBaselineWindow/(24*time.Hour)))
 	}
+	if recentRunes < MinMeasurableRunes {
+		return groupExcluded, fmt.Sprintf(
+			"only %d characters submitted for review in the last %d days — with no new writing, fewer corrections measures nothing",
+			recentRunes, int(storage.OutcomeRecentWindow/(24*time.Hour)))
+	}
 
 	if c.CorrectionsAfter < c.CorrectionsBefore {
 		return groupImproving, ""
@@ -219,11 +278,26 @@ func classify(c storage.ConceptOutcome, now time.Time) (group, string) {
 	return groupPersistent, ""
 }
 
-// confidenceScaleMax is the top of the self-reported confidence scale,
-// fixed by the exercise_attempts_confidence_range CHECK constraint
-// (1..5) in the 00013 migration. It exists only to put MeanConfidence
-// on the same 0..1 scale as CorrectRate so the two can be subtracted.
-const confidenceScaleMax = 5.0
+// confidenceScaleMin/Max are the ends of the self-reported confidence
+// scale, fixed by the exercise_attempts_confidence_range CHECK
+// constraint (1..5) in the 00013 migration. They exist only to put
+// MeanConfidence on the same 0..1 scale as CorrectRate so the two can
+// be subtracted.
+//
+// The mapping is (mean - min) / (max - min), NOT mean / max. The scale
+// has five positions and therefore FOUR steps, and its bottom position
+// is 1, not 0 — dividing by the maximum would silently assert that the
+// lowest confidence a learner can express means "20% sure". It doesn't:
+// the widget is a bare 1–5 select with no probability anchors
+// (web/templates/partials/exercise.html.tmpl), so the only defensible
+// reading is that 1 is the bottom of the range and 5 the top. Under the
+// wrong mapping a learner who marked every attempt least-confident and
+// got nothing right was reported as 20 points OVERconfident, and the
+// bottom of the scale could never read as calibrated at all.
+const (
+	confidenceScaleMin = 1.0
+	confidenceScaleMax = 5.0
+)
 
 // deriveCalibration fills in MeanConfidence/CorrectRate/Overconfidence
 // from each week's raw sums, leaving a week nobody rated at zero rather
@@ -237,24 +311,53 @@ func deriveCalibration(weeks []storage.CalibrationTrend) []storage.CalibrationTr
 		if out[i].Attempts > 0 {
 			out[i].MeanConfidence = float64(out[i].ConfidenceTotal) / float64(out[i].Attempts)
 			out[i].CorrectRate = float64(out[i].Corrects) / float64(out[i].Attempts)
-			out[i].Overconfidence = out[i].MeanConfidence/confidenceScaleMax - out[i].CorrectRate
+			out[i].Overconfidence = (out[i].MeanConfidence-confidenceScaleMin)/
+				(confidenceScaleMax-confidenceScaleMin) - out[i].CorrectRate
 		}
 	}
 	return out
 }
 
-// deriveFading fills in Per1000, leaving a week with nothing submitted
-// for review at zero rather than dividing by it — same "0 means
-// unmeasured, not measured-as-zero" rule as deriveCalibration.
+// deriveFading marks each week Measurable and fills in Per1000 for
+// those that are, leaving every other week's rate at zero rather than
+// dividing by a sample too small to divide by — the same "0 means
+// unmeasured, not measured-as-zero" rule as deriveCalibration, with the
+// bar raised from "any characters at all" to MinMeasurableRunes (see
+// that constant for why "any" was not enough). Runes and Corrections
+// are untouched: they are raw facts and stay displayable either way.
 func deriveFading(weeks []storage.WeeklyRate) []storage.WeeklyRate {
 	out := make([]storage.WeeklyRate, len(weeks))
 	copy(out, weeks)
 	for i := range out {
-		if out[i].Runes > 0 {
+		out[i].Measurable = out[i].Runes >= MinMeasurableRunes
+		if out[i].Measurable {
 			out[i].Per1000 = float64(out[i].Corrections) / float64(out[i].Runes) * 1000
 		}
 	}
 	return out
+}
+
+// recentReviewedRunes totals the characters submitted for review inside
+// the recent window — the window CorrectionsAfter is counted over, so
+// the two describe the same stretch of time.
+//
+// A week bucket counts when it OVERLAPS the window at all, not only
+// when it starts inside it: the window boundary falls mid-week roughly
+// six times in seven, and dropping the straddling week would discard up
+// to six days of genuine writing and report an active learner as
+// inactive. Erring toward "the learner was writing" is the right
+// direction for a threshold whose only power is to WITHHOLD a
+// judgement — it means the guard fires when there is real doubt, not
+// merely when the calendar is awkward.
+func recentReviewedRunes(weeks []storage.WeeklyRate, now time.Time) int {
+	cutoff := now.Add(-storage.OutcomeRecentWindow)
+	total := 0
+	for _, w := range weeks {
+		if w.WeekStart.Add(weekSpan).After(cutoff) {
+			total += w.Runes
+		}
+	}
+	return total
 }
 
 // notEnoughData is what a learner with no measurable history sees. It
@@ -270,6 +373,22 @@ func headline(rep Report) string {
 	var clauses []string
 
 	judged := len(rep.Retired) + len(rep.Improving) + len(rep.Persistent)
+
+	// The inactivity caveat leads the sentence whenever concepts WERE
+	// judged but the learner has barely written lately. That combination
+	// is reachable through the retired rule, which by design needs no
+	// recent activity at all ("≥3 corrections then 60 silent days"):
+	// without this clause, a learner who walked away would be handed
+	// "12 concepts retired, 0 improving, 0 still recurring." as though
+	// it were a finding about their learning. It is omitted when nothing
+	// was judged, because the per-concept exclusion reasons already say
+	// it, in more detail, right below.
+	if judged > 0 && rep.RecentRunes < MinMeasurableRunes {
+		clauses = append(clauses, fmt.Sprintf(
+			"less than %s characters were submitted for review in the last %d days",
+			thousands(MinMeasurableRunes), int(storage.OutcomeRecentWindow/(24*time.Hour))))
+	}
+
 	switch {
 	case judged > 0:
 		c := fmt.Sprintf("%s retired, %d improving, %d still recurring",
@@ -297,10 +416,19 @@ func headline(rep Report) string {
 }
 
 // fadingClause describes how the corrections-per-1000-characters rate
-// moved between the FIRST and LAST week that actually had text to
-// measure — never the first and last week of the window, most of which
-// may be empty. It returns "" unless at least two such weeks exist: one
-// point is not a trend, and a trend claimed from one point is a lie.
+// moved between the FIRST and LAST week carrying a big enough sample to
+// have a rate at all — never the first and last week of the window
+// (most of which may be empty), and never a week that scraped together
+// a handful of characters. It returns "" unless at least two such weeks
+// exist: one point is not a trend, and a trend claimed from one point
+// is a lie.
+//
+// The "big enough" test is Measurable, i.e. MinMeasurableRunes — the
+// same bar the chart and the table use, so the sentence, the line and
+// the numbers can never disagree about which weeks count. Without it a
+// five-character first week yielded "fell from 200.0 to 3.4", and a
+// 120-character last week yielded "to 0.0" — the very figure the
+// zero-data guard forbids, because it reads as "no corrections needed".
 //
 // The two endpoints are compared as DISPLAYED (one decimal place), so
 // the sentence can never read "fell from 3.4 to 3.4" over a difference
@@ -308,7 +436,7 @@ func headline(rep Report) string {
 func fadingClause(weeks []storage.WeeklyRate) string {
 	first, last := -1, -1
 	for i, w := range weeks {
-		if w.Runes == 0 {
+		if !w.Measurable {
 			continue
 		}
 		if first < 0 {
@@ -341,6 +469,25 @@ func countOf(n int, noun string) string {
 		return "1 " + noun
 	}
 	return fmt.Sprintf("%d %ss", n, noun)
+}
+
+// thousands renders n with comma group separators ("1,000"), matching
+// the "per 1,000 characters" phrasing already in the headline so both
+// figures read as the same kind of number. n is never negative here
+// (it is only ever a rune-count threshold).
+func thousands(n int) string {
+	s := strconv.Itoa(n)
+	head := len(s) % 3
+	if head == 0 {
+		head = 3
+	}
+	var b strings.Builder
+	b.WriteString(s[:head])
+	for i := head; i < len(s); i += 3 {
+		b.WriteByte(',')
+		b.WriteString(s[i : i+3])
+	}
+	return b.String()
 }
 
 // capitalise upper-cases the first rune only. Clauses are written

@@ -1,6 +1,10 @@
 package httpx
 
-import "net/http"
+import (
+	"net/http"
+
+	"github.com/mikeyaustin/jlp/internal/application/outcomes"
+)
 
 // minimumMeasurableWeeks is how many weeks must actually carry data
 // before /outcomes draws a trend line for them. One point is not a
@@ -39,14 +43,23 @@ func (s *Server) outcomesPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fadingRates := make([]float64, 0, len(report.Fading))
-	measurableFadingWeeks := 0
-	for _, w := range report.Fading {
-		fadingRates = append(fadingRates, w.Per1000)
+	// Only weeks with a real rate are plotted. A week with nothing
+	// (or almost nothing) submitted for review has no rate, and its
+	// Per1000 is 0 — which is the BOTTOM of the sparkline's axis, the
+	// best possible rate. Plotting those would draw a run of inactivity
+	// as "corrections fell to zero", contradicting the "—" the table
+	// beside it prints for the very same weeks.
+	fadingSamples := make([]sparkSample, 0, len(report.Fading))
+	weeksWithAnyWriting := 0
+	for i, w := range report.Fading {
 		if w.Runes > 0 {
-			measurableFadingWeeks++
+			weeksWithAnyWriting++
+		}
+		if w.Measurable {
+			fadingSamples = append(fadingSamples, sparkSample{Index: i, Value: w.Per1000})
 		}
 	}
+	measurableFadingWeeks := len(fadingSamples)
 	measurableCalibrationWeeks := 0
 	for _, w := range report.Calibration {
 		if w.Attempts > 0 {
@@ -74,22 +87,31 @@ func (s *Server) outcomesPage(w http.ResponseWriter, r *http.Request) {
 		"ExcludedCount": len(report.Excluded),
 
 		"Fading": report.Fading,
-		// The chart and the table are gated SEPARATELY and deliberately.
-		// A chart below two measurable weeks would imply a trend nothing
-		// supports, so it is replaced by an explanation; the table is
-		// just the weekly numbers themselves, which imply nothing, so it
-		// is shown as soon as there is a single week to put in it —
-		// hiding real data because it is not yet enough for a chart
-		// would be its own small dishonesty.
+		// The chart and the table are gated SEPARATELY and deliberately,
+		// on DIFFERENT tests. A chart below two weeks with a real rate
+		// would imply a trend nothing supports, so it is replaced by an
+		// explanation. The table is the weekly character and correction
+		// counts themselves — raw facts, which imply nothing — so it
+		// appears as soon as the learner submitted anything at all, even
+		// a week too small to carry a rate (that week's rate cell shows
+		// "—", while its counts still show). Hiding measured facts
+		// because they are not yet enough for a chart would be its own
+		// small dishonesty.
 		"ShowFadingChart": measurableFadingWeeks >= minimumMeasurableWeeks,
-		"ShowFadingTable": measurableFadingWeeks > 0,
+		"ShowFadingTable": weeksWithAnyWriting > 0,
 		"FadingWeeks":     measurableFadingWeeks,
 		"FadingSpark": sparklineVM{
 			Subject: "修正率",
-			Points:  sparklinePointsFor(fadingRates),
+			Points:  sparklineSamplePoints(fadingSamples, len(report.Fading)),
 		},
 
 		"Calibration":     report.Calibration,
 		"ShowCalibration": measurableCalibrationWeeks > 0,
+
+		// RecentRunes drives the page's activity caveat. A page whose
+		// whole claim is honesty has to say when its own numbers are
+		// describing a period in which the learner barely wrote.
+		"RecentRunes":   report.RecentRunes,
+		"RecentlyQuiet": report.RecentRunes < outcomes.MinMeasurableRunes,
 	})
 }

@@ -3,6 +3,7 @@ package outcomes_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -72,6 +73,31 @@ func conceptOutcome(slug string, firstAgo, lastAgo time.Duration, total, before,
 		CorrectionsBefore: before,
 		CorrectionsAfter:  after,
 	}
+}
+
+// steadyFading is the fading series of a learner who is actively
+// writing: every one of n weeks carries runes characters of reviewed
+// text. Classification tests use it because — since the fix for the
+// "learner who stopped" defect — a concept can only be judged
+// improving when there is evidence the learner actually produced
+// something recently. A fixture with no writing at all is now the
+// *inactive* case, and has its own tests below.
+func steadyFading(n, runes, corrections int) []storage.WeeklyRate {
+	out := make([]storage.WeeklyRate, n)
+	for i := range out {
+		out[i] = storage.WeeklyRate{
+			WeekStart:   analyserNow.Add(-time.Duration(n-1-i) * 7 * day),
+			Runes:       runes,
+			Corrections: corrections,
+		}
+	}
+	return out
+}
+
+// activeRepo is the common fixture: these concepts, belonging to a
+// learner who is still writing.
+func activeRepo(concepts ...storage.ConceptOutcome) *fakeOutcomeRepo {
+	return &fakeOutcomeRepo{concepts: concepts, fading: steadyFading(8, 2000, 4)}
 }
 
 func report(t *testing.T, repo *fakeOutcomeRepo) outcomes.Report {
@@ -166,12 +192,12 @@ func zeroFilledCalibration(n int) []storage.CalibrationTrend {
 // persistent boundary, including the exactly-equal case: equal is NOT
 // improvement.
 func TestImprovingRequiresStrictlyFewerCorrectionsNow(t *testing.T) {
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
+	repo := activeRepo(
 		conceptOutcome("fewer", 120*day, 2*day, 9, 5, 4),
 		conceptOutcome("equal", 120*day, 2*day, 9, 5, 5),
 		conceptOutcome("more", 120*day, 2*day, 9, 5, 6),
 		conceptOutcome("gone", 120*day, 2*day, 9, 5, 0),
-	}}
+	)
 	rep := report(t, repo)
 
 	assertSlugs(t, "Improving", rep.Improving, "fewer", "gone")
@@ -189,10 +215,10 @@ func TestImprovingRequiresStrictlyFewerCorrectionsNow(t *testing.T) {
 // one day short is excluded.
 func TestInsufficientHistoryIsExcludedNotJudged(t *testing.T) {
 	minimum := storage.OutcomeBaselineWindow + storage.OutcomeRecentWindow
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
+	repo := activeRepo(
 		conceptOutcome("exactly-old-enough", minimum, day, 8, 5, 1),
 		conceptOutcome("one-day-short", minimum-day, day, 8, 5, 1),
-	}}
+	)
 	rep := report(t, repo)
 
 	assertSlugs(t, "Improving", rep.Improving, "exactly-old-enough")
@@ -208,11 +234,11 @@ func TestInsufficientHistoryIsExcludedNotJudged(t *testing.T) {
 // holds only one or two corrections has no rate to compare against —
 // a drop to zero there is noise, not evidence. Exactly three is enough.
 func TestThinBaselineIsExcludedNotJudged(t *testing.T) {
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
+	repo := activeRepo(
 		conceptOutcome("one", 120*day, day, 4, 1, 0),
 		conceptOutcome("two", 120*day, day, 4, 2, 0),
 		conceptOutcome("three", 120*day, day, 4, 3, 0),
-	}}
+	)
 	rep := report(t, repo)
 
 	assertSlugs(t, "Improving", rep.Improving, "three")
@@ -228,7 +254,7 @@ func TestThinBaselineIsExcludedNotJudged(t *testing.T) {
 // TestRetiredNeedsBothThreePriorCorrectionsAndSixtyDaySilence pins both
 // halves of the retired rule at their exact thresholds.
 func TestRetiredNeedsBothThreePriorCorrectionsAndSixtyDaySilence(t *testing.T) {
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
+	repo := activeRepo(
 		// exactly 3 corrections, silent exactly 60 days: retired.
 		conceptOutcome("exactly-retired", 200*day, 60*day, 3, 3, 0),
 		// 3 corrections but one day short of the silence: still live.
@@ -236,7 +262,7 @@ func TestRetiredNeedsBothThreePriorCorrectionsAndSixtyDaySilence(t *testing.T) {
 		// silent for ages but only 2 corrections ever: not enough to
 		// claim anything was learned, so excluded, never "retired".
 		conceptOutcome("too-few", 200*day, 150*day, 2, 2, 0),
-	}}
+	)
 	rep := report(t, repo)
 
 	assertSlugs(t, "Retired", rep.Retired, "exactly-retired")
@@ -260,9 +286,7 @@ func TestRetiredNeedsBothThreePriorCorrectionsAndSixtyDaySilence(t *testing.T) {
 // silence" stands on its own — it never needed the before/after rate
 // comparison, so a thin baseline must not demote it to excluded.
 func TestRetiredOutranksAThinBaseline(t *testing.T) {
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
-		conceptOutcome("slow-burn", 200*day, 90*day, 4, 1, 0),
-	}}
+	repo := activeRepo(conceptOutcome("slow-burn", 200*day, 90*day, 4, 1, 0))
 	rep := report(t, repo)
 
 	assertSlugs(t, "Retired", rep.Retired, "slow-burn")
@@ -274,12 +298,118 @@ func TestRetiredOutranksAThinBaseline(t *testing.T) {
 // TestGroupsPreserveRepositoryOrder keeps the page's tables stable
 // across reloads (the repository orders by slug).
 func TestGroupsPreserveRepositoryOrder(t *testing.T) {
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
+	repo := activeRepo(
 		conceptOutcome("a", 120*day, day, 9, 5, 1),
 		conceptOutcome("b", 120*day, day, 9, 5, 2),
 		conceptOutcome("c", 120*day, day, 9, 5, 3),
-	}}
+	)
 	assertSlugs(t, "Improving", report(t, repo).Improving, "a", "b", "c")
+}
+
+// ---------------------------------------------------------------------
+// Inactivity is not improvement. These are the review's adversarial
+// inputs, kept verbatim as the fixtures, because they are the exact
+// scenarios that exposed the defect: a learner who simply stopped
+// writing was being told, on every concept, that they had improved.
+// ---------------------------------------------------------------------
+
+// TestLearnerWhoStoppedWritingIsNeverCalledImproving is the review's
+// case: five concepts, each last corrected 59 days ago, and NOTHING
+// submitted for review in the entire 8-week window. Before the fix this
+// reported "0 concepts retired, 5 improving, 0 still recurring."
+//
+// The package's own governing rule — silence is not evidence — applies
+// to the recent side of the comparison exactly as it already applied to
+// the baseline side: with no new writing, zero corrections measures
+// nothing.
+func TestLearnerWhoStoppedWritingIsNeverCalledImproving(t *testing.T) {
+	concepts := make([]storage.ConceptOutcome, 0, 5)
+	for _, slug := range []string{"c1", "c2", "c3", "c4", "c5"} {
+		concepts = append(concepts, conceptOutcome(slug, 200*day, 59*day, 5, 5, 0))
+	}
+	repo := &fakeOutcomeRepo{concepts: concepts, fading: zeroFilledFading(8)}
+	rep := report(t, repo)
+
+	assertSlugs(t, "Improving", rep.Improving)
+	assertSlugs(t, "Persistent", rep.Persistent)
+	assertSlugs(t, "Retired", rep.Retired)
+	if len(rep.Excluded) != 5 {
+		t.Fatalf("Excluded = %d concepts, want all 5: %+v", len(rep.Excluded), rep.Excluded)
+	}
+	if !strings.Contains(rep.Excluded[0].Reason, "submitted for review in the last 30 days") {
+		t.Errorf("Reason = %q, want it to name the missing recent writing", rep.Excluded[0].Reason)
+	}
+	want := "No concept has enough history to judge yet; 5 concepts excluded for insufficient data."
+	if rep.Headline != want {
+		t.Fatalf("Headline = %q, want %q", rep.Headline, want)
+	}
+}
+
+// TestRecentWritingRequirementBoundary pins the new threshold on both
+// sides, at exactly the minimum.
+func TestRecentWritingRequirementBoundary(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		runes     int
+		improving []string
+		excluded  int
+	}{
+		{"exactly at the minimum", outcomes.MinMeasurableRunes, []string{"c"}, 0},
+		{"one character short", outcomes.MinMeasurableRunes - 1, nil, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// All the reviewed writing sits in the most recent week, so
+			// it unambiguously falls inside the recent window.
+			fading := zeroFilledFading(8)
+			fading[7].Runes = tc.runes
+			fading[7].Corrections = 1
+			repo := &fakeOutcomeRepo{
+				concepts: []storage.ConceptOutcome{conceptOutcome("c", 200*day, day, 9, 5, 1)},
+				fading:   fading,
+			}
+			rep := report(t, repo)
+			assertSlugs(t, "Improving", rep.Improving, tc.improving...)
+			if len(rep.Excluded) != tc.excluded {
+				t.Fatalf("Excluded = %+v, want %d", rep.Excluded, tc.excluded)
+			}
+		})
+	}
+}
+
+// TestRecentWritingOutsideTheRecentWindowDoesNotCount: writing from
+// three months ago is not evidence that the learner is producing now.
+func TestRecentWritingOutsideTheRecentWindowDoesNotCount(t *testing.T) {
+	fading := zeroFilledFading(8)
+	fading[0].Runes = 50000 // the oldest of the 8 weeks — well outside 30 days
+	fading[0].Corrections = 40
+	repo := &fakeOutcomeRepo{
+		concepts: []storage.ConceptOutcome{conceptOutcome("c", 200*day, day, 9, 5, 1)},
+		fading:   fading,
+	}
+	rep := report(t, repo)
+	assertSlugs(t, "Improving", rep.Improving)
+	if len(rep.Excluded) != 1 {
+		t.Fatalf("Excluded = %+v, want the concept excluded", rep.Excluded)
+	}
+}
+
+// TestRetiredCountsCarryAnInactivityCaveat covers the review's second
+// inactivity case: 12 concepts corrected three times each on one day
+// long ago, learner gone since. "Retired" is what the brief specifies
+// and it stays, but the headline must not state it as a finding about
+// learning while omitting that nothing has been written.
+func TestRetiredCountsCarryAnInactivityCaveat(t *testing.T) {
+	concepts := make([]storage.ConceptOutcome, 0, 12)
+	for i := 0; i < 12; i++ {
+		concepts = append(concepts, conceptOutcome(fmt.Sprintf("r%02d", i), 61*day, 61*day, 3, 3, 0))
+	}
+	repo := &fakeOutcomeRepo{concepts: concepts, fading: zeroFilledFading(8)}
+
+	want := "Less than 1,000 characters were submitted for review in the last 30 days; " +
+		"12 concepts retired, 0 improving, 0 still recurring."
+	if got := report(t, repo).Headline; got != want {
+		t.Fatalf("Headline =\n  %q\nwant\n  %q", got, want)
+	}
 }
 
 // ---------------------------------------------------------------------
@@ -327,10 +457,83 @@ func fadingFrom(runes, corrections []int) []storage.WeeklyRate {
 }
 
 func TestHeadlineUsesSingularNounForOneConcept(t *testing.T) {
-	repo := &fakeOutcomeRepo{concepts: []storage.ConceptOutcome{
-		conceptOutcome("r1", 200*day, 90*day, 4, 4, 0),
-	}}
+	// One measurable week (so no fading clause) but enough recent
+	// writing that no inactivity caveat applies either — leaving the
+	// concept counts alone in the sentence.
+	fading := zeroFilledFading(8)
+	fading[7].Runes = 10000
+	fading[7].Corrections = 34
+	repo := &fakeOutcomeRepo{
+		concepts: []storage.ConceptOutcome{conceptOutcome("r1", 200*day, 90*day, 4, 4, 0)},
+		fading:   fading,
+	}
 	want := "1 concept retired, 0 improving, 0 still recurring."
+	if got := report(t, repo).Headline; got != want {
+		t.Fatalf("Headline = %q, want %q", got, want)
+	}
+}
+
+// ---------------------------------------------------------------------
+// The fading clause needs a real denominator. Again the review's own
+// adversarial inputs: a rate "per 1,000 characters" computed from five
+// characters is not a rate.
+// ---------------------------------------------------------------------
+
+// TestFadingClauseIgnoresUndersizedWeeks is the review's five-character
+// case. Before the fix this produced "fell from 200.0 to 3.4 over 8
+// weeks" — a dramatic-sounding fall anchored on one clause of text.
+func TestFadingClauseIgnoresUndersizedWeeks(t *testing.T) {
+	repo := &fakeOutcomeRepo{
+		fading: fadingFrom(
+			[]int{5, 0, 0, 0, 0, 0, 0, 20000},
+			[]int{1, 0, 0, 0, 0, 0, 0, 68}),
+	}
+	rep := report(t, repo)
+	if strings.Contains(rep.Headline, "200.0") || strings.Contains(rep.Headline, "characters fell") {
+		t.Fatalf("a 5-character week anchored a trend claim: %q", rep.Headline)
+	}
+	// One usable endpoint is not a trend, so the clause is dropped
+	// entirely and — with no concepts either — nothing is claimed at all.
+	if rep.Headline != "Not enough data yet to say whether corrections are improving later production." {
+		t.Fatalf("Headline = %q", rep.Headline)
+	}
+	if rep.Fading[0].Measurable || rep.Fading[0].Per1000 != 0 {
+		t.Errorf("undersized week marked measurable / given a rate: %+v", rep.Fading[0])
+	}
+	if !rep.Fading[7].Measurable {
+		t.Errorf("20,000-character week not marked measurable: %+v", rep.Fading[7])
+	}
+}
+
+// TestFadingClauseIgnoresTwoUndersizedWeeks is the review's second and
+// worse case: 100 characters/1 correction then 120/0 previously
+// produced "fell from 10.0 to 0.0" — and "0.0" is exactly the figure
+// the zero-data guard forbids, because it reads as "no corrections
+// needed".
+func TestFadingClauseIgnoresTwoUndersizedWeeks(t *testing.T) {
+	repo := &fakeOutcomeRepo{
+		fading: fadingFrom(
+			[]int{100, 0, 0, 0, 0, 0, 0, 120},
+			[]int{1, 0, 0, 0, 0, 0, 0, 0}),
+	}
+	headline := report(t, repo).Headline
+	for _, forbidden := range []string{"0.0", "10.0", "fell", "rose", "held steady"} {
+		if strings.Contains(headline, forbidden) {
+			t.Errorf("headline %q claims a trend from two sub-minimum samples (%q)", headline, forbidden)
+		}
+	}
+}
+
+// TestFadingClauseUsesTheFirstAndLastSUFFICIENT weeks: an undersized
+// week at either end must not become an endpoint, and must not be
+// counted in the span.
+func TestFadingClauseUsesTheFirstAndLastSufficientWeeks(t *testing.T) {
+	repo := &fakeOutcomeRepo{
+		fading: fadingFrom(
+			[]int{5, 10000, 0, 0, 0, 10000, 7, 0},
+			[]int{1, 20, 0, 0, 0, 55, 3, 0}),
+	}
+	want := "Corrections per 1,000 characters rose from 2.0 to 5.5 over 5 weeks."
 	if got := report(t, repo).Headline; got != want {
 		t.Fatalf("Headline = %q, want %q", got, want)
 	}
@@ -441,10 +644,11 @@ func TestDerivesCalibrationRatesIncludingZeroAttemptWeeks(t *testing.T) {
 	if rep.Calibration[0].CorrectRate != 0.75 {
 		t.Errorf("CorrectRate = %v, want 0.75", rep.Calibration[0].CorrectRate)
 	}
-	// 3.5/5 = 0.70 confident against 0.75 correct: slightly UNDER
-	// confident, so the calibration error is negative.
-	if got := rep.Calibration[0].Overconfidence; got > -0.049 || got < -0.051 {
-		t.Errorf("Overconfidence = %v, want ~-0.05", got)
+	// The 1..5 scale spans 0..1 in FOUR steps, so a mean of 3.5 is
+	// (3.5-1)/4 = 0.625 against a 0.75 correct rate: under-confident, so
+	// the calibration error is negative.
+	if got := rep.Calibration[0].Overconfidence; got > -0.1249 || got < -0.1251 {
+		t.Errorf("Overconfidence = %v, want ~-0.125", got)
 	}
 	// A week nobody rated must divide by nothing and stay at zero — the
 	// template renders Attempts == 0 as "no data", never as 0% and never
@@ -454,18 +658,24 @@ func TestDerivesCalibrationRatesIncludingZeroAttemptWeeks(t *testing.T) {
 	}
 }
 
-func TestDerivesFadingPer1000IncludingZeroRuneWeeks(t *testing.T) {
+func TestDerivesFadingPer1000OnlyForSufficientWeeks(t *testing.T) {
 	repo := &fakeOutcomeRepo{fading: []storage.WeeklyRate{
-		{WeekStart: analyserNow.Add(-7 * day), Runes: 2000, Corrections: 6},
-		{WeekStart: analyserNow, Runes: 0, Corrections: 0},
+		{WeekStart: analyserNow.Add(-14 * day), Runes: 2000, Corrections: 6},
+		{WeekStart: analyserNow.Add(-7 * day), Runes: 0, Corrections: 0},
+		{WeekStart: analyserNow, Runes: 5, Corrections: 1},
 	}}
 	rep := report(t, repo)
 
-	if rep.Fading[0].Per1000 != 3.0 {
-		t.Errorf("Per1000 = %v, want 3.0", rep.Fading[0].Per1000)
+	if !rep.Fading[0].Measurable || rep.Fading[0].Per1000 != 3.0 {
+		t.Errorf("2,000-rune week = %+v, want measurable at 3.0", rep.Fading[0])
 	}
-	if rep.Fading[1].Per1000 != 0 {
-		t.Errorf("zero-rune week Per1000 = %v, want 0", rep.Fading[1].Per1000)
+	// Neither an empty week nor a five-character week gets a rate:
+	// dividing 1,000 by a sample smaller than 1,000 is not a rate, it is
+	// an extrapolation.
+	for _, i := range []int{1, 2} {
+		if rep.Fading[i].Measurable || rep.Fading[i].Per1000 != 0 {
+			t.Errorf("week %d = %+v, want unmeasurable with no rate", i, rep.Fading[i])
+		}
 	}
 }
 

@@ -4,6 +4,17 @@
   <div class="card">
     <p class="outcome-headline">{{.Headline}}</p>
     <p class="outcome-note">この一文は事実だけを述べます。評価点やご褒美の演出はありません。</p>
+    <p class="outcome-note">
+      このページの数字は<strong>添削に出した文章だけ</strong>を対象としています。会話練習と音声練習の指摘は
+      別の場所に記録されるため、ここには一切含まれません。会話練習に移った場合、修正が減ったように見えても
+      それは指摘がこのページの範囲外に移っただけかもしれません。
+    </p>
+    {{if .RecentlyQuiet}}
+    <p class="empty-state">
+      直近30日に添削へ出した文章は{{.RecentRunes}}文字です。書いた量が少ない期間は、修正が減っても
+      上達したことにはならないため、その期間の概念は「改善」とも「継続」とも判定していません。
+    </p>
+    {{end}}
   </div>
 
   <h2>概念の内訳</h2>
@@ -85,7 +96,11 @@
   </div>
 
   <h2>支援の逓減</h2>
-  <p class="outcome-note">添削に出した1000文字あたりの修正数。同じ量の文章がより少ない修正で済むようになれば下がります。</p>
+  <p class="outcome-note">
+    添削に出した1000文字あたりの修正数。同じ量の文章がより少ない修正で済むようになれば下がります。
+    1000文字に満たない週は率を出さず「—」と表示し、グラフにも点を打ちません（少なすぎる文字数から
+    「1000文字あたり」を計算しても率にならないため）。
+  </p>
   {{if .ShowFadingChart}}
   <div class="card trend-chart">
     <span class="trend-chart__label">修正/1000字</span>
@@ -104,7 +119,7 @@
           <td data-label="週">{{.WeekStart.Format "01-02"}}</td>
           <td data-label="添削した文字数">{{.Runes}}</td>
           <td data-label="修正数">{{.Corrections}}</td>
-          <td data-label="修正/1000字">{{if .Runes}}{{printf "%.1f" .Per1000}}{{else}}—{{end}}</td>
+          <td data-label="修正/1000字">{{if .Measurable}}{{printf "%.1f" .Per1000}}{{else}}—{{end}}</td>
         </tr>{{end}}
       </tbody>
     </table>
