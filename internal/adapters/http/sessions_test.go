@@ -243,7 +243,7 @@ func testOptionsWithSessions() Options {
 	// Conversation.History on every render (Phase 4 Task 6) — wired
 	// over the SAME sessRepo opts.Sessions uses, so a session created
 	// through opts.Sessions is visible to it.
-	opts.Conversation = appconversation.NewService(newFakeConversationRepo(), sessRepo, agentconversation.New(fakeai.New()), nil, rec)
+	opts.Conversation = appconversation.NewService(newFakeConversationRepo(), sessRepo, agentconversation.New(fakeai.New()), nil, rec, fakeGrammarRepo{})
 	return opts
 }
 

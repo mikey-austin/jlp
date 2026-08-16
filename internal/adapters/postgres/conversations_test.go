@@ -139,6 +139,36 @@ func TestConversationInsertAndListTurnsRoundTripsCorrections(t *testing.T) {
 	}
 }
 
+// TestConversationDuplicatePositionRejected pins Finding I-5's 00022
+// migration (UNIQUE(conversation_id, position)): the window between
+// ListTurns and InsertTurn in application/conversation.Service.Say
+// spans a full multi-second AI call, so two Say calls for the same
+// conversation (e.g. the learner sending a second message before the
+// first reply returns — the chat input isn't otherwise disabled, or
+// wasn't before this fix) can both compute the same position. Without
+// this constraint, both inserts would silently succeed, corrupting
+// transcript order and "delayed" timing's position%3 batch boundary.
+func TestConversationDuplicatePositionRejected(t *testing.T) {
+	repo, identityA, sessA, _, _ := conversationTestSetup(t)
+	ctx := context.Background()
+
+	convID, _, err := repo.GetOrCreateForSession(ctx, identityA, sessA)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	first := storage.ConversationTurn{ID: uuid.NewString(), Position: 1, LearnerText: "一つ目", Reply: "了解1", CreatedAt: now}
+	if err := repo.InsertTurn(ctx, identityA, convID, first); err != nil {
+		t.Fatalf("first insert at position 1: %v", err)
+	}
+
+	second := storage.ConversationTurn{ID: uuid.NewString(), Position: 1, LearnerText: "二つ目（レース）", Reply: "了解2", CreatedAt: now}
+	if err := repo.InsertTurn(ctx, identityA, convID, second); err == nil {
+		t.Fatal("second insert at the SAME (conversation_id, position) unexpectedly succeeded — the race this migration closes is still open")
+	}
+}
+
 // TestConversationCrossIdentityMisses pins the identity-scoping
 // contract every repository in this package shares: identity B can
 // neither read nor write against identity A's conversation — both come

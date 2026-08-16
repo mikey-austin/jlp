@@ -14,6 +14,14 @@
   <p class="pair"><del>{{.Original}}</del></p>
   <p class="hint ja">💡 {{.HintJA}}</p>
   <p class="hint en">{{.HintEN}}</p>
+  {{/* Interactive (Finding I-2) gates these two forms: false for a
+       conversation correction, which has no corrections-table row
+       behind its ID, so /corrections/{id}/retry|reveal would 404 if
+       submitted — see correctionCardView's doc comment
+       (internal/adapters/http/feedback.go). The socratic gate above is
+       untouched: a non-interactive gated card still shows only the
+       hint, never the answer. */}}
+  {{if .Interactive}}
   <form class="retry" hx-post="/corrections/{{.ID}}/retry" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
     <input class="input" type="text" name="attempt" placeholder="正しい形を書いてください" required autocomplete="off">
     <button type="submit" class="btn btn--sm">送信</button>
@@ -22,6 +30,7 @@
   <form hx-post="/corrections/{{.ID}}/reveal" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
     <button type="submit" class="btn btn--ghost btn--sm reveal">答えを見る</button>
   </form>
+  {{end}}
   {{else}}
   {{if and (eq .Status "accepted") (gt .Attempts 0)}}<p class="correct-banner">正解！</p>{{end}}
   <p class="pair"><del>{{.Original}}</del> → <ins>{{.Replacement}}</ins></p>

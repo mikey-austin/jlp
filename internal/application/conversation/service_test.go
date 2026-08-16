@@ -3,6 +3,7 @@ package conversation_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,9 +14,11 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -173,6 +176,56 @@ func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []s
 	panic("not used")
 }
 
+// fakeGrammarRepo is a minimal in-memory storage.GrammarRepository:
+// only ListConcepts is exercised by the conversation pipeline (Finding
+// I-1 — it builds the conversation.turn prompt's candidate list and the
+// known-slug set used to resolve/narrow each correction's tagged
+// concepts, mirroring application/feedback.Service.RequestFeedback).
+// Every other method panics if called.
+type fakeGrammarRepo struct {
+	concepts []grammar.Concept
+}
+
+func (f *fakeGrammarRepo) UpsertConcepts(context.Context, []grammar.Concept) error {
+	panic("not used by conversation service tests")
+}
+func (f *fakeGrammarRepo) ListConcepts(context.Context) ([]grammar.Concept, error) {
+	return f.concepts, nil
+}
+func (f *fakeGrammarRepo) GetConcept(context.Context, string) (grammar.Concept, error) {
+	panic("not used by conversation service tests")
+}
+func (f *fakeGrammarRepo) ConceptStats(context.Context, learner.IdentityID) ([]storage.ConceptStat, error) {
+	panic("not used by conversation service tests")
+}
+func (f *fakeGrammarRepo) CorrectionsForConcept(context.Context, learner.IdentityID, string, int) ([]storage.CorrectionRecord, error) {
+	panic("not used by conversation service tests")
+}
+
+// knownConceptsForFakeAI mirrors the two concept slugs
+// internal/adapters/fakeai tags corrections with (i-adjective-past,
+// particle-ni-direction) — see application/feedback/service_test.go's
+// identically-named helper, which this is a local copy of (test
+// packages don't import one another's unexported doubles).
+func knownConceptsForFakeAI() []grammar.Concept {
+	return []grammar.Concept{
+		{Slug: "i-adjective-past", Name: "い-adjective past tense", JLPTLevel: 5},
+		{Slug: "particle-ni-direction", Name: "に (direction/target/time)", JLPTLevel: 5},
+	}
+}
+
+// spyGen records the last request it saw so a test can inspect the
+// fully-rendered prompt — same pattern agent/conversation's own tests
+// use.
+type spyGen struct {
+	req ai.StructuredRequest
+}
+
+func (s *spyGen) GenerateStructured(_ context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
+	s.req = req
+	return ai.StructuredResponse{JSON: []byte(`{"reply":"了解です。"}`), Provider: "spy", Model: "spy-1"}, nil
+}
+
 func testProfile(timing string) session.Profile {
 	return session.Profile{
 		TeacherMode:         "teacher",
@@ -201,7 +254,7 @@ func newHarness(timing string) *harness {
 	vocabRepo := newFakeVocabRepo()
 	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
 	agent := agentconversation.New(fakeai.New())
-	svc := appconversation.NewService(repo, sessions, agent, vocabSvc, rec)
+	svc := appconversation.NewService(repo, sessions, agent, vocabSvc, rec, &fakeGrammarRepo{concepts: knownConceptsForFakeAI()})
 	return &harness{svc: svc, sessions: sessions, repo: repo, events: events, vocab: vocabRepo}
 }
 
@@ -431,5 +484,94 @@ func TestSayRecordsConversationTurnAndCorrectionEvents(t *testing.T) {
 	}
 	if h.events.events[1].Type != event.TypeCorrectionPresented {
 		t.Fatalf("events[1].Type = %q, want %q", h.events.events[1].Type, event.TypeCorrectionPresented)
+	}
+}
+
+// TestSayPassesConceptCandidatesToAgent pins Finding I-1: the brief
+// requires conversation turns to feed the learner model exactly like
+// writing does, including grammar concepts — which requires the agent
+// actually be OFFERED a candidate list to tag from (see
+// agent/conversation.TurnInput.ConceptCandidates and the
+// conversation.turn.v1 system prompt's "ONLY from the provided
+// candidate list" instruction). Using a spy generator instead of
+// fakeai (which ignores candidates entirely) makes this a genuine pin
+// on the SERVICE's wiring, not on fakeai's fixture behaviour: if
+// Say never populates TurnInput.ConceptCandidates, the rendered user
+// prompt never contains the "Known grammar concepts" section at all
+// (conversation.turn.v1.user.md's {{if .ConceptCandidates}} guard).
+func TestSayPassesConceptCandidatesToAgent(t *testing.T) {
+	sessions := newFakeSessionRepo()
+	sessions.byKey[sessKey(testIdentity, testSessionID)] = session.Session{
+		ID: testSessionID, IdentityID: testIdentity, Purpose: "Casual conversation practice", Profile: testProfile("immediate"),
+	}
+	repo := newFakeConversationRepo()
+	events := &fakeEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	gen := &spyGen{}
+	agent := agentconversation.New(gen)
+	svc := appconversation.NewService(repo, sessions, agent, nil, rec, &fakeGrammarRepo{concepts: knownConceptsForFakeAI()})
+
+	if _, err := svc.Say(context.Background(), testIdentity, testSessionID, "映画を見ました。"); err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+	if !strings.Contains(gen.req.User, "Known grammar concepts") {
+		t.Fatalf("rendered user prompt has no concept-candidates section — ConceptCandidates was never populated: %s", gen.req.User)
+	}
+	if !strings.Contains(gen.req.User, "i-adjective-past — い-adjective past tense") {
+		t.Fatalf("rendered user prompt missing the known concept candidate line: %s", gen.req.User)
+	}
+}
+
+// TestSayRecordsGrammarConceptEncounteredEvent pins the other half of
+// Finding I-1: application/feedback.Service.RequestFeedback records one
+// grammar.concept.encountered event per RESOLVED slug a correction was
+// tagged with — application/conversation.Service must do the same, not
+// stop at correction.presented/hint.shown.
+func TestSayRecordsGrammarConceptEncounteredEvent(t *testing.T) {
+	h := newHarness("immediate")
+	if _, err := h.svc.Say(context.Background(), testIdentity, testSessionID, "昨日の映画はとても面白いでした。"); err != nil {
+		t.Fatalf("Say returned error: %v", err)
+	}
+	found := false
+	for _, ev := range h.events.events {
+		if ev.Type == event.TypeGrammarConceptEncountered && ev.Subject == "i-adjective-past" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no %s event recorded for i-adjective-past; events = %+v", event.TypeGrammarConceptEncountered, h.events.events)
+	}
+}
+
+// TestSayDelayedTimingSecondBatchDoesNotReReleaseFirst pins the
+// property the reviewer verified by hand but found untested (Finding
+// I-6): after a first batch window releases (turns 1-3), a second
+// window's boundary turn (turn 6) must release ONLY that window's own
+// corrections (turns 4-6), never re-releasing turns 1-2's already-shown
+// batch.
+func TestSayDelayedTimingSecondBatchDoesNotReReleaseFirst(t *testing.T) {
+	h := newHarness("delayed")
+	ctx := context.Background()
+	msgs := []string{
+		"昨日の映画はとても面白いでした。", // turn 1: correction (withheld)
+		"今日は楽しいでした。",          // turn 2: correction (withheld)
+		"映画について話しましょう。",      // turn 3: batch boundary — releases turns 1-2 (2 corrections)
+		"明日は晴れるでしょう。",         // turn 4: clean (withheld, new window)
+		"猫が好きです。",             // turn 5: clean (withheld, new window)
+		"それはとても面白いでした。",      // turn 6: batch boundary — must release ONLY turn 6's own (1)
+	}
+	var turns []appconversation.Turn
+	for i, m := range msgs {
+		turn, err := h.svc.Say(ctx, testIdentity, testSessionID, m)
+		if err != nil {
+			t.Fatalf("Say turn %d returned error: %v", i+1, err)
+		}
+		turns = append(turns, turn)
+	}
+	if len(turns[2].Corrections) != 2 {
+		t.Fatalf("turn 3 (first batch boundary) Corrections = %d, want 2: %+v", len(turns[2].Corrections), turns[2].Corrections)
+	}
+	if len(turns[5].Corrections) != 1 {
+		t.Fatalf("turn 6 (second batch boundary) Corrections = %d, want 1 (must NOT re-release turns 1-2's already-shown batch): %+v", len(turns[5].Corrections), turns[5].Corrections)
 	}
 }

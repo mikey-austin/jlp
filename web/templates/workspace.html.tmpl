@@ -22,6 +22,7 @@
       <div id="conversation-transcript">{{range .ConversationTurns}}{{template "conversation_turn" .}}{{end}}</div>
       <form id="conversation-form" class="conv-form" hx-post="/sessions/{{.Session.ID}}/conversation"
             hx-target="#conversation-transcript" hx-swap="beforeend"
+            hx-disabled-elt="find input, find button"
             hx-on::after-request="if(event.detail.successful) this.reset()">
         <input class="input" type="text" name="text" placeholder="日本語でメッセージを送ってください…" required autocomplete="off">
         <button type="submit" class="btn btn--sm">送信</button>

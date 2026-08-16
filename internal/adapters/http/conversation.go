@@ -40,15 +40,19 @@ const (
 //     hint, exactly like a writing correction's card would. This is
 //     the task's mandated pin: a gated correction surfaced in a
 //     conversation shows the hint and NOT the replacement (see
-//     conversation_test.go). Its retry/reveal <form> actions still
-//     point at /corrections/{id}/retry|reveal, which would 404 if
-//     actually submitted (no corrections-table row backs this ID) —
-//     a known, narrow gap accepted for this task; see the task report.
+//     conversation_test.go).
 //   - Otherwise: Status is "noted", a value correction_card.html.tmpl
 //     has no case for except its trailing `{{else}}<footer
 //     class="resolved">` branch — the full explanation is shown, but
-//     with NO interactive footer at all (not even accept/reject), so
-//     there's nothing that could 404.
+//     with NO interactive footer at all (not even accept/reject).
+//
+// Interactive is left false (Finding I-2 — see correctionCardView's own
+// doc comment): a conversation correction has no corrections-table row
+// backing its ID, so correction_card.html.tmpl's retry/reveal <form>s
+// (rendered inside the gated branch above) would 404 if submitted.
+// Interactive:false guards both forms out of the rendered HTML
+// entirely — the gate itself (which branch renders) is untouched, only
+// whether that branch's buttons are present.
 func toConversationCardView(c correction.Correction) correctionCardView {
 	status := conversationCorrectionStatusNoted
 	if c.HasHint() {
@@ -68,6 +72,7 @@ func toConversationCardView(c correction.Correction) correctionCardView {
 		HintJA:        c.Hint.JA,
 		HintEN:        c.Hint.EN,
 		HasHint:       c.HasHint(),
+		Interactive:   false,
 	}
 }
 

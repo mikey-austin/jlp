@@ -270,7 +270,7 @@ func main() {
 		// repository, not the sibling application service" choice
 		// feedbackSvc's own first two constructor args already make.
 		conversationAgent := agentconversation.New(aiGen)
-		conversationSvc := appconversation.NewService(postgres.NewConversationRepository(pool), postgres.NewSessionRepository(pool), conversationAgent, vocabSvc, recorder)
+		conversationSvc := appconversation.NewService(postgres.NewConversationRepository(pool), postgres.NewSessionRepository(pool), conversationAgent, vocabSvc, recorder, grammarRepo)
 
 		// Channel port + Slack Socket Mode adapter (Phase 4 Task 4, PRD
 		// §20/§20.1): channelSvc composes the SAME sessions/feedback/

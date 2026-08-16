@@ -51,11 +51,19 @@ type Service struct {
 	agent    *agentconversation.Agent
 	vocab    *appvocabulary.Service
 	rec      *learning.Recorder
+	// grammar backs Finding I-1's fix: Say offers the agent the full
+	// catalog of taggable grammar concepts (mirroring
+	// application/feedback.Service.RequestFeedback's conceptCandidates/
+	// knownSlugs) and resolves whatever slugs come back against it —
+	// without this, the conversation.turn prompt's "choose ONLY from the
+	// provided candidate list" instruction has no list to choose from,
+	// and no correction can ever tag a concept in production.
+	grammar storage.GrammarRepository
 }
 
 // NewService wires the conversation tutor pipeline.
-func NewService(repo storage.ConversationRepository, sessions storage.SessionRepository, agent *agentconversation.Agent, vocab *appvocabulary.Service, rec *learning.Recorder) *Service {
-	return &Service{repo: repo, sessions: sessions, agent: agent, vocab: vocab, rec: rec}
+func NewService(repo storage.ConversationRepository, sessions storage.SessionRepository, agent *agentconversation.Agent, vocab *appvocabulary.Service, rec *learning.Recorder, grammar storage.GrammarRepository) *Service {
+	return &Service{repo: repo, sessions: sessions, agent: agent, vocab: vocab, rec: rec, grammar: grammar}
 }
 
 // Turn is one exchange in the conversation, as Say returns it: Reply is
@@ -130,14 +138,42 @@ func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid sess
 		agentHistory = append(agentHistory, agentconversation.HistoryTurn{LearnerText: t.LearnerText, Reply: t.Reply})
 	}
 
+	// conceptCandidates/knownSlugs mirror
+	// application/feedback.Service.RequestFeedback's identically-named
+	// locals exactly (Finding I-1): the full catalog of taggable grammar
+	// concepts, offered to the agent as candidates and used afterward to
+	// resolve whatever slugs the response actually tagged.
+	concepts, err := s.grammar.ListConcepts(ctx)
+	if err != nil {
+		return Turn{}, fmt.Errorf("conversation: list grammar concepts: %w", err)
+	}
+	conceptCandidates := make([]string, 0, len(concepts))
+	knownSlugs := make(map[string]bool, len(concepts))
+	for _, c := range concepts {
+		conceptCandidates = append(conceptCandidates, fmt.Sprintf("%s — %s", c.Slug, c.Name))
+		knownSlugs[c.Slug] = true
+	}
+
 	out, resp, err := s.agent.Turn(ctx, agentconversation.TurnInput{
-		Identity: identity,
-		Session:  sess,
-		History:  agentHistory,
-		Message:  text,
+		Identity:          identity,
+		Session:           sess,
+		History:           agentHistory,
+		Message:           text,
+		ConceptCandidates: conceptCandidates,
 	})
 	if err != nil {
 		return Turn{}, err
+	}
+
+	// Narrow each correction's Concepts to the resolved (catalog-known)
+	// subset, deduped — the same "never let an unresolved or duplicate
+	// slug reach a view" guarantee resolveConceptTags gives the writing
+	// path (feedback/service.go), applied here since a conversation
+	// correction's Concepts field IS what's persisted and later rendered
+	// (no separate correction_concepts table to keep unresolved tags
+	// out of a view — see storage.ConversationTurn's doc comment).
+	for i, c := range out.Corrections {
+		out.Corrections[i].Concepts = resolveConceptSlugs(c.Concepts, knownSlugs)
 	}
 
 	position := len(history) + 1
@@ -199,6 +235,29 @@ func (s *Service) Say(ctx context.Context, identity learner.IdentityID, sid sess
 				return Turn{}, fmt.Errorf("conversation: record %s: %w", event.TypeHintShown, err)
 			}
 		}
+
+		// One grammar.concept.encountered event per RESOLVED slug this
+		// correction was tagged with (c.Concepts was already narrowed to
+		// resolved-only above) — the SAME event
+		// application/feedback.Service.RequestFeedback records per
+		// resolved slug, so a conversation turn feeds the learner model's
+		// concept-weakness tracking exactly like a writing review does
+		// (Finding I-1, the brief's third learner-model bullet).
+		for _, slug := range c.Concepts {
+			if err := s.rec.Record(ctx, event.LearningEvent{
+				IdentityID: identity,
+				SessionID:  &sid,
+				Type:       event.TypeGrammarConceptEncountered,
+				Subject:    slug,
+				Evidence: map[string]any{
+					"correction_id": c.ID,
+					"type":          string(c.Type),
+					"severity":      string(c.Severity),
+				},
+			}); err != nil {
+				return Turn{}, fmt.Errorf("conversation: record %s: %w", event.TypeGrammarConceptEncountered, err)
+			}
+		}
 	}
 
 	// Production detection runs LAST and its error is deliberately
@@ -242,6 +301,29 @@ func pendingCount(shown, raw []correction.Correction) int {
 		return 0
 	}
 	return len(raw)
+}
+
+// resolveConceptSlugs narrows slugs to the subset present in known,
+// deduped in first-occurrence order — the single place a correction's
+// raw AI-tagged Concepts becomes what's actually persisted/recorded,
+// mirroring application/feedback's resolveConceptTags (that package's
+// second return value): an unresolved (hallucinated/stale) slug is
+// dropped here, never persisted, never eventable, and never rendered as
+// a /grammar/{slug} chip that would 404.
+func resolveConceptSlugs(slugs []string, known map[string]bool) []string {
+	if len(slugs) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(slugs))
+	out := make([]string, 0, len(slugs))
+	for _, slug := range slugs {
+		if !known[slug] || seen[slug] {
+			continue
+		}
+		seen[slug] = true
+		out = append(out, slug)
+	}
+	return out
 }
 
 // visibleCorrections decides what a single Say call's Turn.Corrections

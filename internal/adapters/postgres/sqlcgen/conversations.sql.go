@@ -119,7 +119,7 @@ SELECT t.id, t.conversation_id, t.position, t.learner_text, t.reply, t.reply_en,
 FROM conversation_turns t
 JOIN conversations c ON t.conversation_id = c.id
 WHERE t.conversation_id = $1 AND c.identity_id = $2
-ORDER BY t.position ASC
+ORDER BY t.position ASC, t.created_at ASC
 `
 
 type ListConversationTurnsParams struct {
@@ -141,7 +141,12 @@ type ListConversationTurnsRow struct {
 	SessionID      pgtype.UUID
 }
 
-// Scoped via the same join, oldest first (Position ascending). c.session_id
+// Scoped via the same join, oldest first (Position ascending, t.created_at
+// ASC as a tiebreak — Finding I-5: position is computed client-side with
+// no DB-level dedup beyond the 00022 migration's UNIQUE(conversation_id,
+// position), so two concurrent turns are still ordering-ambiguous by
+// position alone if a duplicate somehow lands; created_at makes the
+// order deterministic instead of database/driver-dependent). c.session_id
 // is selected alongside conversation_turns' own columns so
 // fromConversationTurnRow (postgres/conversations.go) can populate
 // storage.ConversationTurn.SessionID on the read path — conversation_turns

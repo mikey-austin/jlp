@@ -43,6 +43,19 @@ type correctionCardView struct {
 	HasHint                                   bool
 	Attempts                                  int
 	Revealed                                  bool
+	// Interactive gates correction_card.html.tmpl's retry/reveal <form>s
+	// (Finding I-2): true for every writing-pane correction (backed by a
+	// real corrections table row, so /corrections/{id}/retry|reveal
+	// resolve), false for a conversation correction
+	// (toConversationCardView) — a conversation turn's corrections have
+	// no corrections-table row (see application/conversation's package
+	// doc comment), so those two routes would 404 if the forms rendered
+	// and were submitted. This does NOT touch the socratic pre-reveal
+	// gate itself (still driven by HasHint/Status/Revealed via
+	// correction.IsGated's predicate) — a gated conversation correction
+	// still shows only its hint, exactly as mandated; it just has no
+	// buttons under it.
+	Interactive bool
 }
 
 // feedbackView is the result of one review, as the feedback partial
@@ -90,6 +103,7 @@ func toCorrectionCardView(cv feedback.CorrectionView) correctionCardView {
 		HasHint:       cv.HasHint(),
 		Attempts:      cv.Attempts,
 		Revealed:      cv.Revealed,
+		Interactive:   true,
 	}
 }
 
