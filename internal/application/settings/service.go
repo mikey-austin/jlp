@@ -29,9 +29,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/config"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -114,6 +117,28 @@ type Row struct {
 	Model       string
 	ModelSource string // "config" or "override"
 
+	// ModelOptions is the enumerated model list for this provider
+	// (Phase 4 Task M), genuinely observed from the provider itself —
+	// never a fabricated guess — and always including Model even if the
+	// provider no longer reports it (a removed model, or a value typed
+	// by hand): see populateModelList's own doc comment. Empty means "no
+	// working enumeration for this provider right now" — the /settings
+	// template falls back to free text only, with ModelNote explaining
+	// why.
+	ModelOptions []string
+	// ModelNote explains why ModelOptions is empty: either a provider
+	// that structurally cannot enumerate (claudecli/codexcli — see the
+	// task brief), or one that tried just now and failed (e.g. Ollama
+	// unreachable). Always shown next to the free-text fallback; empty
+	// when enumeration succeeded.
+	ModelNote string
+	// ModelAliases is claudecli's documented `--model` aliases
+	// (sonnet/opus/haiku) offered as a clearly-labelled convenience —
+	// see the task brief's "you MAY offer aliases... clearly labelled as
+	// aliases, not an enumeration" note. Never populated for any other
+	// provider.
+	ModelAliases []string
+
 	Effort        string
 	EffortSource  string // "config" or "override" — only meaningful when HasEffort
 	EffortOptions []string
@@ -127,15 +152,76 @@ type Service struct {
 
 	mu        sync.RWMutex
 	overrides map[string]string // key -> value; ABSENT key means "no override"
+
+	// listers/modelCache back Rows' per-provider model enumeration
+	// (Phase 4 Task M) — deliberately a SEPARATE lock from mu above:
+	// enumerating models can hit the network or spawn a subprocess, and
+	// must never hold mu while doing so, or a concurrent Model()/
+	// SetModel() call (the hot path every AI request goes through) would
+	// wait on Ollama or agy. Both maps are populated once at
+	// construction and never have keys added or removed afterward, so
+	// reading them needs no lock of its own — only each modelCacheEntry's
+	// own mutex guards its mutable (models, fetchedAt) pair.
+	listers    map[string]ai.ModelLister
+	modelCache map[string]*modelCacheEntry
 }
+
+// modelCacheEntry holds one provider's cached enumeration result.
+type modelCacheEntry struct {
+	mu        sync.Mutex
+	models    []string
+	fetchedAt time.Time // zero means "never successfully fetched"
+}
+
+// modelListTimeout bounds a single ListModels attempt — a few seconds,
+// per the task brief, so a slow or unreachable Ollama (or the agycli
+// subprocess) never makes /settings hang.
+const modelListTimeout = 3 * time.Second
+
+// modelListTTL caches a SUCCESSFUL enumeration for this long before the
+// next /settings render re-fetches — models change on the order of
+// weeks (task brief), and `agy models` costs a real subprocess, so
+// re-listing on every page load would be wasteful. A FAILED attempt is
+// never cached (see listModels below): a later render always retries,
+// so an operator who fixes Ollama sees it recover on their very next
+// /settings visit rather than waiting out a stale failure.
+const modelListTTL = time.Hour
+
+// claudeCLIAliases are Claude Code's documented `--model` aliases
+// (`claude --help`) — NOT an enumeration (the CLI has no models
+// subcommand; see noListNoteClaudeCLI below), offered as a
+// clearly-labelled convenience only.
+var claudeCLIAliases = []string{"sonnet", "opus", "haiku"}
+
+const (
+	noListNoteClaudeCLI = "the Claude Code CLI has no models command — `claude models` is answered by the model itself, not enumerated. Type a model name, or pick a documented alias."
+	noListNoteCodexCLI  = "the Codex CLI's model list isn't available non-interactively (`codex models` fails outside a terminal). Type a model name."
+)
 
 // NewService loads every current override from repo into an in-memory
 // snapshot and returns a Service ready to resolve/serve immediately —
 // see the package doc comment for why this one-time load (DB ->
 // memory) is not the same thing as "copying config into the database"
 // (that direction never happens).
-func NewService(ctx context.Context, repo storage.SettingsRepository, cfg config.AI) (*Service, error) {
-	s := &Service{repo: repo, cfg: cfg, overrides: map[string]string{}}
+//
+// listers supplies a ports/ai.ModelLister for every provider that
+// genuinely has one (today: "ollama", "anthropic", "agycli" — never
+// "claudecli"/"codexcli", which cannot enumerate at all, see the task
+// brief). A nil map, or a missing/nil entry for any provider, is valid
+// and just means that provider's /settings row falls back to free
+// text — enumeration is a lazily-invoked, best-effort capability, never
+// required for this constructor to succeed (matching the "lazy, never
+// at boot" rule: no lister is called here).
+func NewService(ctx context.Context, repo storage.SettingsRepository, cfg config.AI, listers map[string]ai.ModelLister) (*Service, error) {
+	cache := make(map[string]*modelCacheEntry, len(listers))
+	for provider, lister := range listers {
+		if lister == nil {
+			continue
+		}
+		cache[provider] = &modelCacheEntry{}
+	}
+
+	s := &Service{repo: repo, cfg: cfg, overrides: map[string]string{}, listers: listers, modelCache: cache}
 	if err := s.reload(ctx); err != nil {
 		return nil, fmt.Errorf("settings: load overrides: %w", err)
 	}
@@ -216,8 +302,23 @@ func (s *Service) Model(provider string) (model, effort string) {
 }
 
 // Rows returns one Row per known provider, in a fixed display order,
-// for the /settings page.
-func (s *Service) Rows() []Row {
+// for the /settings page — including each provider's model enumeration
+// (Phase 4 Task M), attempted fresh (subject to caching — see
+// listModels) on every call, bounded by ctx and modelListTimeout so a
+// slow or absent provider never makes this call hang.
+func (s *Service) Rows(ctx context.Context) []Row {
+	rows := s.baseRows()
+	for i := range rows {
+		s.populateModelList(ctx, &rows[i])
+	}
+	return rows
+}
+
+// baseRows builds every Row's model/effort override-or-config value —
+// the part that only ever reads s.overrides/s.cfg, held under mu for
+// exactly as long as that takes and no longer, so the network/subprocess
+// work populateModelList does afterward never happens while mu is held.
+func (s *Service) baseRows() []Row {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -251,6 +352,78 @@ func (s *Service) Rows() []Row {
 		rows = append(rows, row)
 	}
 	return rows
+}
+
+// populateModelList fills row's ModelOptions/ModelNote/ModelAliases
+// (Phase 4 Task M). claudecli/codexcli can never enumerate (see the
+// task brief) and are handled with a fixed explanatory note — claudecli
+// additionally offers its documented aliases, clearly labelled as
+// aliases rather than an enumeration. Every other provider consults its
+// ports/ai.ModelLister (when one was wired in — see NewService): on
+// success, row.Model is folded into the result if the provider didn't
+// report it itself, so an operator's already-set value is NEVER
+// silently dropped from the dropdown; on failure, ModelOptions stays
+// empty and ModelNote carries the reason, so /settings degrades to free
+// text instead of fabricating or hiding the problem.
+func (s *Service) populateModelList(ctx context.Context, row *Row) {
+	switch row.Provider {
+	case "claudecli":
+		row.ModelAliases = slices.Clone(claudeCLIAliases)
+		row.ModelNote = noListNoteClaudeCLI
+		return
+	case "codexcli":
+		row.ModelNote = noListNoteCodexCLI
+		return
+	}
+
+	lister := s.listers[row.Provider]
+	if lister == nil {
+		return // no capability wired for this provider — free text only, no note
+	}
+
+	models, err := s.listModels(ctx, row.Provider, lister)
+	if err != nil {
+		row.ModelNote = fmt.Sprintf("model list unavailable: %v", err)
+		return
+	}
+	if row.Model != "" && !slices.Contains(models, row.Model) {
+		models = append(slices.Clone(models), row.Model)
+	}
+	row.ModelOptions = models
+}
+
+// listModels returns provider's cached model list if it was fetched
+// within modelListTTL, else attempts one fresh call to lister.ListModels
+// bounded by modelListTimeout. A FAILED attempt is never written to the
+// cache — an attempt ctx itself cancelled is not an answer about
+// whether the provider actually has models, and a later call (the next
+// /settings render) must always retry rather than remembering "no
+// models" forever (see modelListTTL's own doc comment).
+func (s *Service) listModels(ctx context.Context, provider string, lister ai.ModelLister) ([]string, error) {
+	entry := s.modelCache[provider]
+	if entry == nil {
+		// Defensive only: NewService populates modelCache for every
+		// provider with a non-nil lister, so a nil entry here should be
+		// unreachable — but degrading to an uncached, unshared fetch
+		// beats a nil-pointer panic.
+		entry = &modelCacheEntry{}
+	}
+
+	entry.mu.Lock()
+	defer entry.mu.Unlock()
+
+	if !entry.fetchedAt.IsZero() && time.Since(entry.fetchedAt) < modelListTTL {
+		return entry.models, nil
+	}
+
+	lctx, cancel := context.WithTimeout(ctx, modelListTimeout)
+	defer cancel()
+	models, err := lister.ListModels(lctx)
+	if err != nil {
+		return nil, err
+	}
+	entry.models, entry.fetchedAt = models, time.Now()
+	return models, nil
 }
 
 // SetModel saves a model override for provider, taking effect on the

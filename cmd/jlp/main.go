@@ -9,11 +9,14 @@ import (
 	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
+	agycliadapter "github.com/mikeyaustin/jlp/internal/adapters/agycli"
 	"github.com/mikeyaustin/jlp/internal/adapters/ankiconnect"
+	anthropicadapter "github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	adaptermqtt "github.com/mikeyaustin/jlp/internal/adapters/mqtt"
+	ollamaadapter "github.com/mikeyaustin/jlp/internal/adapters/ollama"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	signaladapter "github.com/mikeyaustin/jlp/internal/adapters/signal"
 	slackadapter "github.com/mikeyaustin/jlp/internal/adapters/slack"
@@ -43,6 +46,7 @@ import (
 	appwriting "github.com/mikeyaustin/jlp/internal/application/writing"
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
 	"github.com/mikeyaustin/jlp/internal/tools"
 )
@@ -121,8 +125,23 @@ func main() {
 		// the next AI request with no restart: the SAME aiGen/toolCaller
 		// instances below just resolve a different value on their next
 		// call.
+		// modelListers backs the /settings model dropdowns (Phase 4 Task
+		// M): one ports/ai.ModelLister per provider that has a genuine,
+		// verifiable source of truth for what it can serve — Ollama's
+		// /api/tags, agy's `agy models`, Anthropic's /v1/models. A
+		// provider absent from this map (claudecli, codexcli — neither can
+		// enumerate at all) falls back to /settings' free-text input, same
+		// as any provider whose lister fails at render time. None of these
+		// three dial out here: constructing a lister never calls its
+		// provider (see each one's own doc comment) — only /settings
+		// rendering does, lazily.
+		modelListers := map[string]ai.ModelLister{
+			"ollama":    ollamaadapter.NewModelLister(cfg.AI.Ollama),
+			"anthropic": anthropicadapter.NewModelLister(cfg.AI.Anthropic),
+			"agycli":    agycliadapter.NewModelLister(cfg.AI.AgyCLI),
+		}
 		settingsRepo := postgres.NewSettingsRepository(pool)
-		settingsSvc, err := appsettings.NewService(context.Background(), settingsRepo, cfg.AI)
+		settingsSvc, err := appsettings.NewService(context.Background(), settingsRepo, cfg.AI, modelListers)
 		if err != nil {
 			slog.Error("settings", "err", err)
 			os.Exit(1)
@@ -142,7 +161,7 @@ func main() {
 		// through so every one of those adapters can resolve a /settings
 		// override at call time (Phase 4 Task S).
 		aiRequestRepo := postgres.NewAIRequestRepository(pool)
-		aiGen, err := buildAIGenerator(cfg, aiRequestRepo, settingsSvc)
+		aiGen, aiProviders, aiDefaultProvider, err := buildAIGenerator(cfg, aiRequestRepo, settingsSvc)
 		if err != nil {
 			slog.Error("ai", "err", err)
 			os.Exit(1)
@@ -455,6 +474,8 @@ func main() {
 			A2APath:            cfg.A2A.Path,
 			Conversation:       conversationSvc,
 			Settings:           settingsSvc,
+			AIProviders:        aiProviders,
+			AIDefaultProvider:  aiDefaultProvider,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

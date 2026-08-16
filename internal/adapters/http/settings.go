@@ -17,7 +17,7 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	Render(w, r, "settings", map[string]any{
 		"Title":    "設定",
 		"Identity": ident,
-		"Rows":     s.opts.Settings.Rows(),
+		"Rows":     s.opts.Settings.Rows(r.Context()),
 	})
 }
 
@@ -83,7 +83,7 @@ func (s *Server) renderSettingsError(w http.ResponseWriter, r *http.Request, err
 	Render(w, r, "settings", map[string]any{
 		"Title":    "設定",
 		"Identity": ident,
-		"Rows":     s.opts.Settings.Rows(),
+		"Rows":     s.opts.Settings.Rows(r.Context()),
 		"Error":    err.Error(),
 	})
 }

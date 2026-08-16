@@ -14,12 +14,37 @@
         {{end}}
       </div>
 
+      {{if $row.ModelOptions}}
       <form method="post" action="/settings/{{$row.Provider}}/model" class="settings-form">
         <label class="field">モデル
-          <input class="input" type="text" name="model" value="{{$row.Model}}" required>
+          <select class="select" name="model">
+            {{range $row.ModelOptions}}<option value="{{.}}" {{if eq . $row.Model}}selected{{end}}>{{.}}</option>{{end}}
+          </select>
         </label>
         <span class="badge">{{if eq $row.ModelSource "override"}}override{{else}}config{{end}}</span>
         <button type="submit" class="btn btn--sm">保存</button>
+      </form>
+      {{end}}
+
+      {{if $row.ModelAliases}}
+      <form method="post" action="/settings/{{$row.Provider}}/model" class="settings-form">
+        <label class="field">モデル（エイリアス）<span class="hint">既知の別名。完全な一覧ではありません</span>
+          <select class="select" name="model">
+            <option value="">選択...</option>
+            {{range $row.ModelAliases}}<option value="{{.}}">{{.}}</option>{{end}}
+          </select>
+        </label>
+        <button type="submit" class="btn btn--sm btn--secondary">保存</button>
+      </form>
+      {{end}}
+
+      {{if $row.ModelNote}}<p class="hint">{{$row.ModelNote}}</p>{{end}}
+      <form method="post" action="/settings/{{$row.Provider}}/model" class="settings-form">
+        <label class="field">{{if $row.ModelOptions}}モデル（自由入力）{{else}}モデル{{end}}
+          <input class="input" type="text" name="model" value="{{$row.Model}}" required>
+        </label>
+        {{if not $row.ModelOptions}}<span class="badge">{{if eq $row.ModelSource "override"}}override{{else}}config{{end}}</span>{{end}}
+        <button type="submit" class="btn btn--sm{{if $row.ModelOptions}} btn--secondary{{end}}">保存</button>
       </form>
 
       {{if $row.HasEffort}}

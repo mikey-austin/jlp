@@ -8,6 +8,7 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/application/settings"
 	"github.com/mikeyaustin/jlp/internal/config"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -59,12 +60,45 @@ func baseAICfg() config.AI {
 
 func newTestService(t *testing.T, cfg config.AI) (*settings.Service, *fakeRepo) {
 	t.Helper()
+	return newTestServiceWithListers(t, cfg, nil)
+}
+
+func newTestServiceWithListers(t *testing.T, cfg config.AI, listers map[string]ai.ModelLister) (*settings.Service, *fakeRepo) {
+	t.Helper()
 	repo := newFakeRepo()
-	svc, err := settings.NewService(context.Background(), repo, cfg)
+	svc, err := settings.NewService(context.Background(), repo, cfg, listers)
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
 	return svc, repo
+}
+
+// fakeLister is a minimal, call-counting ports/ai.ModelLister test
+// double: Models/Err control what ListModels returns, and Calls lets a
+// test assert HOW MANY TIMES the underlying "expensive" enumeration
+// actually ran — the caching contract's whole point (task brief:
+// "agy models costs a subprocess").
+type fakeLister struct {
+	mu     sync.Mutex
+	Models []string
+	Err    error
+	Calls  int
+}
+
+func (f *fakeLister) ListModels(_ context.Context) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.Calls++
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	return f.Models, nil
+}
+
+func (f *fakeLister) callCount() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.Calls
 }
 
 // TestModelReturnsConfigValueWithNoOverride pins the fallback contract
@@ -246,7 +280,7 @@ func TestRowsReportsSourceAndEffortOptions(t *testing.T) {
 	svc, _ := newTestService(t, cfg)
 	ctx := context.Background()
 
-	rows := svc.Rows()
+	rows := svc.Rows(context.Background())
 	byProvider := map[string]settings.Row{}
 	for _, r := range rows {
 		byProvider[r.Provider] = r
@@ -277,7 +311,7 @@ func TestRowsReportsSourceAndEffortOptions(t *testing.T) {
 	if err := svc.SetModel(ctx, "ollama", "gemma4:latest"); err != nil {
 		t.Fatalf("SetModel: %v", err)
 	}
-	rows = svc.Rows()
+	rows = svc.Rows(context.Background())
 	for _, r := range rows {
 		if r.Provider == "ollama" && r.ModelSource != "override" {
 			t.Errorf("ollama row ModelSource after SetModel = %q, want override", r.ModelSource)
@@ -311,7 +345,7 @@ func TestModelIsSafeForConcurrentReadsAndWrites(t *testing.T) {
 				default:
 					svc.Model("ollama")
 					svc.Model("claudecli")
-					svc.Rows()
+					svc.Rows(context.Background())
 				}
 			}
 		}()
@@ -330,4 +364,177 @@ func TestModelIsSafeForConcurrentReadsAndWrites(t *testing.T) {
 	}
 	close(stop)
 	wg.Wait()
+}
+
+// TestRowsPopulatesModelOptionsFromLister pins Task M's happy path: a
+// provider with a working ModelLister gets ModelOptions from it and no
+// ModelNote (nothing to explain — enumeration just worked).
+func TestRowsPopulatesModelOptionsFromLister(t *testing.T) {
+	cfg := baseAICfg()
+	lister := &fakeLister{Models: []string{"gemma4:12b", "gemma4:latest"}}
+	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
+
+	rows := svc.Rows(context.Background())
+	var ollama settings.Row
+	for _, r := range rows {
+		if r.Provider == "ollama" {
+			ollama = r
+		}
+	}
+
+	if len(ollama.ModelOptions) != 2 {
+		t.Fatalf("ollama.ModelOptions = %v, want the lister's 2 models", ollama.ModelOptions)
+	}
+	if ollama.ModelNote != "" {
+		t.Errorf("ollama.ModelNote = %q, want empty on a successful list", ollama.ModelNote)
+	}
+}
+
+// TestRowsAlwaysIncludesCurrentValueEvenIfListerOmitsIt pins the "the
+// operator's current value must never be silently dropped" rule: a
+// model that WAS overridden but is no longer in the lister's result
+// (removed, or hand-typed) must still appear in ModelOptions.
+func TestRowsAlwaysIncludesCurrentValueEvenIfListerOmitsIt(t *testing.T) {
+	cfg := baseAICfg()
+	lister := &fakeLister{Models: []string{"gemma4:12b"}}
+	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
+
+	if err := svc.SetModel(context.Background(), "ollama", "some-removed-model:9b"); err != nil {
+		t.Fatalf("SetModel: %v", err)
+	}
+
+	rows := svc.Rows(context.Background())
+	var ollama settings.Row
+	for _, r := range rows {
+		if r.Provider == "ollama" {
+			ollama = r
+		}
+	}
+
+	found := false
+	for _, m := range ollama.ModelOptions {
+		if m == "some-removed-model:9b" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("ollama.ModelOptions = %v, want the overridden value \"some-removed-model:9b\" included even though the lister no longer reports it", ollama.ModelOptions)
+	}
+	if ollama.Model != "some-removed-model:9b" {
+		t.Errorf("ollama.Model = %q, want the override, unchanged", ollama.Model)
+	}
+}
+
+// TestRowsDegradesToFreeTextOnListerError pins the "degrade, don't
+// block/500" rule: a failing ModelLister (e.g. Ollama unreachable)
+// leaves ModelOptions empty and explains why in ModelNote, rather than
+// Rows itself failing/panicking.
+func TestRowsDegradesToFreeTextOnListerError(t *testing.T) {
+	cfg := baseAICfg()
+	lister := &fakeLister{Err: errors.New("dial tcp: connection refused")}
+	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
+
+	rows := svc.Rows(context.Background())
+	var ollama settings.Row
+	for _, r := range rows {
+		if r.Provider == "ollama" {
+			ollama = r
+		}
+	}
+
+	if len(ollama.ModelOptions) != 0 {
+		t.Errorf("ollama.ModelOptions = %v, want empty when the lister errors", ollama.ModelOptions)
+	}
+	if ollama.ModelNote == "" {
+		t.Error("ollama.ModelNote is empty, want a reason shown when enumeration failed")
+	}
+	// The effective model itself must be completely unaffected by the
+	// listing failure — still the config fallback, still usable.
+	if ollama.Model != cfg.Ollama.Model {
+		t.Errorf("ollama.Model = %q, want unaffected config value %q", ollama.Model, cfg.Ollama.Model)
+	}
+}
+
+// TestRowsCachesSuccessfulEnumeration pins the caching rule: a second
+// Rows() call soon after a SUCCESSFUL one must not hit the lister
+// again — the task brief specifically flags agy models as costing a
+// real subprocess, so re-listing on every /settings render would be
+// wasteful.
+func TestRowsCachesSuccessfulEnumeration(t *testing.T) {
+	cfg := baseAICfg()
+	lister := &fakeLister{Models: []string{"gemma4:12b"}}
+	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
+
+	svc.Rows(context.Background())
+	svc.Rows(context.Background())
+	svc.Rows(context.Background())
+
+	if got := lister.callCount(); got != 1 {
+		t.Errorf("lister.Calls = %d, want 1 (second/third Rows() should have served the cache)", got)
+	}
+}
+
+// TestRowsNeverCachesAFailedEnumeration pins the other half of the
+// caching rule: a FAILED attempt must never be remembered as "no
+// models" — every subsequent Rows() call must retry, so an operator who
+// fixes Ollama sees it recover on their very next /settings visit.
+func TestRowsNeverCachesAFailedEnumeration(t *testing.T) {
+	cfg := baseAICfg()
+	lister := &fakeLister{Err: errors.New("connection refused")}
+	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
+
+	svc.Rows(context.Background())
+	svc.Rows(context.Background())
+
+	if got := lister.callCount(); got != 2 {
+		t.Errorf("lister.Calls = %d, want 2 (a failed attempt must never be cached)", got)
+	}
+}
+
+// TestRowsClaudeCLIOffersAliasesNotEnumeration and
+// TestRowsCodexCLIHasNoteButNoOptionsOrAliases pin the two providers
+// that structurally cannot enumerate (task brief): claudecli gets its
+// documented aliases as a clearly-separate, labelled convenience;
+// codexcli gets neither options nor aliases, just the explanatory note.
+// Neither ever consults a ModelLister (none is even offered here).
+func TestRowsClaudeCLIOffersAliasesNotEnumeration(t *testing.T) {
+	svc, _ := newTestService(t, baseAICfg())
+	rows := svc.Rows(context.Background())
+
+	var claude settings.Row
+	for _, r := range rows {
+		if r.Provider == "claudecli" {
+			claude = r
+		}
+	}
+	if len(claude.ModelOptions) != 0 {
+		t.Errorf("claudecli.ModelOptions = %v, want empty (never a real enumeration)", claude.ModelOptions)
+	}
+	if len(claude.ModelAliases) == 0 {
+		t.Error("claudecli.ModelAliases is empty, want the documented sonnet/opus/haiku aliases")
+	}
+	if claude.ModelNote == "" {
+		t.Error("claudecli.ModelNote is empty, want an explanation that this isn't an enumeration")
+	}
+}
+
+func TestRowsCodexCLIHasNoteButNoOptionsOrAliases(t *testing.T) {
+	svc, _ := newTestService(t, baseAICfg())
+	rows := svc.Rows(context.Background())
+
+	var codex settings.Row
+	for _, r := range rows {
+		if r.Provider == "codexcli" {
+			codex = r
+		}
+	}
+	if len(codex.ModelOptions) != 0 {
+		t.Errorf("codexcli.ModelOptions = %v, want empty", codex.ModelOptions)
+	}
+	if len(codex.ModelAliases) != 0 {
+		t.Errorf("codexcli.ModelAliases = %v, want empty (no documented aliases offered for Codex)", codex.ModelAliases)
+	}
+	if codex.ModelNote == "" {
+		t.Error("codexcli.ModelNote is empty, want an explanation that the list isn't available")
+	}
 }

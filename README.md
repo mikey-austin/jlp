@@ -322,6 +322,26 @@ reconstruction of any adapter. `APP_AI_*` itself is never copied into
 the database — an absent override row always means "use config",
 exactly as if `/settings` had never been touched.
 
+Where a provider can genuinely enumerate what it's able to serve,
+`/settings` shows a dropdown instead of a bare text field: Ollama via
+`GET /api/tags` (filtered to completion-capable models — an
+embedding-only model like `mxbai-embed-large` is never offered),
+`agycli` via `agy models`, and Anthropic via `GET /v1/models` when an
+API key is configured. Every list is fetched lazily when `/settings`
+renders (never at boot — a slow or absent Ollama must not delay or
+fail startup) and cached for an hour so a page load doesn't cost a
+fresh subprocess/network round trip every time; a failed attempt is
+never cached, so the very next render retries. If a list can't be
+fetched (no key, unreachable, etc.) the row falls back to free text
+with the reason shown, and a free-text field is always available
+alongside a dropdown too, so a model missing from the list can still be
+set. The current value is always included in its dropdown even if the
+provider no longer reports it — an operator's setting is never silently
+dropped. Claude Code and Codex have no way to enumerate at all (`claude
+models`/`codex models` aren't real subcommands); their rows stay free
+text, with Claude Code additionally offering its documented `sonnet`/
+`opus`/`haiku` aliases, clearly labelled as aliases and not a list.
+
 ### Agentic teacher (`APP_AI_AGENTICTEACHER`)
 
 `APP_AI_AGENTICTEACHER=true` (default `false`) opts every feedback
