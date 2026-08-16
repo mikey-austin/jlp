@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/robfig/cron/v3"
 	"github.com/spf13/viper"
@@ -81,9 +82,15 @@ type Anthropic struct {
 // Model has no default: it's only required when Ollama is actually
 // used, either as APP_AI_PROVIDER or named in an APP_AI_ROUTES chain
 // (see validate and cmd/jlp/main.go's provider construction).
+// Timeout bounds a single /api/chat round trip. A local model on cold
+// weights can legitimately take a minute or more before its first
+// token, so this is generous — but it must exist: the zero value of
+// http.Client has no timeout at all, so a wedged Ollama server would
+// hang a request (and its handler goroutine) indefinitely.
 type Ollama struct {
-	URL   string
-	Model string
+	URL     string
+	Model   string
+	Timeout time.Duration
 }
 
 // ClaudeCLI configures internal/adapters/clicmd.NewClaude, the
@@ -386,6 +393,7 @@ func Load() (Config, error) {
 	v.SetDefault("ai.provider", "fake")
 	v.SetDefault("ai.anthropic.model", "claude-sonnet-5")
 	v.SetDefault("ai.anthropic.baseurl", "https://api.anthropic.com")
+	v.SetDefault("ai.ollama.timeout", 5*time.Minute)
 	// ai.ollama.model has no default (see the Ollama struct's doc
 	// comment) — it's zero-value "" unless the operator sets it.
 	v.SetDefault("ai.ollama.url", "http://ollama:11434")

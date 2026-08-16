@@ -37,12 +37,21 @@ type generator struct {
 // requesting cfg.Model — same "concrete type, not either interface
 // alone" reasoning as adapters/anthropic.New's own doc comment.
 func New(cfg config.Ollama) *generator {
+	timeout := cfg.Timeout
+	if timeout <= 0 {
+		timeout = defaultTimeout
+	}
 	return &generator{
 		url:    cfg.URL,
 		model:  cfg.Model,
-		client: &http.Client{},
+		client: &http.Client{Timeout: timeout},
 	}
 }
+
+// defaultTimeout backstops a zero/negative cfg.Timeout so a
+// hand-constructed config can never produce the http.Client zero value,
+// which waits forever.
+const defaultTimeout = 5 * time.Minute
 
 // chatMessage/chatRequest mirror Ollama's /api/chat request body.
 // Format carries req.Schema verbatim — Ollama decodes it as a JSON
@@ -65,7 +74,37 @@ type chatRequest struct {
 	// Tools is only set by CallWithTools — GenerateStructured constrains
 	// output via Format instead, never both on the same request.
 	Tools []ollamaTool `json:"tools,omitempty"`
+	// Think is sent explicitly false on every request, never omitted.
+	// Every model on a typical local install advertises the "thinking"
+	// capability, and for those Ollama reasons by default: the model
+	// emits a whole reasoning pass before its answer, which on local
+	// hardware dominates wall-clock time. None of JLP's prompts benefit
+	// from it — GenerateStructured wants one schema-shaped JSON object
+	// and CallWithTools wants a tool call — so the reasoning tokens are
+	// pure latency. A *bool (not a bool with omitempty) is what forces
+	// `"think": false` onto the wire; a plain bool would be omitted at
+	// its zero value and silently restore the default.
+	Think *bool `json:"think"`
+	// Options carries Ollama's per-request sampling knobs. Temperature
+	// is pinned low because both call paths want a machine-readable
+	// shape rather than prose variety, and smaller local models drift
+	// off "format" noticeably as temperature rises.
+	Options chatOptions `json:"options"`
 }
+
+type chatOptions struct {
+	Temperature float64 `json:"temperature"`
+}
+
+// thinkDisabled is the address-of-false that Think points at. Package
+// scope rather than a per-request local so every request provably
+// shares the same value.
+var thinkDisabled = false
+
+// structuredTemperature is used by both call paths. 0.2 rather than 0
+// because a few local models degenerate into repetition at exactly
+// zero, while anything above ~0.3 measurably increases schema misses.
+const structuredTemperature = 0.2
 
 // ollamaTool/ollamaFunction mirror one entry of /api/chat's "tools"
 // array: Ollama's tool-calling contract is function-call shaped
@@ -126,7 +165,9 @@ func (g *generator) GenerateStructured(ctx context.Context, req ai.StructuredReq
 			{Role: "system", Content: req.System},
 			{Role: "user", Content: req.User},
 		},
-		Format: req.Schema,
+		Format:  req.Schema,
+		Think:   &thinkDisabled,
+		Options: chatOptions{Temperature: structuredTemperature},
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {
@@ -198,6 +239,8 @@ func (g *generator) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.T
 		Stream:   false,
 		Messages: messages,
 		Tools:    toOllamaTools(req.Tools),
+		Think:    &thinkDisabled,
+		Options:  chatOptions{Temperature: structuredTemperature},
 	}
 	payload, err := json.Marshal(body)
 	if err != nil {

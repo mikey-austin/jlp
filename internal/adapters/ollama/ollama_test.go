@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
@@ -221,5 +222,100 @@ func TestGenerateStructuredWrapsNon2xxHTTPError(t *testing.T) {
 	// provider/model a failed call went through.
 	if resp.Provider != "ollama" || resp.Model != "qwen3:4b" {
 		t.Errorf("Provider/Model on error = %q/%q, want ollama/qwen3:4b", resp.Provider, resp.Model)
+	}
+}
+
+// TestBothCallPathsDisableThinking pins the single most load-bearing
+// performance property of this adapter: every model on a typical local
+// install advertises the "thinking" capability, and Ollama reasons by
+// default for those. A reasoning pass before every answer dominates
+// wall-clock time on local hardware and buys nothing here — one path
+// wants a schema-shaped JSON object, the other wants a tool call.
+//
+// The assertion is deliberately `== false` rather than "falsy": the
+// field must be PRESENT and false on the wire. Declaring Think as a
+// plain bool with omitempty would drop it at its zero value and
+// silently restore Ollama's default, which is exactly the regression
+// this test exists to catch.
+func TestBothCallPathsDisableThinking(t *testing.T) {
+	schema, err := schemas.Get("correction_result.v1")
+	if err != nil {
+		t.Fatalf("schemas.Get: %v", err)
+	}
+
+	t.Run("GenerateStructured", func(t *testing.T) {
+		var captured requestAssertion
+		srv := newTestServer(t, &captured, cannedChatResponse)
+		defer srv.Close()
+
+		gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+		if _, err := gen.GenerateStructured(context.Background(), ai.StructuredRequest{
+			PromptName: "teacher.feedback",
+			System:     "You are a Japanese writing teacher.",
+			User:       "友達と映画を見ました。",
+			SchemaName: "correction_result.v1",
+			Schema:     schema,
+			Agent:      "teacher",
+		}); err != nil {
+			t.Fatalf("GenerateStructured returned error: %v", err)
+		}
+
+		think, present := captured.Body["think"]
+		if !present {
+			t.Fatalf("request body has no %q field: %#v", "think", captured.Body)
+		}
+		if think != false {
+			t.Errorf("think = %#v, want false", think)
+		}
+	})
+
+	t.Run("CallWithTools", func(t *testing.T) {
+		var captured requestAssertion
+		srv := newTestServer(t, &captured, cannedToolCallResponse)
+		defer srv.Close()
+
+		gen := New(config.Ollama{URL: srv.URL, Model: "qwen3:4b"})
+		if _, err := gen.CallWithTools(context.Background(), ai.ToolRequest{
+			PromptName: "teacher.agentic",
+			System:     "You are a Japanese writing teacher.",
+			Messages:   []ai.ToolMessage{{Role: "user", Text: "help"}},
+			Tools: []ai.ToolDef{{
+				Name:        "get_learning_priorities",
+				Description: "the learner's current priorities",
+				Schema:      json.RawMessage(`{"type":"object","properties":{}}`),
+			}},
+			Agent: "teacher",
+		}); err != nil {
+			t.Fatalf("CallWithTools returned error: %v", err)
+		}
+
+		think, present := captured.Body["think"]
+		if !present {
+			t.Fatalf("request body has no %q field: %#v", "think", captured.Body)
+		}
+		if think != false {
+			t.Errorf("think = %#v, want false", think)
+		}
+	})
+}
+
+// TestNewAlwaysSetsAClientTimeout guards the http.Client zero value,
+// which waits forever: a wedged Ollama server would otherwise hang the
+// calling handler goroutine with no upper bound.
+func TestNewAlwaysSetsAClientTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  config.Ollama
+		want time.Duration
+	}{
+		{"configured", config.Ollama{URL: "u", Model: "m", Timeout: 90 * time.Second}, 90 * time.Second},
+		{"zero falls back", config.Ollama{URL: "u", Model: "m"}, defaultTimeout},
+		{"negative falls back", config.Ollama{URL: "u", Model: "m", Timeout: -1}, defaultTimeout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := New(tc.cfg).client.Timeout; got != tc.want {
+				t.Errorf("client.Timeout = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

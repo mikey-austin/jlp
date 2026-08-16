@@ -2,6 +2,15 @@ services:
   app:
     build: { context: ., target: dev }
     ports: ["${APP_HOST_PORT:-8080}:8080"]
+    # Lets the app reach a model server running on the HOST rather than
+    # in this compose network — set
+    # APP_AI_OLLAMA_URL=http://host.docker.internal:11434 to use an
+    # Ollama the operator already runs natively (typically the one with
+    # GPU access), instead of joining the "ollama" profile below. Docker
+    # Desktop provides this name automatically; on plain Linux it does
+    # not, hence the explicit host-gateway mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - .:/src
       - gomod:/go/pkg/mod
@@ -29,6 +38,10 @@ services:
       APP_AI_ANTHROPIC_BASEURL: ${APP_AI_ANTHROPIC_BASEURL:-}
       APP_AI_OLLAMA_URL: ${APP_AI_OLLAMA_URL:-http://ollama:11434}
       APP_AI_OLLAMA_MODEL: ${APP_AI_OLLAMA_MODEL:-}
+      # Bounds one /api/chat round trip. Generous, because a local model
+      # loading cold weights can take a minute before its first token —
+      # but never unbounded (see internal/config.Ollama.Timeout).
+      APP_AI_OLLAMA_TIMEOUT: ${APP_AI_OLLAMA_TIMEOUT:-}
       APP_AI_ROUTES: ${APP_AI_ROUTES:-}
       # Phase 4 Task 2's opt-in agentic teacher (PRD §27/§50): unset (the
       # default) keeps Phase 1's single-shot structured-generation path —

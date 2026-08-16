@@ -133,6 +133,40 @@ the `/ai` page).
   make ollama-pull m=qwen3:4b   # starts the ollama service, then pulls the model
   ```
 
+  To use an Ollama you already run natively on the host (typically the
+  one with GPU access) instead of the compose service, point the URL at
+  the host gateway — the app service maps `host.docker.internal` for
+  exactly this:
+
+  ```
+  APP_AI_OLLAMA_URL=http://host.docker.internal:11434
+  APP_AI_OLLAMA_MODEL=gemma4:12b
+  APP_AI_OLLAMA_TIMEOUT=5m       # optional; bounds one /api/chat round trip
+  ```
+
+  **Thinking is disabled on every request** (`"think": false`), because
+  most local models default to emitting a full reasoning pass that
+  dominates wall-clock time and buys nothing here — one call path wants
+  a schema-shaped JSON object, the other wants a tool call.
+
+  **Model choice matters more than size**, because disabling thinking
+  interacts with structured-output support. Measured on this repo's
+  real `teacher.feedback` prompt and `correction_result.v1` schema
+  (Ollama 0.30.6):
+
+  | model | valid JSON with `think:false` | latency |
+  |---|---|---|
+  | `gemma4:12b` | 6/6 | 3.1–3.9 s |
+  | `gemma4:latest` (8B) | 3/3 | 2.0–12.6 s |
+  | `gemma4:31b` | 3/3 | 7.1–24.7 s |
+  | `qwen3.6:35b` | **0/3** | 2.8–4.7 s |
+
+  `qwen3.6:35b` ignores the `format` schema entirely once thinking is
+  off — it returns Markdown prose instead of JSON, fast and useless.
+  With thinking on it obeys the schema but takes 14–20 s. Prefer a
+  `gemma4` model; if you switch to a model not listed here, check that
+  it still honours `format` with thinking disabled before trusting it.
+
   `make test` always uses the fake provider regardless of `.env` — a
   live key or a running Ollama server is never required to run the
   test suite.
