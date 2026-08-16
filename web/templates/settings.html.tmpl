@@ -4,7 +4,7 @@
   {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 
   <div class="cards">
-    {{range .Rows}}{{$row := .}}<div class="card settings-row">
+    {{range .Rows}}{{$row := .}}<section class="card settings-row">
       <div class="settings-row__header">
         <h2>{{$row.Label}}</h2>
         {{if or (eq $row.ModelSource "override") (and $row.HasEffort (eq $row.EffortSource "override"))}}
@@ -59,6 +59,6 @@
         <button type="submit" class="btn btn--sm">保存</button>
       </form>
       {{end}}
-    </div>{{end}}
+    </section>{{end}}
   </div>
 </section>{{end}}

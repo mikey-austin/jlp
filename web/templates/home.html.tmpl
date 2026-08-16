@@ -10,18 +10,18 @@
   </div>
 
   <div class="dashboard-columns">
-    <div>
+    <section>
       <h2>よくある間違い</h2>
       <ul class="error-types">
         {{range .Stats.TopErrorTypes}}<li><span class="badge badge--type">{{.Type}}</span><span class="error-count">{{.Count}}</span></li>{{else}}<li class="empty">まだデータがありません</li>{{end}}
       </ul>
-    </div>
-    <div>
+    </section>
+    <section>
       <h2>最近のセッション</h2>
       <ul class="recent-sessions">
         {{range .RecentSessions}}<li><a href="/sessions/{{.ID}}">{{.Title}}</a></li>{{else}}<li class="empty">セッションがありません</li>{{end}}
       </ul>
-    </div>
+    </section>
   </div>
 
   <h2>語彙ファネル</h2>

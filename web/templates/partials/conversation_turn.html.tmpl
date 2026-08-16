@@ -1,10 +1,10 @@
 {{define "conversation_turn"}}
-<div class="conv-turn" id="conv-turn-{{.ID}}">
+<li class="conv-turn" id="conv-turn-{{.ID}}">
   <p class="conv-msg conv-msg--learner"><span class="conv-who">あなた</span>{{.LearnerText}}</p>
   <p class="conv-msg conv-msg--tutor"><span class="conv-who">先生</span>{{.Reply}}</p>
   {{if .ReplyEN}}<p class="conv-msg-en">{{.ReplyEN}}</p>{{end}}
   {{if .Followup}}<p class="conv-followup">{{.Followup}}</p>{{end}}
   {{if .Cards}}<div class="cards">{{range .Cards}}{{template "correction_card" .}}{{end}}</div>
   {{else if .Withheld}}<p class="hint conv-withheld">訂正はまだ表示されていません。</p>{{end}}
-</div>
+</li>
 {{end}}

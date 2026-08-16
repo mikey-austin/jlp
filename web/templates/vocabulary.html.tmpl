@@ -1,10 +1,10 @@
 {{define "content"}}<section class="vocabulary">
   <h1>語彙</h1>
   <nav class="filter-tabs">
-    <a href="/vocabulary"{{if eq .Filter ""}} class="active"{{end}}>すべて</a>
-    <a href="/vocabulary?filter=looked-up"{{if eq .Filter "looked-up"}} class="active"{{end}}>調べた</a>
-    <a href="/vocabulary?filter=produced"{{if eq .Filter "produced"}} class="active"{{end}}>使えた</a>
-    <a href="/vocabulary?filter=activate"{{if eq .Filter "activate"}} class="active"{{end}}>活性化候補</a>
+    <a href="/vocabulary"{{if eq .Filter ""}} class="is-active"{{end}}>すべて</a>
+    <a href="/vocabulary?filter=looked-up"{{if eq .Filter "looked-up"}} class="is-active"{{end}}>調べた</a>
+    <a href="/vocabulary?filter=produced"{{if eq .Filter "produced"}} class="is-active"{{end}}>使えた</a>
+    <a href="/vocabulary?filter=activate"{{if eq .Filter "activate"}} class="is-active"{{end}}>活性化候補</a>
   </nav>
   <div class="table-card table-card--stack">
     <table>
@@ -19,7 +19,7 @@
           <td data-label="種類"><span class="badge badge--type">{{.KindLabel}}</span></td>
           <td data-label="検索回数">{{.Lookups}}</td>
           <td data-label="使用">✓{{.SuccessfulProductions}} ✗{{.FailedProductions}}</td>
-        </tr>{{else}}<tr><td colspan="8">語彙がありません</td></tr>{{end}}
+        </tr>{{else}}<tr><td colspan="8" class="empty">語彙がありません</td></tr>{{end}}
       </tbody>
     </table>
   </div>

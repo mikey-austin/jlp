@@ -14,10 +14,10 @@
        would print that card's Replacement in the clear. See
        toFeedbackView's doc comment. */}}
   {{if not .HasGatedCard}}
-  <div class="diff-block card">
+  <section class="diff-block card card--tight">
     <h3>修正案</h3>
     <p class="inline-diff">{{range .DiffSpans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
-  </div>
+  </section>
   {{end}}
   <div class="cards">{{range .Cards}}{{template "correction_card" .}}{{end}}</div>
   {{end}}

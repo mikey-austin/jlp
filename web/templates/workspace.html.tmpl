@@ -1,10 +1,10 @@
 {{define "content"}}<div class="workspace">
   <div class="workspace__main">
     <section id="editor-pane" class="card">
-      <textarea id="editor" lang="ja" spellcheck="false" data-doc-id="{{.Document.ID}}"
+      <textarea id="editor" class="editor" lang="ja" spellcheck="false" data-doc-id="{{.Document.ID}}"
                 placeholder="ここに日本語で書いてください…">{{.Document.Content}}</textarea>
-      <div class="editor-status"><span id="save-state" data-state="saved">保存済み</span>
-           <span id="rune-count">{{.Document.RuneCount}}</span>字</div>
+      <div class="editor-status"><span id="save-state" class="save-state" data-state="saved">保存済み</span>
+           <span id="rune-count" class="rune-count">{{.Document.RuneCount}}</span>字</div>
     </section>
     {{/* Phase 4 Task W item 4: 添削 (feedback) and 会話 (conversation)
          behind tabs so the editor stays visible and only one activity
@@ -33,12 +33,12 @@
           </select>
           <span class="hint">（選択なし＝全文をレビュー）</span>
         </div>
-        <div id="feedback-results"></div>
+        <div id="feedback-results" class="feedback-results"></div>
       </section>
       <section id="conversation-pane" class="card" data-tab-panel="conversation" hidden>
         <h2>会話練習</h2>
         <p class="hint">{{.FeedbackTimingCopy}}</p>
-        <div id="conversation-transcript">{{range .ConversationTurns}}{{template "conversation_turn" .}}{{end}}</div>
+        <ol id="conversation-transcript" class="conv-list">{{range .ConversationTurns}}{{template "conversation_turn" .}}{{end}}</ol>
         <form id="conversation-form" class="conv-form" hx-post="/sessions/{{.Session.ID}}/conversation"
               hx-target="#conversation-transcript" hx-swap="beforeend"
               hx-disabled-elt="find input, find button"
@@ -53,7 +53,7 @@
       </section>
     </div>
   </div>
-  <aside id="context-pane" class="card">
+  <aside id="context-pane" class="card workspace__context">
     <h2>{{.Session.Title}}</h2>
     <dl class="context-fields">
       <dt>目的</dt><dd>{{.Session.Purpose}}</dd>

@@ -11,7 +11,7 @@
           <td data-label="種類"><span class="badge badge--type">{{.SubjectType}}</span></td>
           <td data-label="スコア">{{printf "%.1f" .Score}}</td>
           <td data-label="理由">{{.Reason}}</td>
-        </tr>{{else}}<tr><td colspan="4">優先項目がありません</td></tr>{{end}}
+        </tr>{{else}}<tr><td colspan="4" class="empty">優先項目がありません</td></tr>{{end}}
       </tbody>
     </table>
   </div>
@@ -27,7 +27,7 @@
           <td data-label="状態">{{.Kind}}</td>
           <td data-label="信頼度">{{percent .Confidence}}%</td>
           <td data-label="最終更新">{{.UpdatedAt.Format "2006-01-02"}}</td>
-        </tr>{{else}}<tr><td colspan="5">観察がありません</td></tr>{{end}}
+        </tr>{{else}}<tr><td colspan="5" class="empty">観察がありません</td></tr>{{end}}
       </tbody>
     </table>
   </div>

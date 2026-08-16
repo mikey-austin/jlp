@@ -5,31 +5,31 @@
   </p>
   {{if eq .Run.Status "failed"}}<p class="empty">エラー: {{.Run.Error}}</p>{{end}}
 
-  <div class="card">
+  <section class="card">
     <h2>入力コンテキスト</h2>
     <p class="agent-run-label">System</p>
     <pre class="agent-run-text">{{.System}}</pre>
     <p class="agent-run-label">Input</p>
     <pre class="agent-run-text">{{.Input}}</pre>
-  </div>
+  </section>
 
   <h2>会話ログ</h2>
   <p class="description">モデルの各ターンとツール呼び出しを、実際に発生した順に表示しています。</p>
-  {{range .TraceEvents}}
-    {{if eq .Kind "turn"}}<div class="card agent-run-event">
+  {{if .TraceEvents}}<ol class="agent-run-log">
+    {{range .TraceEvents}}{{if eq .Kind "turn"}}<li class="card">
       <p class="agent-run-label">モデルターン {{.TurnNumber}}</p>
       {{if .Text}}<pre class="agent-run-text">{{.Text}}</pre>{{else}}<p class="empty">（テキストなし — ツール呼び出しのみ）</p>{{end}}
-    </div>{{else}}<div class="card agent-run-event">
+    </li>{{else}}<li class="card">
       <p class="agent-run-label">ツール呼び出し: {{.ToolCall.ToolName}} {{if .ToolCall.IsError}}<span class="badge">error</span>{{else}}<span class="badge">ok</span>{{end}} <span class="chip">{{.ToolCall.DurationMS}}ms</span></p>
       <p class="agent-run-label">引数</p>
       <pre class="agent-run-text">{{.ToolCall.Arguments}}</pre>
       <p class="agent-run-label">結果</p>
       <pre class="agent-run-text">{{.ToolCall.Result}}</pre>
-    </div>{{end}}
-  {{else}}<p class="empty">会話ログがありません</p>{{end}}
+    </li>{{end}}{{end}}
+  </ol>{{else}}<p class="empty">会話ログがありません</p>{{end}}
 
-  <div class="card">
+  <section class="card">
     <h2>最終出力</h2>
     {{if .Output}}<pre class="agent-run-text">{{.Output}}</pre>{{else}}<p class="empty">出力はありません</p>{{end}}
-  </div>
+  </section>
 </section>{{end}}

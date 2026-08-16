@@ -81,7 +81,7 @@ main p.description {
 .session-form {
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: var(--space-4);
   max-width: 28rem;
 }
 
@@ -91,7 +91,7 @@ main p.description {
   display: flex;
   gap: var(--space-2);
   flex-wrap: wrap;
-  margin: 0 0 20px;
+  margin: 0 0 var(--space-5);
 }
 .filter-tabs a {
   padding: var(--space-2) var(--space-4);
@@ -108,7 +108,7 @@ main p.description {
   border-color: var(--primary);
   color: var(--primary);
 }
-.filter-tabs a.active {
+.filter-tabs a.is-active {
   background: var(--primary-soft);
   color: var(--primary);
   border-color: transparent;
@@ -129,10 +129,12 @@ main p.description {
   gap: var(--space-4);
   min-width: 0;
 }
-#editor-pane {
-  padding: var(--space-5);
-}
-#editor {
+/* The panes themselves are plain .card elements — .card carries the
+ * padding now (components.css). What is left here is genuinely
+ * workspace layout, keyed to classes; every id in workspace.html.tmpl
+ * survives purely as an htmx target / app.js hook, which is what ids
+ * are for. */
+.editor {
   width: 100%;
   min-height: 45vh;
   border: none;
@@ -145,38 +147,35 @@ main p.description {
   line-height: var(--leading-relaxed);
   resize: vertical;
 }
-#editor:focus-visible {
+.editor:focus-visible {
   outline: none;
 }
 .editor-status {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
-  margin-top: 12px;
-  padding-top: 12px;
+  margin-top: var(--space-3);
+  padding-top: var(--space-3);
   border-top: 1px solid var(--border);
   color: var(--fg-muted);
   font-size: var(--text-sm);
 }
-#save-state[data-state="dirty"] {
+.save-state[data-state="dirty"] {
   color: var(--warning);
 }
-#save-state[data-state="error"] {
+.save-state[data-state="error"] {
   color: var(--danger);
   font-weight: 700;
 }
-#save-state[data-state="saved"]::before {
+.save-state[data-state="saved"]::before {
   content: "● ";
   color: var(--success);
 }
-#rune-count {
+.rune-count {
   margin-left: auto;
   font-family: "JetBrains Mono", monospace;
 }
 
-#feedback-pane {
-  padding: var(--space-5);
-}
 .feedback-trigger {
   display: flex;
   flex-wrap: wrap;
@@ -188,11 +187,11 @@ main p.description {
   color: var(--fg-subtle);
   font-size: var(--text-sm);
 }
-#feedback-results:empty {
-  margin: 0;
+.feedback-results {
+  margin-top: var(--space-1);
 }
-#feedback-results {
-  margin-top: 4px;
+.feedback-results:empty {
+  margin: 0;
 }
 
 /* ============================== Feedback progress (Task W item 1) =====
@@ -280,18 +279,18 @@ main p.description {
   max-width: 100%;
 }
 
-#context-pane {
-  padding: var(--space-5);
+/* The workspace's right-hand column should be exactly as tall as its
+ * own content rather than stretching to the editor's height. Its
+ * padding and the "a card's first heading has no top margin" reset
+ * both come from .card now. */
+.workspace__context {
   height: fit-content;
-}
-#context-pane h2 {
-  margin: 0 0 var(--space-4);
 }
 .context-fields {
   display: grid;
   grid-template-columns: auto 1fr;
-  row-gap: 10px;
-  column-gap: 14px;
+  row-gap: var(--space-3);
+  column-gap: var(--space-4);
   margin: 0 0 var(--space-5);
   font-size: var(--text-sm);
 }
@@ -312,16 +311,18 @@ main p.description {
   color: var(--fg-muted);
 }
 .diff-block {
-  padding: var(--space-5);
   margin: 0 0 var(--space-4);
 }
 .diff-block h3 {
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
 }
+/* .cards is the generic vertical stack of sibling cards (correction
+ * cards, anki cards, settings rows): spacing BETWEEN cards, never
+ * inside them. */
 .cards {
   display: flex;
   flex-direction: column;
-  gap: 1rem;
+  gap: var(--space-4);
 }
 
 /* ============================== Settings (Phase 4 Task S) =============== */
@@ -339,7 +340,6 @@ main p.description {
  * .btn/.input/.select/.field already carry every color this page
  * needs. */
 .settings-row {
-  padding: var(--space-5);
   display: flex;
   flex-direction: column;
   gap: var(--space-3);
@@ -363,9 +363,9 @@ main p.description {
   gap: var(--space-2);
 }
 .concepts {
-  margin: 0.3rem 0;
+  margin: var(--space-2) 0;
   display: flex;
-  gap: 0.4rem;
+  gap: var(--space-2);
   flex-wrap: wrap;
 }
 
@@ -393,7 +393,7 @@ main p.description {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 0;
+  padding: var(--space-3) 0;
   border-bottom: 1px solid var(--border);
 }
 .error-types li:last-child,
@@ -424,8 +424,8 @@ main p.description {
 .funnel {
   display: flex;
   align-items: center;
-  gap: 14px;
-  margin: 1rem 0 1.5rem;
+  gap: var(--space-4);
+  margin: var(--space-4) 0 var(--space-6);
   flex-wrap: wrap;
 }
 .funnel__stage {
@@ -433,7 +433,7 @@ main p.description {
   flex-direction: column;
   align-items: center;
   min-width: 96px;
-  padding: 14px 20px;
+  padding: var(--space-4) var(--space-5);
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface);
@@ -460,8 +460,8 @@ main p.description {
 .weakness-trends {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  margin: 1rem 0 1.5rem;
+  gap: var(--space-3);
+  margin: var(--space-4) 0 var(--space-6);
   padding: 0;
   list-style: none;
 }
@@ -469,8 +469,8 @@ main p.description {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 10px 16px;
+  gap: var(--space-4);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: 12px;
   background: var(--surface);
@@ -500,9 +500,9 @@ main p.description {
 
 .rating,
 .confidence {
-  margin-top: 1rem;
+  margin-top: var(--space-4);
   display: flex;
-  gap: 0.4rem;
+  gap: var(--space-2);
   align-items: center;
   font-size: var(--text-sm);
   color: var(--fg-muted);
@@ -524,15 +524,9 @@ main p.description {
 
 /* ============================== Practice / exercises ===================== */
 
-.practice-intro-card {
-  padding: var(--space-5);
-}
 .practice-intro {
   color: var(--fg-muted);
-  margin: 0 0 14px;
-}
-.exercise {
-  padding: var(--space-5);
+  margin: 0 0 var(--space-4);
 }
 .exercise .instructions.en,
 .exercise-result .feedback.en {
@@ -546,14 +540,14 @@ main p.description {
 .choices {
   display: flex;
   flex-direction: column;
-  gap: 8px;
-  margin-bottom: 14px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
 .choice {
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 10px 14px;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: 10px;
   cursor: pointer;
@@ -563,18 +557,15 @@ main p.description {
   border-color: var(--primary);
 }
 .confidence-select {
-  margin: 6px 0 14px;
+  margin: var(--space-2) 0 var(--space-4);
 }
 .exercise-form .btn {
-  margin-top: 4px;
-}
-.exercise-result {
-  padding: var(--space-5);
+  margin-top: var(--space-1);
 }
 .result-banner {
   font-weight: 700;
   font-size: var(--text-lg);
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-3);
 }
 .result-banner.correct {
   color: var(--success);
@@ -583,30 +574,27 @@ main p.description {
   color: var(--fg-muted);
 }
 .exercise-result .btn {
-  margin-top: 12px;
+  margin-top: var(--space-3);
 }
 
 /* ============================== Anki ====================================== */
 
-.anki-card {
-  padding: var(--space-5);
-}
 .anki-card .front {
   font-size: var(--text-lg);
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
 }
 .anki-card .back {
   color: var(--fg-muted);
-  margin: 0 0 8px;
+  margin: 0 0 var(--space-2);
 }
 .anki-card .notes {
   font-size: var(--text-sm);
   color: var(--fg-subtle);
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-3);
 }
 .anki-card footer {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
 }
 .anki-card footer.resolved {
   color: var(--fg-muted);
@@ -615,9 +603,9 @@ main p.description {
 }
 .anki-export-actions {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   align-items: center;
-  margin-top: 16px;
+  margin-top: var(--space-4);
 }
 .toast {
   background: var(--success-soft);
@@ -625,7 +613,7 @@ main p.description {
   padding: var(--space-3) var(--space-4);
   border-radius: 10px;
   font-size: var(--text-sm);
-  margin-top: 0.75rem;
+  margin-top: var(--space-3);
 }
 .error {
   background: var(--danger-soft);
@@ -633,7 +621,7 @@ main p.description {
   padding: var(--space-3) var(--space-4);
   border-radius: 10px;
   font-size: var(--text-sm);
-  margin-top: 0.75rem;
+  margin-top: var(--space-3);
 }
 p.empty {
   color: var(--fg-muted);
@@ -647,12 +635,11 @@ p.empty {
   padding-top: 10vh;
 }
 .offline-card {
-  padding: var(--space-7);
   max-width: 32rem;
   text-align: center;
 }
 .offline-card h1 {
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-3);
 }
 .offline-card p {
   color: var(--fg-muted);
@@ -662,22 +649,15 @@ p.empty {
 /* ============================== Lesson guides =========================== */
 
 .lesson-guide h2 {
-  margin-top: 22px;
-}
-.lesson-guide h2:first-child {
-  margin-top: 0;
-}
-.lesson-guide,
-.observation {
-  padding: var(--space-6);
+  margin-top: var(--space-6);
 }
 .observation {
-  margin: 0 0 14px;
+  margin: 0 0 var(--space-4);
 }
 .observation-meta {
   color: var(--fg-muted);
   font-size: var(--text-sm);
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-2);
 }
 
 /* ============================== Agent-run trace (Phase 4 Task 2) ======== */
@@ -694,7 +674,7 @@ p.empty {
 }
 .agent-run-text {
   margin: 0;
-  padding: 10px 12px;
+  padding: var(--space-3);
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -705,12 +685,17 @@ p.empty {
   max-height: 280px;
   overflow-y: auto;
 }
-/* .agent-run-event: one entry in the chronological "会話ログ" list
- * (agent_run_detail.html.tmpl's TraceEvents range) — a model turn or a
- * tool call, in the order they actually happened. Plain vertical
- * spacing between an otherwise unstyled .card is all this needs. */
-.agent-run-event {
-  margin-bottom: 12px;
+/* The 会話ログ is an ordered list of trace entries (a model turn or a
+ * tool call, in the order they actually happened), each one a .card
+ * <li>. The list owns the spacing between them, so the cards need no
+ * per-element margin of their own. */
+.agent-run-log {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
 }
 
 /* ============================== Responsive ============================== */
@@ -727,7 +712,7 @@ p.empty {
   .workspace {
     grid-template-columns: minmax(0, 1fr);
   }
-  #context-pane {
+  .workspace__context {
     height: auto;
   }
 }
@@ -738,7 +723,6 @@ p.empty {
   .filter-tabs a,
   .rating .star,
   .confidence .star,
-  .correction .reveal,
   .workspace-tabs .segmented > * {
     min-height: var(--tap);
     display: inline-flex;
@@ -759,11 +743,12 @@ p.empty {
   .history-row {
     min-height: var(--tap);
   }
-  /* #provider-override sits next to フィードバックを取得 in a wrapping
-   * flex row (.feedback-trigger) — letting it size to its own content
-   * instead of the .select default keeps the row from needing three
-   * lines at 390px. */
-  #provider-override {
+  /* The adapter <select> sits next to フィードバックを取得 in a
+   * wrapping flex row — letting it size to its own content instead of
+   * the .select default keeps that row from needing three lines at
+   * 390px. Keyed to the row's own component class, so any control that
+   * lands in it later behaves the same. */
+  .feedback-trigger .select {
     flex: 1 1 auto;
     min-width: 0;
   }

@@ -12,7 +12,7 @@
           <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
           <td><span class="badge">{{.Status}}</span></td>
           <td><a href="/lessons/{{.ID}}" class="chip">開く</a></td>
-        </tr>{{else}}<tr><td colspan="3">レッスンガイドがありません。上のボタンから作成できます。</td></tr>{{end}}
+        </tr>{{else}}<tr><td colspan="3" class="empty">レッスンガイドがありません。上のボタンから作成できます。</td></tr>{{end}}
       </tbody>
     </table>
   </div>

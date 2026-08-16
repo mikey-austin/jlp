@@ -9,7 +9,7 @@
           <td data-label="JLPT"><span class="badge badge--jlpt badge--jlpt-{{.JLPTChip | lower}}">{{.JLPTChip}}</span></td>
           <td data-label="遭遇回数">{{.Encounters}}</td>
           <td data-label="最終確認">{{if .Encounters}}{{.LastSeen.Format "2006-01-02"}}{{else}}未遭遇{{end}}</td>
-        </tr>{{else}}<tr><td colspan="4">文法コンセプトがありません</td></tr>{{end}}
+        </tr>{{else}}<tr><td colspan="4" class="empty">文法コンセプトがありません</td></tr>{{end}}
       </tbody>
     </table>
   </div>

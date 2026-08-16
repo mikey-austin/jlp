@@ -4,7 +4,7 @@
     <table>
       <thead><tr><th>タイトル</th><th>目的</th><th>更新</th></tr></thead>
       <tbody>
-        {{range .Sessions}}<tr><td><a href="/sessions/{{.ID}}">{{.Title}}</a></td><td>{{.Purpose}}</td><td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td></tr>{{else}}<tr><td colspan="3">セッションがありません</td></tr>{{end}}
+        {{range .Sessions}}<tr><td><a href="/sessions/{{.ID}}">{{.Title}}</a></td><td>{{.Purpose}}</td><td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td></tr>{{else}}<tr><td colspan="3" class="empty">セッションがありません</td></tr>{{end}}
       </tbody>
     </table>
   </div>

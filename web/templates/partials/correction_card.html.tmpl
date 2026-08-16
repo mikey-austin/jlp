@@ -28,7 +28,7 @@
   </form>
   {{if gt .Attempts 0}}<p class="attempts">試行回数: {{.Attempts}}</p>{{end}}
   <form hx-post="/corrections/{{.ID}}/reveal" hx-target="#corr-{{.ID}}" hx-swap="outerHTML">
-    <button type="submit" class="btn btn--ghost btn--sm reveal">答えを見る</button>
+    <button type="submit" class="btn btn--ghost btn--sm">答えを見る</button>
   </form>
   {{end}}
   {{else}}

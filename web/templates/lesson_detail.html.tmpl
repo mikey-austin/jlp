@@ -2,7 +2,7 @@
   <h1>レッスンガイド <span class="badge">{{.Lesson.Status}}</span></h1>
   <p class="description">作成日: {{.Lesson.CreatedAt.Format "2006-01-02 15:04"}}{{if not .Lesson.CompletedAt.IsZero}} ・ 完了日: {{.Lesson.CompletedAt.Format "2006-01-02 15:04"}}{{end}}</p>
 
-  <div class="card lesson-guide">
+  <section class="card card--roomy lesson-guide">
     <h2>レベル概要</h2>
     <p>{{.Plan.LevelSummary}}</p>
 
@@ -32,17 +32,17 @@
 
     <h2>講師への質問</h2>
     <ul>{{range .Plan.QuestionsForTutor}}<li>{{.}}</li>{{end}}</ul>
-  </div>
+  </section>
 
   {{if eq .Lesson.Status "completed"}}
   <h2>レッスン後の記録</h2>
-  {{range .Observations}}<div class="card observation">
+  {{range .Observations}}<article class="card observation">
     <p class="observation-meta">{{.Author}} — {{.CreatedAt.Format "2006-01-02 15:04"}}</p>
     <p>{{.Notes}}</p>
     {{if .Subjects}}<p class="concepts">{{range .Subjects}}<span class="chip">{{.}}</span>{{end}}</p>{{end}}
-  </div>{{else}}<p class="empty">記録がありません</p>{{end}}
+  </article>{{else}}<p class="empty">記録がありません</p>{{end}}
   {{else}}
-  <div class="card no-print">
+  <section class="card no-print">
     <h2>レッスン完了の記録</h2>
     <form method="post" action="/lessons/{{.Lesson.ID}}/complete" class="session-form">
       <label class="field">講師名
@@ -56,6 +56,6 @@
       </label>
       <button type="submit" class="btn">完了として記録</button>
     </form>
-  </div>
+  </section>
   {{end}}
 </section>{{end}}

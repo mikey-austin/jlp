@@ -35,8 +35,8 @@ textarea:focus-visible,
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 10px 18px;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-5);
   border-radius: 10px;
   border: 1px solid transparent;
   background: var(--primary);
@@ -125,16 +125,40 @@ textarea:focus-visible,
   font-size: var(--text-sm);
   font-weight: 500;
   color: var(--fg);
+  /* A .field is routinely a flex item inside a form row (.settings-form,
+   * .feedback-trigger); without this it refuses to shrink below the
+   * intrinsic width of the <input> it wraps and pushes the page sideways
+   * — /settings overflowed a 320px viewport for exactly that reason. */
+  min-width: 0;
 }
-.field .hint {
-  font-weight: 400;
+
+/* .hint is the design system's supporting-text component: secondary
+ * copy that qualifies the control or panel it sits under. It used to
+ * have NO base rule at all — a bare class that only looked right where
+ * some ancestor happened to style it (`#conversation-pane .hint`,
+ * `.field .hint`), so the same markup rendered as unstyled 16px body
+ * copy in the feedback-history empty state and on /settings. Defined
+ * once here, it applies wherever it is written. */
+.hint {
   color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+/* As a paragraph it is a block of its own and needs the rhythm; as a
+ * <span> inside a .field it is part of the label and must not. */
+p.hint {
+  margin: 0 0 var(--space-3);
 }
 
 .input,
 .select,
 .textarea {
-  padding: 11px 13px;
+  /* An <input>'s default intrinsic width (size=20) is wider than a
+   * 320px phone's content column; a control must never be wider than
+   * the container it was put in. */
+  max-width: 100%;
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
   border-radius: 10px;
   border: 1px solid var(--border-strong);
   background: var(--bg);
@@ -166,13 +190,13 @@ textarea:focus-visible,
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: 10px;
-  padding: 3px;
-  gap: 3px;
+  padding: var(--space-1);
+  gap: var(--space-1);
 }
 .segmented > * {
   flex: 1;
   text-align: center;
-  padding: 8px;
+  padding: var(--space-2);
   border-radius: 7px;
   font-size: var(--text-sm);
   color: var(--fg-muted);
@@ -192,7 +216,7 @@ textarea:focus-visible,
 
 .badge {
   display: inline-block;
-  padding: 4px 11px;
+  padding: var(--space-1) var(--space-3);
   border-radius: 999px;
   white-space: nowrap;
   font-size: var(--text-xs);
@@ -265,7 +289,7 @@ textarea:focus-visible,
 
 .chip {
   display: inline-block;
-  padding: 5px 12px;
+  padding: var(--space-1) var(--space-3);
   border-radius: 999px;
   white-space: nowrap;
   font-size: var(--text-xs);
@@ -288,7 +312,7 @@ textarea:focus-visible,
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
   gap: var(--space-4);
-  margin: 1rem 0 1.5rem;
+  margin: var(--space-4) 0 var(--space-6);
 }
 
 .stat,
@@ -320,11 +344,53 @@ textarea:focus-visible,
 
 /* ============================== Cards & tables ========================= */
 
+/* .card owns its ENTIRE appearance, padding included. Before this it
+ * set only border/radius/background/shadow and every consumer was
+ * expected to add `#some-id { padding: … }` in app.css — which meant a
+ * card whose id nobody remembered rendered flush against its own
+ * border (#conversation-pane, 会話練習, was exactly that: 0px). An
+ * element with class="card" must look like a card with no further
+ * help; nothing outside this block may set .card's padding again.
+ *
+ * Two modifiers, both earned by real cases rather than invented:
+ *   .card--tight  a card nested INSIDE another card — 20px inside 20px
+ *                 reads as 40px of inset, so a nested card steps down
+ *                 one rung (feedback's 修正案 diff block, the
+ *                 conversation digest).
+ *   .card--roomy  a page's single long-form/hero card with no siblings
+ *                 competing for the width (the offline shell, the
+ *                 printable lesson guide).
+ * A third variant (.card--flush, for a card wrapping its own scroll
+ * container) is deliberately NOT defined: nothing needs it today, and
+ * .table-card is already its own component. */
 .card {
   border: 1px solid var(--border);
   border-radius: 16px;
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+  padding: var(--space-5);
+}
+.card--tight {
+  padding: var(--space-4);
+}
+.card--roomy {
+  padding: var(--space-7);
+}
+
+/* The card's padding IS the space above its first child and below its
+ * last — a heading's own page-rhythm margin (main h1/h2/h3 in app.css)
+ * would otherwise add a second, uneven inset on top of it. This
+ * replaces what used to be a one-off `#context-pane h2 { margin: 0 … }`
+ * that only the workspace's context pane happened to get. The
+ * `h2/h3:first-child` arms reach a heading that opens a card's own
+ * header row (.settings-row__header) rather than the card itself. */
+.card > :first-child,
+.card h2:first-child,
+.card h3:first-child {
+  margin-top: 0;
+}
+.card > :last-child {
+  margin-bottom: 0;
 }
 
 /* .table-card is the table's scroll container, not a clipping mask.
@@ -518,15 +584,15 @@ textarea:focus-visible,
 
 .correction header {
   display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
 }
 
 .correction__pair,
 .correction .pair {
   font-size: var(--text-xl);
   line-height: 1.7;
-  margin: 0 0 12px;
+  margin: 0 0 var(--space-3);
 }
 .correction__pair del,
 .correction .pair del {
@@ -544,50 +610,34 @@ textarea:focus-visible,
 }
 
 .correction .expl {
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-2);
   line-height: 1.7;
 }
 .correction .expl.en {
   font-size: var(--text-sm);
   color: var(--fg-muted);
   line-height: 1.6;
-  margin: 0 0 14px;
+  margin: 0 0 var(--space-4);
 }
 
 .correction .concepts {
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
   flex-wrap: wrap;
-  margin: 0 0 16px;
+  margin: 0 0 var(--space-4);
 }
 
 .correction footer {
   display: flex;
-  gap: 10px;
+  gap: var(--space-3);
   flex-wrap: wrap;
 }
-.correction footer button {
-  padding: 9px 16px;
-  border-radius: 9px;
-  border: 1px solid transparent;
-  background: var(--primary);
-  color: var(--primary-fg);
-  font: inherit;
-  font-weight: 600;
-  font-size: var(--text-sm);
-  cursor: pointer;
-  white-space: nowrap;
-}
-.correction footer button + button {
-  background: var(--surface);
-  color: var(--fg-muted);
-  border: 1px solid var(--border-strong);
-  font-weight: 500;
-}
-.correction footer button + button:hover {
-  border-color: var(--danger);
-  color: var(--danger);
-}
+/* The buttons in a correction's footer/retry form are .btn .btn--sm /
+ * .btn--secondary in the markup — these element-keyed rules used to
+ * restate the whole button component at a HIGHER specificity
+ * (.correction footer button beats .btn--sm), so a correction's
+ * buttons silently ignored the design system's own sizing. Deleted;
+ * the component classes on the elements are the styling now. */
 .correction footer.resolved {
   color: var(--fg-muted);
   font-size: var(--text-sm);
@@ -598,14 +648,21 @@ textarea:focus-visible,
   color: var(--success);
   font-weight: 700;
   font-size: var(--text-base);
-  margin: 0 0 10px;
+  margin: 0 0 var(--space-3);
 }
 
+/* The socratic hint is a callout box, not the .hint supporting-text
+ * component — same class name, different job (a name collision worth
+ * naming). It keeps body size and the default foreground so the one
+ * thing a gated card DOES show stays fully legible; only its English
+ * half steps down, exactly like .expl.en above. */
 .correction .hint {
   border-left: 3px solid var(--warning);
-  padding: 0.3rem 0.6rem;
-  margin: 0.4rem 0;
+  padding: var(--space-2) var(--space-3);
+  margin: var(--space-2) 0;
   background: var(--warning-soft);
+  color: var(--fg);
+  font-size: var(--text-base);
 }
 .correction .hint.en {
   color: var(--fg-muted);
@@ -614,44 +671,27 @@ textarea:focus-visible,
 
 .correction .retry {
   display: flex;
-  gap: 8px;
-  margin: 0.6rem 0 0.3rem;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 var(--space-2);
 }
-.correction .retry input {
-  flex: 1;
-  padding: 11px 13px;
-  border-radius: 10px;
-  border: 1px solid var(--border-strong);
-  background: var(--bg);
-  color: var(--fg);
-  font: inherit;
-}
-.correction .retry button {
-  padding: 9px 16px;
-  border-radius: 9px;
-  border: 1px solid transparent;
-  background: var(--primary);
-  color: var(--primary-fg);
-  font: inherit;
-  font-weight: 600;
-  cursor: pointer;
+/* The field itself is a .input in the markup; all this owes it is the
+ * "take the rest of the row" sizing the flex layout needs. */
+.correction .retry .input {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .correction .attempts {
   color: var(--fg-muted);
   font-size: var(--text-sm);
-  margin: 0.2rem 0;
+  margin: var(--space-1) 0;
 }
 
-.correction .reveal {
-  background: none;
-  border: 1px solid var(--border-strong);
-  border-radius: 8px;
-  padding: 0.4rem 0.9rem;
-  cursor: pointer;
-  color: var(--fg-muted);
-  font: inherit;
-}
+/* 答えを見る was `.btn .btn--ghost .btn--sm .reveal` — and `.reveal`,
+ * being a descendant selector here, out-specified every one of those
+ * .btn classes and repainted the button by hand. The .reveal hook is
+ * gone from the markup; the button is a ghost .btn like every other
+ * tertiary action on the site. */
 
 /* ============================== Diff spans ============================= */
 
@@ -749,8 +789,8 @@ textarea:focus-visible,
 .theme-toggle {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 8px 14px;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-4);
   border-radius: 999px;
   white-space: nowrap;
   border: 1px solid var(--border-strong);
@@ -809,14 +849,8 @@ textarea:focus-visible,
     align-items: center;
   }
   .btn,
-  .correction footer button,
   .segmented > * {
     min-height: var(--tap);
-  }
-  .correction footer button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
   }
   /* Long display names must not push the toggle off-screen. */
   .topbar .who {
@@ -860,7 +894,7 @@ textarea:focus-visible,
 .activity-list li {
   display: flex;
   justify-content: space-between;
-  gap: 12px;
+  gap: var(--space-3);
 }
 .activity-list time {
   font-family: "JetBrains Mono", monospace;
@@ -873,10 +907,13 @@ textarea:focus-visible,
  * etc. above verbatim via the shared correction_card partial, so
  * nothing here restyles a correction card itself. */
 
-#conversation-pane .hint {
-  color: var(--fg-subtle);
-  font-size: var(--text-sm);
-  margin: 0 0 var(--space-3);
+/* The transcript is an ordered list of exchanges (<ol class="conv-list">
+ * of <li class="conv-turn">) — htmx appends each new turn into it with
+ * hx-swap="beforeend". */
+.conv-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
 }
 .conv-turn {
   padding: var(--space-3) 0;
@@ -919,7 +956,6 @@ textarea:focus-visible,
 }
 .conv-summary {
   margin-top: var(--space-3);
-  padding: var(--space-4);
 }
 
 @media (max-width: 640px) {
