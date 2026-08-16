@@ -30,14 +30,21 @@
 // package's doc comment).
 //
 // Failure handling follows ports/channels.Channel's documented
-// contract exactly like internal/adapters/slack: Start blocks and
-// returns only on a genuinely fatal setup failure (the initial TCP dial
-// failing); every failure past that — a bad inbound line, a failed
-// send, handle erroring or even panicking — is logged and dropped,
-// never fatal, via the same defer/recover shape slack.go's
-// dispatch/handleEvent use (cmd/jlp/main.go runs Start on its own
-// goroutine for the same reason Slack's Start is: one channel going
-// down must never take the rest of the app with it).
+// contract exactly like internal/adapters/slack: Start blocks and only
+// returns once its context is done. Neither a failed dial (the sidecar
+// not reachable yet — docker-compose.yml gives the app no startup
+// ordering against it) nor a live connection loss (the sidecar
+// restarting, or the connection otherwise dying) is fatal — both are
+// logged and retried with a fixed backoff (jsonrpcTransport.Run's own
+// doc comment), the same self-healing posture Slack's
+// socketmode.Client.RunContext and internal/adapters/mqtt's paho
+// AutoReconnect already provide from their own underlying client
+// libraries. Every failure at the message level past that — a bad
+// inbound line, a failed send, handle erroring or even panicking — is
+// logged and dropped, never fatal, via the same defer/recover shape
+// slack.go's dispatch/handleEvent use (cmd/jlp/main.go runs Start on
+// its own goroutine for the same reason Slack's Start is: one channel
+// going down must never take the rest of the app with it).
 package signal
 
 import (
@@ -78,9 +85,9 @@ type Event struct {
 // dialing a real signal-cli daemon. jsonrpcTransport, at the bottom of
 // this file, is the only production implementation.
 type transport interface {
-	// Run dials the daemon and blocks until ctx is done or a fatal
-	// SETUP error occurs (the initial dial failing) — never merely on a
-	// transient disconnect after that (see the package doc comment).
+	// Run dials the daemon and blocks until ctx is done — a failed
+	// dial, or a live disconnect, is retried rather than returned (see
+	// the package doc comment and jsonrpcTransport.Run's own).
 	Run(ctx context.Context) error
 	// Events yields every inbound Event; closed once Run returns.
 	Events() <-chan Event
@@ -205,19 +212,27 @@ func (a *Adapter) Send(ctx context.Context, out channels.Outbound) error {
 // --- production transport ---
 
 const (
-	// dialTimeout bounds the initial TCP dial only — Run's one genuinely
-	// fatal-setup failure (see the package doc comment); nothing bounds
-	// reconnection after that because this transport, like
-	// internal/adapters/mqtt's pahoClient, doesn't attempt one on its
-	// own — see jsonrpcTransport.Run's own doc comment.
+	// dialTimeout bounds a single TCP dial attempt.
 	dialTimeout = 10 * time.Second
 	// callTimeout bounds how long SendMessage (and Run's own
 	// subscribeReceive call) waits for a matching JSON-RPC response
 	// before giving up — signal-cli itself has no notion of a
 	// asynchronous ack the way Slack's Socket Mode does, so an
 	// unbounded wait here would hang forever if a response line is ever
-	// dropped or malformed. Generous for a LAN sidecar call.
+	// dropped or malformed. Generous for a LAN sidecar call. Also used
+	// as the write deadline in call() (see that function's own comment
+	// on why an unbounded conn.Write is its own hazard, independent of
+	// this response-wait timeout).
 	callTimeout = 15 * time.Second
+	// reconnectBackoff is how long Run waits between reconnect attempts
+	// after a dial failure or a live connection loss — see Run's own
+	// doc comment. Fixed rather than exponential: this is a LAN sidecar
+	// on the same compose network, not a public endpoint worth being
+	// gentle with, and docker-compose.yml gives the app no startup
+	// ordering against signal-cli, so a few retries in the first
+	// several seconds after boot is the expected, common case, not an
+	// edge case worth backing off slowly from.
+	reconnectBackoff = 3 * time.Second
 	// eventsBufferSize matches internal/adapters/slack's own Event
 	// channel buffer — enough slack that a burst of inbound messages
 	// doesn't block the read loop while dispatch drains it.
@@ -229,6 +244,17 @@ const (
 type jsonrpcTransport struct {
 	addr   string
 	number string
+	// backoff is Run's own reconnect delay, and callTimeout bounds both
+	// the write deadline and the response wait in call() — both
+	// fields, defaulted from their same-named constants by
+	// newJSONRPCTransport, rather than the constants used directly,
+	// purely so signal_test.go can shrink them and keep the
+	// reconnect/write-deadline tests fast and deterministic (a real
+	// stalled-peer write-deadline expiry, tested against net.Pipe,
+	// without waiting out the real 15s default) without changing the
+	// real defaults any production caller gets.
+	backoff     time.Duration
+	callTimeout time.Duration
 
 	// connMu guards conn and writing to it: SendMessage's write and
 	// readLoop's read run on different goroutines, and more than one
@@ -253,39 +279,66 @@ type jsonrpcTransport struct {
 // "construction never dials" contract.
 func newJSONRPCTransport(addr, number string) *jsonrpcTransport {
 	return &jsonrpcTransport{
-		addr:    addr,
-		number:  number,
-		events:  make(chan Event, eventsBufferSize),
-		pending: make(map[int64]chan rpcResponse),
+		addr:        addr,
+		number:      number,
+		backoff:     reconnectBackoff,
+		callTimeout: callTimeout,
+		events:      make(chan Event, eventsBufferSize),
+		pending:     make(map[int64]chan rpcResponse),
 	}
 }
 
-// Run dials t.addr — the one fatal setup failure Start's contract
-// allows to actually return an error (see the package doc comment) —
-// then starts the read loop and blocks until ctx is done. Unlike
-// internal/adapters/mqtt's paho client or Slack's socketmode.Client,
-// nothing here retries a dropped connection on its own: a signal-cli
-// sidecar dying is expected to be handled by the container orchestrator
-// restarting it (docker-compose.yml has no restart policy override for
-// the "signal" profile, so this matches Docker's own default), and
-// cmd/jlp/main.go already runs Start on its own goroutine, logging
-// (never os.Exit-ing) whatever error Run eventually returns — so a
-// dead connection degrades this ONE channel, not the process, exactly
-// like every other adapter's own contract.
+// Run dials t.addr and, once connected, forwards every inbound
+// `receive` notification onto Events() until ctx is done — see the
+// package doc comment for Start's contract this implements. UNLIKE an
+// earlier version of this method, a dial failure or a live connection
+// loss (the sidecar restarting, or the connection otherwise dying
+// while ctx is still live) is NOT treated as fatal: both are logged and
+// retried after reconnectBackoff, exactly the "transient connection
+// loss is the adapter's own job to retry and log, never propagated up
+// to end the process" contract ports/channels.Channel's own doc
+// comment documents — the same policy Slack's own
+// socketmode.Client.RunContext and internal/adapters/mqtt's paho
+// AutoReconnect already provide for free from their underlying client
+// libraries (see that package's own doc comment on the identical
+// policy over paho, including retrying the INITIAL connect for the
+// exact same "no compose startup ordering" reason). This transport
+// dials a raw net.Conn itself with no such library underneath it, so
+// it implements the identical retry policy by hand. Run only returns
+// once ctx itself is done — a genuinely fatal, unrecoverable setup
+// failure (a malformed address net.Dialer itself refuses to attempt)
+// is possible only via a config value config.validate() already
+// rejects at boot, so is not a live path here in practice; Run does
+// not special-case it separately.
 func (t *jsonrpcTransport) Run(ctx context.Context) error {
+	defer close(t.events)
+	for {
+		err := t.connectAndServe(ctx)
+		if ctx.Err() != nil {
+			return nil
+		}
+		slog.Error("signal: connection lost, reconnecting", "err", err, "backoff", t.backoff)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(t.backoff):
+		}
+	}
+}
+
+// connectAndServe performs ONE dial-and-serve cycle: it blocks until
+// either ctx is done (a clean, requested stop — returns nil) or the
+// read loop ends on its own while ctx is still live — the connection
+// dying, the sidecar restarting, or a line exceeding readLoop's own
+// size cap (bufio.Scanner's ErrTooLong) — in which case it returns a
+// non-nil error describing why, for Run's own reconnect loop to log
+// and act on. It never touches t.events itself; Run's own single
+// defer owns closing that, exactly once, regardless of how many
+// reconnect cycles happen first.
+func (t *jsonrpcTransport) connectAndServe(ctx context.Context) error {
 	dialer := net.Dialer{Timeout: dialTimeout}
 	conn, err := dialer.DialContext(ctx, "tcp", t.addr)
 	if err != nil {
-		// Adapter.Start already spawned dispatch, which is blocked
-		// selecting on ctx.Done()/Events() — cmd/jlp/main.go calls
-		// Start with context.Background() (never cancelled), so with no
-		// close here dispatch would leak forever on a failed initial
-		// dial (e.g. the sidecar not reachable yet, or a misconfigured
-		// RPCURL). Closing t.events makes dispatch's own `ok` check
-		// (channels.go's doc comment: "Events... closed once Run
-		// returns") fire and return cleanly, exactly like the normal
-		// shutdown path below does.
-		close(t.events)
 		return fmt.Errorf("signal: dial %s: %w", t.addr, err)
 	}
 	t.connMu.Lock()
@@ -293,6 +346,7 @@ func (t *jsonrpcTransport) Run(ctx context.Context) error {
 	t.connMu.Unlock()
 
 	readDone := make(chan struct{})
+	var readErr error
 	go func() {
 		defer close(readDone)
 		// Belt-and-suspenders, same as every other spawned goroutine in
@@ -311,7 +365,7 @@ func (t *jsonrpcTransport) Run(ctx context.Context) error {
 				slog.Error("signal: read loop panicked", "panic", r, "stack", string(debug.Stack()))
 			}
 		}()
-		t.readLoop(conn)
+		readErr = t.readLoop(conn)
 	}()
 
 	// subscribeReceive is signal-cli's own explicit opt-in to streaming
@@ -331,12 +385,29 @@ func (t *jsonrpcTransport) Run(ctx context.Context) error {
 
 	select {
 	case <-ctx.Done():
+		// A requested stop: closing conn is what unblocks readLoop's
+		// blocking Read, so wait for it to actually finish before
+		// returning — whatever error that produces (a "use of closed
+		// network connection" read error, typically) is expected and
+		// deliberately not reported; it did not happen on its own.
+		_ = conn.Close()
+		<-readDone
+		return nil
 	case <-readDone:
+		// The read loop ended on its own — ctx is NOT done, so this is
+		// an UNREQUESTED end: the connection died, the sidecar
+		// restarted, or a line tripped bufio.Scanner's size cap. This
+		// must be reported (Important 1, independent review): a
+		// permanently-dead-but-silent channel is worse than one that
+		// logs and dies, because nothing tells anyone to restart it.
+		// Run's own loop is what turns this into a reconnect rather
+		// than a real failure.
+		_ = conn.Close()
+		if readErr != nil {
+			return fmt.Errorf("signal: read loop ended: %w", readErr)
+		}
+		return fmt.Errorf("signal: read loop ended: connection closed by the remote sidecar")
 	}
-	_ = conn.Close()
-	<-readDone
-	close(t.events)
-	return nil
 }
 
 func (t *jsonrpcTransport) Events() <-chan Event { return t.events }
@@ -408,13 +479,29 @@ func (t *jsonrpcTransport) call(ctx context.Context, method string, params any) 
 		t.connMu.Unlock()
 		return nil, fmt.Errorf("signal: %s: not connected", method)
 	}
+	// A write deadline, independent of callTimeout's own bound on the
+	// RESPONSE wait below: without one, a stalled peer that stops
+	// reading (TCP send buffer full, connection open) makes conn.Write
+	// block indefinitely WHILE connMu IS HELD — every other in-flight
+	// or future call() would then queue on the mutex behind it, and
+	// since dispatch spawns a fresh handleEvent goroutine per inbound
+	// message, each ending in a.Send, those goroutines would accumulate
+	// without bound for as long as inbound traffic continued
+	// (independent review, Important 2). Reusing callTimeout here
+	// rather than a separate constant: a write to a healthy LAN
+	// connection is near-instant, so this bound is only ever reached by
+	// exactly the pathological-peer case it exists to catch.
+	if err := conn.SetWriteDeadline(time.Now().Add(t.callTimeout)); err != nil {
+		t.connMu.Unlock()
+		return nil, fmt.Errorf("signal: set write deadline: %w", err)
+	}
 	_, err := conn.Write(buf.Bytes())
 	t.connMu.Unlock()
 	if err != nil {
 		return nil, fmt.Errorf("signal: write %s request: %w", method, err)
 	}
 
-	timer := time.NewTimer(callTimeout)
+	timer := time.NewTimer(t.callTimeout)
 	defer timer.Stop()
 	select {
 	case resp := <-respCh:
@@ -425,7 +512,7 @@ func (t *jsonrpcTransport) call(ctx context.Context, method string, params any) 
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-timer.C:
-		return nil, fmt.Errorf("signal: %s: timed out waiting for a response after %s", method, callTimeout)
+		return nil, fmt.Errorf("signal: %s: timed out waiting for a response after %s", method, t.callTimeout)
 	}
 }
 
@@ -433,11 +520,35 @@ func (t *jsonrpcTransport) call(ctx context.Context, method string, params any) 
 // closes or errors, dispatching each to either a pending call's
 // response channel (an "id" present — see call above) or, for a
 // "receive" notification, translateEnvelope's result forwarded on
-// t.events. Every malformed or unrecognized line is logged and
+// t.events. Every malformed or unrecognized LINE is logged and
 // dropped, never panics — the same defensiveness
 // internal/adapters/slack's own consume loop documents for the same
-// "Start's contract must actually hold" reason.
-func (t *jsonrpcTransport) readLoop(conn net.Conn) {
+// "Start's contract must actually hold" reason; that is a different
+// concern from readLoop ITSELF ending, which this now reports (see the
+// return value below and connectAndServe's own doc comment) rather
+// than swallowing, per the independent review's Important 1: a
+// scanner.Scan loop that silently stops (a closed/reset connection, or
+// a single line over the 1 MiB cap below tripping bufio.ErrTooLong)
+// used to leave this whole channel permanently, silently dead.
+//
+// The 1 MiB cap itself is deliberately NOT being raised: signal-cli's
+// JSON-RPC "receive" notifications never inline attachment bytes — an
+// attachment is delivered as a file-path/metadata reference in
+// dataMessage.attachments (written to disk by signal-cli itself, read
+// separately), never base64 in the envelope — and Signal's own text
+// message length cap is on the order of a few KB, so no legitimate
+// payload this protocol can produce comes remotely close to 1 MiB. The
+// cap exists purely as a hostile/malfunctioning-peer bound, and the
+// error path above (report + reconnect) is the correct response to
+// ever hitting it, not a bigger buffer.
+//
+// readLoop's own return value is scanner.Err() — nil on a clean EOF,
+// non-nil on an actual I/O error — NOT nil-vs-io.EOF distinguished any
+// further: connectAndServe treats either an unrequested loop exit
+// (whether the error itself was nil or not) as equally worth
+// reconnecting over, since ctx already tells it apart from a requested
+// stop.
+func (t *jsonrpcTransport) readLoop(conn net.Conn) error {
 	scanner := bufio.NewScanner(conn)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -447,6 +558,7 @@ func (t *jsonrpcTransport) readLoop(conn net.Conn) {
 		}
 		t.handleLine(line)
 	}
+	return scanner.Err()
 }
 
 // handleLine decodes one line and routes it — split out of readLoop

@@ -647,6 +647,36 @@ func TestJSONRPCTransportForwardsReceiveNotificationOverRealConnection(t *testin
 // anticipated case, not a hypothetical one) never have their JSON-RPC
 // request lines' bytes interleaved on the wire: every line the fake
 // daemon receives must decode as exactly one well-formed request
+// TestCallWriteDeadlineExpiresRatherThanHangingForever pins the
+// independent review's Important 2: call() must bound conn.Write with
+// a deadline, not just the response wait after it — a stalled peer
+// that stops reading must produce a plain write error within a bounded
+// time, never an indefinite hang WHILE connMu is held (which would
+// queue every other in-flight or future call() behind it). net.Pipe
+// gives a real net.Conn whose Write blocks until something reads the
+// other end — nothing ever does here, so without a write deadline this
+// call would hang forever; tr.callTimeout is shrunk so the test proves
+// the deadline fires without waiting out the real 15s default.
+func TestCallWriteDeadlineExpiresRatherThanHangingForever(t *testing.T) {
+	tr := newJSONRPCTransport("unused:0", "+15555550199")
+	tr.callTimeout = 50 * time.Millisecond
+
+	client, server := net.Pipe()
+	t.Cleanup(func() { _ = server.Close() })
+	tr.conn = client
+
+	start := time.Now()
+	err := tr.SendMessage(context.Background(), "+15555550100", "hi")
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected an error from a write that can never complete (no deadline would hang forever)")
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("SendMessage took %s, want it bounded by callTimeout (~50ms), not hanging indefinitely", elapsed)
+	}
+}
+
 // carrying exactly one of the messages this test sent, never a
 // corrupted merge of two.
 func TestJSONRPCTransportConcurrentSendMessageDoesNotInterleaveWrites(t *testing.T) {
@@ -739,33 +769,40 @@ func mustMarshal(v any) []byte {
 	return b
 }
 
-// TestJSONRPCTransportRunFailsFastOnUnreachableDaemon pins Run's one
-// genuinely fatal setup failure (see the package doc comment): a dial
-// that can never succeed must return promptly, not hang.
-func TestJSONRPCTransportRunFailsFastOnUnreachableDaemon(t *testing.T) {
+// TestJSONRPCTransportRunRetriesUnreachableDaemonUntilContextDone pins
+// the independent review's Important 1 fix at the dial layer: an
+// unreachable daemon must NOT make Run return (that used to be treated
+// as a fatal setup failure, which is exactly the shape Important 1
+// flagged as the wrong response to a startup-ordering race against the
+// signal-cli sidecar) — Run must keep retrying, silently from the
+// caller's point of view, until its context is cancelled, at which
+// point it returns nil (a clean, requested stop), not an error.
+func TestJSONRPCTransportRunRetriesUnreachableDaemonUntilContextDone(t *testing.T) {
 	// 127.0.0.1:1 is the reserved "no listener" TCP port — connection
 	// refused immediately, no real network dependency.
 	tr := newJSONRPCTransport("127.0.0.1:1", "+15555550199")
-	err := tr.Run(context.Background())
-	if err == nil {
-		t.Fatal("expected Run to return an error for an unreachable daemon")
-	}
-}
+	tr.backoff = 10 * time.Millisecond // keep the retry loop fast
 
-// TestJSONRPCTransportRunClosesEventsOnDialFailure pins a fix:
-// cmd/jlp/main.go calls Adapter.Start with context.Background() (never
-// cancelled), and Start's own dispatch goroutine is only released by
-// EITHER ctx.Done() OR Events() closing (ports/channels.Channel's own
-// "Events... closed once Run returns" contract). A dial failure that
-// returned early without closing t.events would leak that goroutine
-// forever, every single time the sidecar isn't reachable at boot — a
-// realistic case, since docker-compose.yml has no startup ordering
-// between the app and the signal-cli service. Reading from Events()
-// after a failed Run must return immediately with ok=false, not hang.
-func TestJSONRPCTransportRunClosesEventsOnDialFailure(t *testing.T) {
-	tr := newJSONRPCTransport("127.0.0.1:1", "+15555550199")
-	if err := tr.Run(context.Background()); err == nil {
-		t.Fatal("expected Run to return an error for an unreachable daemon")
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- tr.Run(ctx) }()
+
+	// Give it a few retry cycles' worth of time and confirm it has NOT
+	// returned — proving the dial failure was retried, not fatal.
+	select {
+	case err := <-done:
+		t.Fatalf("Run returned early (%v) on an unreachable daemon, want it to keep retrying", err)
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("Run() = %v after context cancellation, want nil", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("Run did not return after its context was cancelled")
 	}
 
 	select {
@@ -773,7 +810,163 @@ func TestJSONRPCTransportRunClosesEventsOnDialFailure(t *testing.T) {
 		if ok {
 			t.Fatal("Events() yielded a value, want the channel simply closed")
 		}
+	default:
+		t.Fatal("Events() was not closed after Run returned")
+	}
+}
+
+// TestConnectAndServeReturnsErrorOnUnrequestedDisconnect is the
+// precise regression pin for Important 1's "reported" half, at the
+// exact function boundary Run's own reconnect loop relies on:
+// connectAndServe must return a NON-NIL error whenever its read loop
+// ends on its own (ctx not done) — a connection dying, the sidecar
+// restarting — never nil. A version that silently discarded readErr
+// and returned nil there (the pre-fix shape, and the bug Important 1
+// named) would still make Run's own outer loop log something and
+// retry — Run unconditionally logs "connection lost, reconnecting"
+// whenever connectAndServe returns at all outside a ctx-done stop, so
+// a log-message-presence check alone can't tell a real error from a
+// silently-discarded one (slog's own Record carries structured attrs
+// this package's capturingHandler test double does not capture — see
+// TestJSONRPCTransportRunReportsAndRecoversFromAReadError below, which
+// intentionally only claims the weaker, but still real, "reported AND
+// recovered from" integration-level property, not this exact one).
+// This test closes that gap directly.
+func TestConnectAndServeReturnsErrorOnUnrequestedDisconnect(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		// Answer subscribeReceive normally (so connectAndServe reaches
+		// its own steady-state select instead of still being inside
+		// that synchronous call), then close — an unrequested
+		// disconnect while ctx is live.
+		scanner := bufio.NewScanner(conn)
+		if scanner.Scan() {
+			var req rpcRequest
+			if json.Unmarshal(scanner.Bytes(), &req) == nil {
+				resp, _ := json.Marshal(rpcMessage{JSONRPC: "2.0", Result: json.RawMessage(`1`), ID: &req.ID})
+				_, _ = conn.Write(append(resp, '\n'))
+			}
+		}
+		_ = conn.Close()
+	}()
+
+	tr := newJSONRPCTransport(ln.Addr().String(), "+15555550199")
+	// ctx is never cancelled — connectAndServe returning at all here
+	// can only be because the read loop ended on its own.
+	if err := tr.connectAndServe(context.Background()); err == nil {
+		t.Fatal("connectAndServe() = nil for an unrequested disconnect (ctx not done), want a non-nil error describing why")
+	}
+}
+
+// TestJSONRPCTransportRunReportsAndRecoversFromAReadError is the
+// independent review's explicit ask for Important 1's "reported AND
+// recovered from" property, at the Run/integration level: a live
+// connection loss while ctx is still active must produce a "connection
+// lost, reconnecting" log line (not silence) AND the transport must
+// actually be usable again afterward (a real reconnect, not just a
+// logged error that leaves the channel permanently dead). Precision
+// caveat: capturingHandler only records slog's Message text, not its
+// structured attrs, so this test cannot by itself distinguish a
+// genuinely-informative logged error from one whose "err" attr was
+// silently nil'd out — TestConnectAndServeReturnsErrorOnUnrequestedDisconnect
+// above pins that exact, narrower property directly. The two together
+// cover both halves: the error is real (that test) and the adapter
+// visibly logs-and-recovers from it (this one). The fake daemon below
+// accepts exactly two connections: the first is closed immediately
+// after the client's subscribeReceive call (simulating the sidecar
+// restarting or the connection otherwise dying), the second behaves
+// normally. A SendMessage call made only after the "connection lost"
+// log line appears must succeed — proof the reconnect actually
+// produced a live, usable connection, not just a log line.
+func TestJSONRPCTransportRunReportsAndRecoversFromAReadError(t *testing.T) {
+	handler := &capturingHandler{}
+	prev := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	defer slog.SetDefault(prev)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+
+	var acceptN atomic.Int32
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			n := acceptN.Add(1)
+			if n == 1 {
+				// First connection: answer the client's initial
+				// subscribeReceive call normally — so connectAndServe
+				// reaches its own steady-state select instead of still
+				// being blocked inside that synchronous call — THEN
+				// close the connection, modelling a sidecar that was
+				// live and then restarted, the realistic disconnect
+				// case (as opposed to dying mid-handshake, which
+				// connectAndServe can only notice once the in-flight
+				// subscribeReceive call itself times out — a real but
+				// separate, narrower gap this test isn't targeting).
+				scanner := bufio.NewScanner(conn)
+				if scanner.Scan() {
+					var req rpcRequest
+					if json.Unmarshal(scanner.Bytes(), &req) == nil {
+						resp, _ := json.Marshal(rpcMessage{JSONRPC: "2.0", Result: json.RawMessage(`1`), ID: &req.ID})
+						_, _ = conn.Write(append(resp, '\n'))
+					}
+				}
+				_ = conn.Close()
+				continue
+			}
+			// Second (and any later) connection: a normal, cooperative
+			// daemon — reply to every request with a bare success.
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				scanner := bufio.NewScanner(c)
+				for scanner.Scan() {
+					var req rpcRequest
+					if json.Unmarshal(scanner.Bytes(), &req) != nil {
+						continue
+					}
+					resp, _ := json.Marshal(rpcMessage{JSONRPC: "2.0", Result: json.RawMessage(`{}`), ID: &req.ID})
+					_, _ = c.Write(append(resp, '\n'))
+				}
+			}(conn)
+		}
+	}()
+
+	tr := newJSONRPCTransport(ln.Addr().String(), "+15555550199")
+	tr.backoff = 10 * time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	runDone := make(chan error, 1)
+	go func() { runDone <- tr.Run(ctx) }()
+
+	// Reported: wait for the "connection lost, reconnecting" log line —
+	// this is the independent review's Important 1 requirement that a
+	// read error must not be silently swallowed.
+	waitFor(t, func() bool { return handler.hasMessageContaining("connection lost") })
+
+	// Recovered: the transport must now be usable again against the
+	// SECOND connection, not permanently dead.
+	waitFor(t, func() bool {
+		return tr.SendMessage(context.Background(), "+15555550100", "hi") == nil
+	})
+
+	cancel()
+	select {
+	case <-runDone:
 	case <-time.After(2 * time.Second):
-		t.Fatal("Events() did not close after a failed dial — a dispatch goroutine reading it would leak forever")
+		t.Fatal("Run did not return after its context was cancelled")
 	}
 }
