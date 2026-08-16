@@ -33,6 +33,19 @@
   </div>
 
   <h2>復習キュー</h2>
+  {{/* Whole-branch review C-1, the functional half: the scheduler is
+       driven by correction.retried / quiz.answered /
+       vocabulary.produced-correctly, and a conversation correction has
+       no retry route, so a grammar concept the learner got wrong IN
+       SPEECH is never scheduled here. Vocabulary IS covered (the
+       conversation path does publish vocabulary.produced-correctly),
+       which is exactly what makes the grammar hole easy to misread as
+       "nothing due". Said plainly rather than left to be inferred from
+       an empty table. */}}
+  <p class="description">
+    復習予定は、<strong>添削・クイズ・語彙の正用</strong>から作られます。会話練習と音声練習で指摘された<strong>文法</strong>は、
+    まだこのキューには入りません（語彙は入ります）。
+  </p>
   <div class="table-card table-card--stack">
     <table>
       <thead><tr><th>対象</th><th>種類</th><th>期日</th><th>間隔</th></tr></thead>

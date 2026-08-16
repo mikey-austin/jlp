@@ -112,6 +112,43 @@ func TestGrammarListRendersStatRow(t *testing.T) {
 	}
 }
 
+// TestGrammarPagesDiscloseTheConversationExclusion pins whole-branch
+// review C-1's honesty half. Both grammar surfaces read
+// correction_concepts; a conversation turn's corrections are persisted
+// as jsonb on conversation_turns and never reach those tables. So a
+// concept the tutor corrected out loud renders 「未遭遇 / 遭遇回数 0」on
+// the list and an empty 最近の訂正 table on the detail page — a page
+// answering "never" to a question whose true answer is "eleven times".
+//
+// /outcomes already discloses exactly this exclusion
+// (outcomes.html.tmpl); these two pages inherited the gap without the
+// disclosure. Asserted on the substantive claims, not on a whole
+// sentence, so rewording the copy doesn't break the test but deleting
+// the disclosure does.
+func TestGrammarPagesDiscloseTheConversationExclusion(t *testing.T) {
+	opts := grammarTestOptions()
+	repo := opts.Grammar.(*fakeGrammarPagesRepo)
+	repo.stats = []storage.ConceptStat{
+		{Slug: "i-adjective-past", Name: "い-adjective past tense", JLPTLevel: 5, Encounters: 0},
+	}
+	repo.concepts["i-adjective-past"] = grammar.Concept{Slug: "i-adjective-past", Name: "い-adjective past tense", JLPTLevel: 5}
+	srv := NewServer(opts)
+
+	for _, path := range []string{"/grammar", "/grammar/i-adjective-past"} {
+		rec := httptest.NewRecorder()
+		srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200, body=%s", path, rec.Code, rec.Body.String())
+		}
+		body := rec.Body.String()
+		for _, want := range []string{"添削", "会話練習", "音声練習", "含まれません"} {
+			if !strings.Contains(body, want) {
+				t.Errorf("GET %s never discloses that conversation/speech corrections are excluded (missing %q): %s", path, want, body)
+			}
+		}
+	}
+}
+
 func TestGrammarListRepositoryErrorReturns500(t *testing.T) {
 	opts := grammarTestOptions()
 	opts.Grammar.(*fakeGrammarPagesRepo).statsErr = context.DeadlineExceeded

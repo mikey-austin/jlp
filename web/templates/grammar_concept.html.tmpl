@@ -14,6 +14,15 @@
   <p class="concepts">{{range .Concept.Prerequisites}}<a class="chip" href="/grammar/{{.}}">{{.}}</a>{{end}}</p>{{end}}
 
   <h2>最近の訂正</h2>
+  {{/* Whole-branch review C-1 — same exclusion as the /grammar list and
+       /outcomes: this table reads correction_concepts, and a
+       conversation turn's corrections live as jsonb on
+       conversation_turns instead, so an empty table here does not mean
+       the learner has never been corrected on this concept. */}}
+  <p class="description">
+    <strong>添削に出した文章</strong>の訂正だけを表示しています。会話練習と音声練習で指摘された内容は別の場所に記録されるため、
+    ここには含まれません。
+  </p>
   <div class="table-card">
     <table>
       <thead><tr><th>原文</th><th>訂正</th><th>種類</th><th>重大度</th><th>状態</th></tr></thead>

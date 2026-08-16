@@ -142,6 +142,29 @@ func TestLearnerPageRendersPriorityAndObservationRows(t *testing.T) {
 	}
 }
 
+// TestLearnerReviewQueueDisclosesTheSpokenGrammarGap pins whole-branch
+// review C-1's functional half. Task 7's scheduler subscribes to
+// quiz.answered / correction.retried / vocabulary.produced-correctly; a
+// conversation correction has no retry route at all, so
+// correction.retried can never fire for one and a grammar concept the
+// learner got wrong IN SPEECH is never scheduled. Vocabulary IS covered
+// through the same conversation path, which is precisely what makes the
+// grammar hole look like a working feature with nothing due.
+func TestLearnerReviewQueueDisclosesTheSpokenGrammarGap(t *testing.T) {
+	srv := NewServer(learnerTestOptions())
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /learner status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+	for _, want := range []string{"復習キュー", "会話練習", "音声練習", "文法"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("/learner's review queue never says spoken grammar isn't scheduled (missing %q): %s", want, body)
+		}
+	}
+}
+
 func TestLearnerPagePrioritiesRepositoryErrorReturns500(t *testing.T) {
 	opts := learnerTestOptions()
 	opts.Priorities.(*fakeLearnerPriorityRepo).topErr = context.DeadlineExceeded

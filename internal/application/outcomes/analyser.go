@@ -403,6 +403,21 @@ func headline(rep Report) string {
 	}
 
 	switch {
+	case judged > 0 && len(rep.Improving) == 0 && len(rep.Persistent) == 0:
+		// Retired-only. "1 concept retired, 0 improving, 0 still
+		// recurring" reads as three measurements, two of which came back
+		// empty — but retirement is the one verdict that needs no recent
+		// activity at all ("≥3 corrections then 60 silent days"), so the
+		// two zeros are almost always an absence of MEASUREMENT, not a
+		// measured absence of improvement. That is the same honesty bug
+		// the all-excluded branch below already works hard to avoid, on
+		// the same page; this branch borrows its fix. The retirement
+		// itself is a real finding and is still reported.
+		c := countOf(len(rep.Retired), "concept") + " retired; no other concept could be judged yet"
+		if n := len(rep.Excluded); n > 0 {
+			c += fmt.Sprintf(", %d excluded for insufficient data", n)
+		}
+		clauses = append(clauses, c)
 	case judged > 0:
 		c := fmt.Sprintf("%s retired, %d improving, %d still recurring",
 			countOf(len(rep.Retired), "concept"), len(rep.Improving), len(rep.Persistent))

@@ -450,7 +450,7 @@ func TestRetiredCountsCarryAnInactivityCaveat(t *testing.T) {
 	repo := &fakeOutcomeRepo{concepts: concepts, fading: zeroFilledFading(8)}
 
 	want := "Less than 1,000 characters were submitted for review in the last 30 days (counted by whole weeks); " +
-		"12 concepts retired, 0 improving, 0 still recurring."
+		"12 concepts retired; no other concept could be judged yet."
 	if got := report(t, repo).Headline; got != want {
 		t.Fatalf("Headline =\n  %q\nwant\n  %q", got, want)
 	}
@@ -500,6 +500,42 @@ func fadingFrom(runes, corrections []int) []storage.WeeklyRate {
 	return out
 }
 
+// TestRetiredOnlyHeadlineDoesNotReportUnmeasuredZeros pins whole-branch
+// review F10 (Task 9 M5). "1 concept retired, 0 improving, 0 still
+// recurring" presents three measurements, two of them empty — but
+// retirement is the one verdict that needs no recent activity at all
+// (the rule is "≥3 corrections then 60 silent days"), so a retired-only
+// report almost always means nothing else could be measured, not that
+// nothing improved. The all-excluded branch on this same page already
+// omits its counts for exactly this reason; this pins that the
+// retired-only branch does too.
+//
+// The counts are still available on the page's own stat tiles — this is
+// about what the ONE-SENTENCE headline asserts.
+func TestRetiredOnlyHeadlineDoesNotReportUnmeasuredZeros(t *testing.T) {
+	fading := zeroFilledFading(8)
+	fading[7].Runes = 10000
+	fading[7].Corrections = 34
+	repo := &fakeOutcomeRepo{
+		concepts: []storage.ConceptOutcome{
+			conceptOutcome("r1", 200*day, 90*day, 4, 4, 0),
+			conceptOutcome("r2", 200*day, 90*day, 4, 4, 0),
+		},
+		fading: fading,
+	}
+	rep := report(t, repo)
+	if len(rep.Retired) == 0 || len(rep.Improving) != 0 || len(rep.Persistent) != 0 {
+		t.Fatalf("precondition failed: want retired-only, got retired=%d improving=%d persistent=%d",
+			len(rep.Retired), len(rep.Improving), len(rep.Persistent))
+	}
+	if strings.Contains(rep.Headline, "0 improving") || strings.Contains(rep.Headline, "0 still recurring") {
+		t.Fatalf("retired-only headline states unmeasured zeros as findings: %q", rep.Headline)
+	}
+	if !strings.Contains(rep.Headline, "2 concepts retired") {
+		t.Fatalf("retired-only headline dropped the retirement, which IS a real finding: %q", rep.Headline)
+	}
+}
+
 func TestHeadlineUsesSingularNounForOneConcept(t *testing.T) {
 	// One measurable week (so no fading clause) but enough recent
 	// writing that no inactivity caveat applies either — leaving the
@@ -511,7 +547,7 @@ func TestHeadlineUsesSingularNounForOneConcept(t *testing.T) {
 		concepts: []storage.ConceptOutcome{conceptOutcome("r1", 200*day, 90*day, 4, 4, 0)},
 		fading:   fading,
 	}
-	want := "1 concept retired, 0 improving, 0 still recurring."
+	want := "1 concept retired; no other concept could be judged yet."
 	if got := report(t, repo).Headline; got != want {
 		t.Fatalf("Headline = %q, want %q", got, want)
 	}

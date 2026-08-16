@@ -1,5 +1,19 @@
 {{define "content"}}<section class="grammar">
   <h1>文法</h1>
+  {{/* Whole-branch review C-1. A conversation turn's corrections are
+       stored as jsonb on conversation_turns, not as rows in
+       correction_concepts, and this page counts correction_concepts —
+       so a concept the tutor corrected out loud eleven times reads
+       「未遭遇 / 遭遇回数 0」here. That is a FALSE answer to the page's
+       own question, not merely a missing one, and this is the same
+       exclusion /outcomes already discloses (outcomes.html.tmpl) —
+       the wording is deliberately kept close to it so a learner reading
+       both pages meets one consistent statement. */}}
+  <p class="description">
+    ここの<strong>遭遇回数</strong>は、<strong>添削に出した文章</strong>だけを数えています。会話練習と音声練習で指摘された文法は
+    別の場所に記録されるため、ここには含まれません。「未遭遇」は「一度も出てきていない」ではなく
+    「添削では記録がない」という意味です。
+  </p>
   <div class="table-card table-card--stack">
     <table>
       <thead><tr><th>名前</th><th>JLPT</th><th>遭遇回数</th><th>最終確認</th></tr></thead>
