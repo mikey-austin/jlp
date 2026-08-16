@@ -14,6 +14,19 @@
         {{end}}
       </div>
 
+      {{if not $row.Available}}
+      {{/* Whole-branch review I-2: this process built no generator for
+           this provider, so every control below would write an override
+           that no request could ever reach — a success-shaped no-op
+           behind a 303 and an "override" badge. The row is kept (an
+           operator who set APP_AI_OLLAMA_MODEL and still doesn't see
+           Ollama deserves to know why it isn't offered) but carries no
+           controls except 設定に戻す above, which stays reachable so a
+           stale override from an earlier deployment can still be
+           cleared. See settings.Row.Available. */}}
+      <p class="hint">この配備では構成されていないため変更できません。現在の設定値は{{if $row.Model}}「{{$row.Model}}」{{else}}未設定{{end}}です。有効にするには起動時の環境変数（APP_AI_*）を設定して再起動してください。</p>
+      {{else}}
+
       {{if $row.ModelOptions}}
       <form method="post" action="/settings/{{$row.Provider}}/model" class="settings-form">
         <label class="field">モデル
@@ -59,6 +72,8 @@
         <button type="submit" class="btn btn--sm">保存</button>
       </form>
       {{end}}
+
+      {{end}}{{/* not $row.Available */}}
     </section>{{end}}
   </div>
 </section>{{end}}

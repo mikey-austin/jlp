@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log/slog"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
 	"github.com/mikeyaustin/jlp/internal/adapters/agycli"
 	"github.com/mikeyaustin/jlp/internal/adapters/airouter"
 	"github.com/mikeyaustin/jlp/internal/adapters/anthropic"
@@ -66,7 +67,12 @@ func aiPricing() map[string]observability.ModelPricing {
 // new prompt name; forgetting to is harmless on its own (see
 // warnForUnknownPromptNames below — it only warns, never errors) but
 // leaves a future operator's typo undetected.
-var knownPromptNames = []string{
+// The A2A adapter's own prompt names are APPENDED from
+// a2a.PromptNames() rather than spelled out here — see
+// knownToolPromptNames below for what going without them cost
+// (whole-branch review I-4), and a2a.PromptNames' own doc comment for
+// why deriving beats duplicating.
+var knownPromptNames = append([]string{
 	"teacher.feedback",
 	"drill.generate",
 	"drill.evaluate",
@@ -82,7 +88,7 @@ var knownPromptNames = []string{
 	// know this route is buildToolCaller's business, not
 	// buildAIGenerator's.
 	"teacher.agentic",
-}
+}, a2a.PromptNames()...)
 
 // knownToolPromptNames is every prompt name a route can name for TOOL
 // CALLING specifically (buildToolCaller below) — a much narrower list
@@ -99,9 +105,21 @@ var knownPromptNames = []string{
 // a tool-calling route just because it's present in the same string —
 // claudecli doesn't implement ai.ToolCaller, and "teacher.feedback"
 // was never a tool-calling prompt name to begin with.
-var knownToolPromptNames = []string{
+//
+// The four "a2a.<skill>" names are appended from a2a.PromptNames():
+// every A2A skill runs through agentrun.Runner with that PromptName and
+// airouter's TOOL router routes on exactly that field, so they are
+// legitimate tool-calling route keys. They were in neither list until
+// the whole-branch review (I-4), which meant an operator setting
+// APP_AI_ROUTES=a2a.chat=anthropic was both WARNED that their prompt
+// name was an unknown typo AND had the route silently skipped here, so
+// every A2A request still went to APP_AI_PROVIDER — the same failure
+// Task 2's bb3878d fix closed, re-created from the other side. Derived
+// rather than restated so the two lists cannot drift from the adapter
+// again.
+var knownToolPromptNames = append([]string{
 	"teacher.agentic",
-}
+}, a2a.PromptNames()...)
 
 // unknownPromptNames returns every key of routes absent from
 // knownPromptNames. Split out from warnForUnknownPromptNames so a test

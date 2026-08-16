@@ -396,6 +396,60 @@ func TestAgentCardSkillsAreSpecShaped(t *testing.T) {
 	}
 }
 
+// TestAgentCardDescriptionMatchesRealToolAccess pins whole-branch
+// review I-3: the card's prose must agree with its own `tool:` tags.
+//
+// The mechanism already degraded honestly — a skill whose agent has no
+// allowlist gets no tool: tags and runs on SystemWithoutTools — but the
+// DESCRIPTION was a static string promising a result produced "after
+// investigating the learner's history through the … agent's permitted
+// tools". A remote client reading "Lesson Planner" expected a
+// history-informed plan and got prose derived from its own message.
+//
+// Asserted against the two groups this test server deliberately
+// configures differently (see newTestServer), so it stays true when the
+// summary/lesson allowlists are eventually granted: a tool-less skill
+// must say so and must NOT promise investigation; a tool-bearing skill
+// must not carry the "NO tool access" disclaimer.
+func TestAgentCardDescriptionMatchesRealToolAccess(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	card := cardOf(t, srv.Routes())
+
+	raw, err := json.Marshal(card["skills"])
+	if err != nil {
+		t.Fatalf("re-marshal skills: %v", err)
+	}
+	var skills []struct {
+		ID          string   `json:"id"`
+		Description string   `json:"description"`
+		Tags        []string `json:"tags"`
+	}
+	if err := json.Unmarshal(raw, &skills); err != nil {
+		t.Fatalf("unmarshal skills: %v", err)
+	}
+
+	for _, sk := range skills {
+		hasTools := false
+		for _, tg := range sk.Tags {
+			if strings.HasPrefix(tg, "tool:") {
+				hasTools = true
+			}
+		}
+		promisesTools := strings.Contains(sk.Description, "permitted tools") ||
+			strings.Contains(sk.Description, "investigating")
+		disclaimsTools := strings.Contains(sk.Description, "NO tool access")
+
+		switch {
+		case hasTools && disclaimsTools:
+			t.Errorf("%s has tool: tags but its description disclaims tool access: %q", sk.ID, sk.Description)
+		case !hasTools && promisesTools:
+			t.Errorf("%s has NO tool: tags but its description promises tool-backed investigation: %q", sk.ID, sk.Description)
+		case !hasTools && !disclaimsTools:
+			t.Errorf("%s has NO tool: tags and its description never says so — a caller cannot tell from the prose: %q", sk.ID, sk.Description)
+		}
+	}
+}
+
 // ---------------------------------------------------------------------
 // SendMessage
 // ---------------------------------------------------------------------

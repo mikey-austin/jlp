@@ -49,6 +49,14 @@ func (r *fakeRepo) List(_ context.Context) ([]storage.AppSetting, error) {
 	return out, nil
 }
 
+// allProviders is what Rows' `constructed` argument is given by the
+// tests that are about something OTHER than availability — every
+// catalogued provider present, i.e. "this deployment built them all",
+// so Row.Available is true everywhere and those tests keep testing what
+// they were written to test. TestRowsMarksProvidersThisProcessNeverBuilt
+// covers the filter itself.
+var allProviders = []string{"ollama", "anthropic", "claudecli", "codexcli", "agycli"}
+
 func baseAICfg() config.AI {
 	return config.AI{
 		Ollama:    config.Ollama{Model: "gemma4:12b"},
@@ -280,7 +288,7 @@ func TestRowsReportsSourceAndEffortOptions(t *testing.T) {
 	svc, _ := newTestService(t, cfg)
 	ctx := context.Background()
 
-	rows := svc.Rows(context.Background())
+	rows := svc.Rows(context.Background(), allProviders)
 	byProvider := map[string]settings.Row{}
 	for _, r := range rows {
 		byProvider[r.Provider] = r
@@ -311,7 +319,7 @@ func TestRowsReportsSourceAndEffortOptions(t *testing.T) {
 	if err := svc.SetModel(ctx, "ollama", "gemma4:latest"); err != nil {
 		t.Fatalf("SetModel: %v", err)
 	}
-	rows = svc.Rows(context.Background())
+	rows = svc.Rows(context.Background(), allProviders)
 	for _, r := range rows {
 		if r.Provider == "ollama" && r.ModelSource != "override" {
 			t.Errorf("ollama row ModelSource after SetModel = %q, want override", r.ModelSource)
@@ -345,7 +353,7 @@ func TestModelIsSafeForConcurrentReadsAndWrites(t *testing.T) {
 				default:
 					svc.Model("ollama")
 					svc.Model("claudecli")
-					svc.Rows(context.Background())
+					svc.Rows(context.Background(), allProviders)
 				}
 			}
 		}()
@@ -374,7 +382,7 @@ func TestRowsPopulatesModelOptionsFromLister(t *testing.T) {
 	lister := &fakeLister{Models: []string{"gemma4:12b", "gemma4:latest"}}
 	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
 
-	rows := svc.Rows(context.Background())
+	rows := svc.Rows(context.Background(), allProviders)
 	var ollama settings.Row
 	for _, r := range rows {
 		if r.Provider == "ollama" {
@@ -403,7 +411,7 @@ func TestRowsAlwaysIncludesCurrentValueEvenIfListerOmitsIt(t *testing.T) {
 		t.Fatalf("SetModel: %v", err)
 	}
 
-	rows := svc.Rows(context.Background())
+	rows := svc.Rows(context.Background(), allProviders)
 	var ollama settings.Row
 	for _, r := range rows {
 		if r.Provider == "ollama" {
@@ -434,7 +442,7 @@ func TestRowsDegradesToFreeTextOnListerError(t *testing.T) {
 	lister := &fakeLister{Err: errors.New("dial tcp: connection refused")}
 	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
 
-	rows := svc.Rows(context.Background())
+	rows := svc.Rows(context.Background(), allProviders)
 	var ollama settings.Row
 	for _, r := range rows {
 		if r.Provider == "ollama" {
@@ -465,9 +473,9 @@ func TestRowsCachesSuccessfulEnumeration(t *testing.T) {
 	lister := &fakeLister{Models: []string{"gemma4:12b"}}
 	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
 
-	svc.Rows(context.Background())
-	svc.Rows(context.Background())
-	svc.Rows(context.Background())
+	svc.Rows(context.Background(), allProviders)
+	svc.Rows(context.Background(), allProviders)
+	svc.Rows(context.Background(), allProviders)
 
 	if got := lister.callCount(); got != 1 {
 		t.Errorf("lister.Calls = %d, want 1 (second/third Rows() should have served the cache)", got)
@@ -483,8 +491,8 @@ func TestRowsNeverCachesAFailedEnumeration(t *testing.T) {
 	lister := &fakeLister{Err: errors.New("connection refused")}
 	svc, _ := newTestServiceWithListers(t, cfg, map[string]ai.ModelLister{"ollama": lister})
 
-	svc.Rows(context.Background())
-	svc.Rows(context.Background())
+	svc.Rows(context.Background(), allProviders)
+	svc.Rows(context.Background(), allProviders)
 
 	if got := lister.callCount(); got != 2 {
 		t.Errorf("lister.Calls = %d, want 2 (a failed attempt must never be cached)", got)
@@ -499,7 +507,7 @@ func TestRowsNeverCachesAFailedEnumeration(t *testing.T) {
 // Neither ever consults a ModelLister (none is even offered here).
 func TestRowsClaudeCLIOffersAliasesNotEnumeration(t *testing.T) {
 	svc, _ := newTestService(t, baseAICfg())
-	rows := svc.Rows(context.Background())
+	rows := svc.Rows(context.Background(), allProviders)
 
 	var claude settings.Row
 	for _, r := range rows {
@@ -520,7 +528,7 @@ func TestRowsClaudeCLIOffersAliasesNotEnumeration(t *testing.T) {
 
 func TestRowsCodexCLIHasNoteButNoOptionsOrAliases(t *testing.T) {
 	svc, _ := newTestService(t, baseAICfg())
-	rows := svc.Rows(context.Background())
+	rows := svc.Rows(context.Background(), allProviders)
 
 	var codex settings.Row
 	for _, r := range rows {
@@ -536,5 +544,72 @@ func TestRowsCodexCLIHasNoteButNoOptionsOrAliases(t *testing.T) {
 	}
 	if codex.ModelNote == "" {
 		t.Error("codexcli.ModelNote is empty, want an explanation that the list isn't available")
+	}
+}
+
+// TestRowsMarksProvidersThisProcessNeverBuilt pins whole-branch review
+// I-2 at the application layer: a provider absent from the constructed
+// list must come back Available=false, and one present must come back
+// true — regardless of whether its model list enumerated, since a live
+// ModelLister is exactly what made this bug convincing (main.go builds
+// all three listers unconditionally, independent of the generators, so
+// /settings offered a real, freshly-enumerated Ollama dropdown for an
+// adapter that was not in the process).
+func TestRowsMarksProvidersThisProcessNeverBuilt(t *testing.T) {
+	svc, _ := newTestServiceWithListers(t, baseAICfg(), map[string]ai.ModelLister{
+		"ollama": &fakeLister{Models: []string{"gemma4:12b", "qwen3.6:latest"}},
+	})
+
+	// A deployment that constructed only the fake provider and claudecli.
+	rows := svc.Rows(context.Background(), []string{"fake", "claudecli"})
+
+	want := map[string]bool{
+		"ollama": false, "anthropic": false, "claudecli": true,
+		"codexcli": false, "agycli": false,
+	}
+	seen := map[string]bool{}
+	for _, r := range rows {
+		seen[r.Provider] = true
+		if r.Available != want[r.Provider] {
+			t.Errorf("%s.Available = %v, want %v", r.Provider, r.Available, want[r.Provider])
+		}
+		if r.Provider == "ollama" && len(r.ModelOptions) == 0 {
+			t.Error("ollama still enumerated — the row must stay informative, only its controls go away")
+		}
+	}
+	for p := range want {
+		if !seen[p] {
+			t.Errorf("provider %s missing from Rows — an unavailable provider must still be reported, not dropped", p)
+		}
+	}
+
+	// An empty constructed list marks everything unavailable: the safe
+	// direction for a caller that hasn't wired this yet.
+	for _, r := range svc.Rows(context.Background(), nil) {
+		if r.Available {
+			t.Errorf("%s.Available = true with no constructed providers at all", r.Provider)
+		}
+	}
+}
+
+// TestIsAvailableAgreesWithRows keeps the write path's guard and the
+// read path's rendering from ever disagreeing about what "available"
+// means — the two halves of I-2's fix.
+func TestIsAvailableAgreesWithRows(t *testing.T) {
+	svc, _ := newTestService(t, baseAICfg())
+	constructed := []string{"fake", "ollama"}
+
+	for _, r := range svc.Rows(context.Background(), constructed) {
+		if got := svc.IsAvailable(r.Provider, constructed); got != r.Available {
+			t.Errorf("IsAvailable(%q) = %v but Rows reported Available = %v", r.Provider, got, r.Available)
+		}
+	}
+	// A name that isn't an overridable provider is never "available",
+	// even when something puts it in the constructed list.
+	if svc.IsAvailable("fake", constructed) {
+		t.Error(`IsAvailable("fake") = true — "fake" is a generator, not an overridable provider in this catalog`)
+	}
+	if svc.IsAvailable("nonsense", []string{"nonsense"}) {
+		t.Error(`IsAvailable("nonsense") = true, want false`)
 	}
 }

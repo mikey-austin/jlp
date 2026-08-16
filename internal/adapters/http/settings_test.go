@@ -78,6 +78,13 @@ func settingsTestOptionsWithListers(t *testing.T, listers map[string]ai.ModelLis
 	}
 	opts := testOptions()
 	opts.Settings = svc
+	// AIProviders is the truthful list of generators cmd/jlp actually
+	// constructed, and since whole-branch review I-2 it gates whether a
+	// /settings row renders controls at all (settings.Row.Available).
+	// The existing tests here are about the override MECHANICS, so they
+	// need every catalogued provider present; the availability filter
+	// itself has its own tests below.
+	opts.AIProviders = []string{"fake", "ollama", "anthropic", "claudecli", "codexcli", "agycli"}
 	return opts, repo
 }
 
@@ -314,5 +321,54 @@ func TestSettingsPageOffersClaudeCLIAliasesAndFreeText(t *testing.T) {
 	}
 	if !strings.Contains(body, "not enumerated") {
 		t.Errorf("GET /settings body missing the claudecli \"not enumerated\" note: %s", body)
+	}
+}
+
+// TestSettingsPageOffersNoControlsForProvidersThisProcessNeverBuilt is
+// the user-visible half of whole-branch review I-2. The setup is the
+// real reported one: a host running Ollama (so the ModelLister works and
+// enumerates) with no Ollama GENERATOR in the process. Before the fix
+// the page rendered a fully populated, live-enumerated Ollama dropdown
+// and a 保存 button; saving returned 303 and flipped the badge to
+// "override", and no request could ever reach Ollama.
+func TestSettingsPageOffersNoControlsForProvidersThisProcessNeverBuilt(t *testing.T) {
+	opts, _ := settingsTestOptionsWithListers(t, map[string]ai.ModelLister{
+		"ollama": &fakeLister{models: []string{"gemma4:12b", "qwen3.6:latest"}},
+	})
+	opts.AIProviders = []string{"fake", "claudecli"} // no ollama generator
+	srv := NewServer(opts)
+
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /settings status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+
+	if strings.Contains(body, `action="/settings/ollama/model"`) {
+		t.Errorf("GET /settings still renders a save form for a provider this process never built: %s", body)
+	}
+	if !strings.Contains(body, `action="/settings/claudecli/model"`) {
+		t.Errorf("GET /settings dropped the form for claudecli, which IS constructed: %s", body)
+	}
+	if !strings.Contains(body, "この配備では構成されていない") {
+		t.Errorf("GET /settings never explains why Ollama has no controls: %s", body)
+	}
+
+	// The route stays reachable (stale tab, curl), so it must reject
+	// rather than write-and-303 — a 303 here is the silent no-op.
+	form := url.Values{"model": {"qwen3.6:latest"}}
+	post := httptest.NewRequest(http.MethodPost, "/settings/ollama/model", strings.NewReader(form.Encode()))
+	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	postRec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(postRec, post)
+	if postRec.Code == http.StatusSeeOther {
+		t.Fatalf("POST /settings/ollama/model = 303 — the override was accepted for a provider that can never serve it")
+	}
+	if postRec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("POST /settings/ollama/model status = %d, want 422", postRec.Code)
+	}
+	if model, _ := opts.Settings.Model("ollama"); model != "gemma4:12b" {
+		t.Errorf("rejected override was still persisted: Model(ollama) = %q, want the config value", model)
 	}
 }

@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
@@ -254,6 +255,49 @@ func TestUnknownPromptNamesDoesNotFlagTeacherAgentic(t *testing.T) {
 	routed := map[string][]string{"teacher.agentic": {"anthropic"}}
 	if got := unknownPromptNames(routed); len(got) != 0 {
 		t.Errorf("unknownPromptNames(teacher.agentic routed) = %v, want empty — this is a real tool-calling route, not a typo", got)
+	}
+}
+
+// TestA2APromptNamesAreNeitherWarnedAboutNorSilentlyDropped pins
+// whole-branch review I-4, in both of its halves. Every A2A skill runs
+// through agentrun.Runner with PromptName = "a2a.<skill>" and airouter's
+// tool router routes on exactly that field, so those are legitimate
+// APP_AI_ROUTES keys. Until this fix they appeared in NEITHER
+// knownPromptNames (so warnForUnknownPromptNames called a correct
+// config a typo at boot) NOR knownToolPromptNames (so buildToolCaller
+// skipped the route entirely and every A2A request went to
+// APP_AI_PROVIDER regardless). That is the failure Task 2's bb3878d fix
+// closed, re-created from the other side.
+//
+// The second half is asserted BEHAVIOURALLY rather than by reading the
+// slice: routing an a2a prompt name at a provider that is not an
+// ai.ToolCaller must now be a boot ERROR. A skipped route produces no
+// error at all, so this half fails against the old code for the right
+// reason — the route is being resolved, not ignored.
+//
+// Driven off a2a.PromptNames() rather than a literal list so a skill
+// added later is covered here automatically.
+func TestA2APromptNamesAreNeitherWarnedAboutNorSilentlyDropped(t *testing.T) {
+	names := a2a.PromptNames()
+	if len(names) == 0 {
+		t.Fatal("a2a.PromptNames() is empty — this test would be vacuous")
+	}
+
+	for _, name := range names {
+		routed := map[string][]string{name: {"anthropic"}}
+		if got := unknownPromptNames(routed); len(got) != 0 {
+			t.Errorf("unknownPromptNames(%s routed) = %v, want empty — this is a real A2A route, not a typo", name, got)
+		}
+
+		cfg := baseCfg()
+		// claudecli is a valid buildAIGenerator provider but is NOT an
+		// ai.ToolCaller, so a tool-calling route naming it can only be
+		// resolved (→ error) or skipped (→ nil). Nil means the route was
+		// dropped.
+		cfg.AI.Routes = name + "=claudecli"
+		if _, err := buildToolCaller(cfg, &memRepo{}, nil); err == nil {
+			t.Errorf("buildToolCaller(%s=claudecli) = nil error — the route was silently ignored instead of resolved", name)
+		}
 	}
 }
 

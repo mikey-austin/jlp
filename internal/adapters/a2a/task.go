@@ -26,7 +26,28 @@ import (
 // just hands the runner a System string directly, same shape, own
 // identity in the trace.
 type skillDef struct {
-	Name, Description string
+	Name string
+	// Description/DescriptionWithoutTools are the two card descriptions
+	// descriptionFor chooses between at serve time, exactly as
+	// SystemWithTools/SystemWithoutTools work for the prompt.
+	//
+	// Whole-branch review I-3: Description alone used to be a static
+	// string promising a result produced "after investigating the
+	// learner's history through the … agent's permitted tools" — for
+	// analyse_learner and plan_lesson, whose agents ("summary"/"lesson")
+	// cmd/jlp/main.go has Allow()ed nothing, that promise cannot be
+	// kept. The MECHANISM already degraded honestly (empty allowlist →
+	// no `tool:` tags → SystemWithoutTools); only the advertisement
+	// didn't follow, so a remote client read "Lesson Planner", expected
+	// a history-informed plan, and got prose derived from its own
+	// message. An agent card is a contract with strangers.
+	//
+	// Chosen at serve time off the LIVE registry rather than corrected
+	// as two literals, so granting those allowlists later fixes the card
+	// in the same commit as the grant instead of needing a second one —
+	// and so the card can never again claim a capability the process
+	// does not have.
+	Description, DescriptionWithoutTools string
 	// Tags/Examples are the A2A card's own discovery fields (spec
 	// AgentSkill): keywords a remote agent can match on, and example
 	// prompts showing what this skill expects. card.go appends the live
@@ -80,9 +101,10 @@ var skillOrder = []string{"chat", "review_writing", "analyse_learner", "plan_les
 // summary, internal/agent/lesson), plus the conversational default.
 var skillDefs = map[string]skillDef{
 	"chat": {
-		Name:        "Japanese Tutor Chat",
-		Description: "Answers a free-text question about Japanese — grammar, vocabulary, usage, or the learner's own progress — as a conversational tutor. This is what a message with no explicitly selected skill is handled as.",
-		Tags:        []string{"japanese", "chat", "tutor", "conversation", "default"},
+		Name:                    "Japanese Tutor Chat",
+		Description:             "Answers a free-text question about Japanese — grammar, vocabulary, usage, or the learner's own progress — as a conversational tutor, consulting the learner's own history through this agent's permitted tools where that makes the answer more useful. This is what a message with no explicitly selected skill is handled as.",
+		DescriptionWithoutTools: "Answers a free-text question about Japanese — grammar, vocabulary, usage, or study advice — as a conversational tutor, from the message alone. This skill currently has NO tool access, so it cannot consult the learner's own history. This is what a message with no explicitly selected skill is handled as.",
+		Tags:                    []string{"japanese", "chat", "tutor", "conversation", "default"},
 		Examples: []string{
 			"「は」と「が」の違いを教えてください。",
 			"How do I use the て-form to link two actions?",
@@ -95,9 +117,10 @@ var skillDefs = map[string]skillDef{
 		SystemWithoutTools: "You are JLP's Japanese tutor, talking to your learner. You have no tools available for this task right now, so answer their message directly and conversationally from the message alone.",
 	},
 	"review_writing": {
-		Name:        "Writing Reviewer",
-		Description: "Reviews a piece of Japanese writing and reports corrections and feedback, after investigating the learner's own history through the Teacher agent's permitted tools.",
-		Tags:        []string{"japanese", "writing", "review", "correction", "feedback"},
+		Name:                    "Writing Reviewer",
+		Description:             "Reviews a piece of Japanese writing and reports corrections and feedback, after investigating the learner's own history through the Teacher agent's permitted tools.",
+		DescriptionWithoutTools: "Reviews a piece of Japanese writing and reports corrections and feedback, from the submitted text alone. This skill currently has NO tool access, so the review is not informed by the learner's own history.",
+		Tags:                    []string{"japanese", "writing", "review", "correction", "feedback"},
 		Examples: []string{
 			"友達と映画を見ました。とても面白いでした。",
 			"Review this paragraph and tell me what a native speaker would fix.",
@@ -109,9 +132,10 @@ var skillDefs = map[string]skillDef{
 		SystemWithoutTools: "You are the Writing Reviewer agent (JLP's Teacher). You have no tools available for this task right now, so review the Japanese writing given as input directly, from the input alone: report the corrections and feedback you would give, in prose.",
 	},
 	"analyse_learner": {
-		Name:        "Learner Analyst",
-		Description: "Analyses the learner's recent progress, strengths, and weaknesses, after investigating their history through the Learner Analyst agent's permitted tools.",
-		Tags:        []string{"japanese", "analysis", "progress", "strengths", "weaknesses"},
+		Name:                    "Learner Analyst",
+		Description:             "Analyses the learner's recent progress, strengths, and weaknesses, after investigating their history through the Learner Analyst agent's permitted tools.",
+		DescriptionWithoutTools: "Analyses Japanese progress, strengths, and weaknesses from the input you provide. This skill currently has NO tool access, so it cannot read the learner's stored history — send the material you want analysed in the message itself.",
+		Tags:                    []string{"japanese", "analysis", "progress", "strengths", "weaknesses"},
 		Examples: []string{
 			"How am I doing this month?",
 			"What are my recurring weaknesses?",
@@ -123,9 +147,10 @@ var skillDefs = map[string]skillDef{
 		SystemWithoutTools: "You are the Learner Analyst agent. You have no tools available for this task right now, so analyse the learner's recent progress, strengths, and weaknesses using only the input given, without further investigation.",
 	},
 	"plan_lesson": {
-		Name:        "Lesson Planner",
-		Description: "Proposes what a human tutor's next lesson should cover, after investigating the learner's history through the Lesson Planner agent's permitted tools.",
-		Tags:        []string{"japanese", "lesson", "planning", "curriculum", "teaching"},
+		Name:                    "Lesson Planner",
+		Description:             "Proposes what a human tutor's next lesson should cover, after investigating the learner's history through the Lesson Planner agent's permitted tools.",
+		DescriptionWithoutTools: "Proposes what a human tutor's next lesson should cover, using only the context you provide. This skill currently has NO tool access, so the plan is not informed by the learner's stored history — include what they have been working on in the message itself.",
+		Tags:                    []string{"japanese", "lesson", "planning", "curriculum", "teaching"},
 		Examples: []string{
 			"Plan my next lesson.",
 			"We have 45 minutes on Thursday — what should we cover?",
@@ -138,12 +163,47 @@ var skillDefs = map[string]skillDef{
 	},
 }
 
+// PromptNames returns every ai.ToolRequest PromptName this adapter can
+// send, in skillOrder, DERIVED from skillDefs rather than restated.
+//
+// It exists for exactly one caller — cmd/jlp/ai.go's knownPromptNames/
+// knownToolPromptNames, the boot-time APP_AI_ROUTES validators —
+// because those lists are hand-maintained and this adapter landed
+// concurrently with the fix that introduced them. The result was
+// whole-branch review I-4: an operator setting
+// APP_AI_ROUTES=a2a.chat=anthropic got a boot WARNING calling their
+// correct prompt name a typo, and the route was then silently skipped,
+// so every A2A request went to APP_AI_PROVIDER anyway. That is the same
+// class of failure Task 2's bb3878d fix closed, re-created from the
+// other side.
+//
+// Deriving rather than duplicating is the point: adding a skill to
+// skillDefs now registers its prompt name with both validators, so the
+// two can never drift again.
+func PromptNames() []string {
+	names := make([]string, 0, len(skillOrder))
+	for _, id := range skillOrder {
+		names = append(names, skillDefs[id].PromptName)
+	}
+	return names
+}
+
 // systemFor returns def's system prompt, chosen by whether reg
 // currently Allow()s def.Agent any tool at all — see skillDef's
 // SystemWithTools/SystemWithoutTools doc comment. Reads reg live, on
 // every call, the same as card.go's toolTags: if cmd/jlp/main.go's
 // allowlist for this agent ever changes, the very next task picks up
 // the matching prompt automatically.
+// descriptionFor returns def's agent-card description, chosen by the
+// same live registry signal systemFor uses — see skillDef.Description
+// for what a static description cost (whole-branch review I-3).
+func (s *Server) descriptionFor(def skillDef) string {
+	if len(s.reg.DefsFor(def.Agent)) > 0 {
+		return def.Description
+	}
+	return def.DescriptionWithoutTools
+}
+
 func (s *Server) systemFor(def skillDef) string {
 	if len(s.reg.DefsFor(def.Agent)) > 0 {
 		return def.SystemWithTools

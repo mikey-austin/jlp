@@ -142,6 +142,30 @@ type Row struct {
 	Effort        string
 	EffortSource  string // "config" or "override" — only meaningful when HasEffort
 	EffortOptions []string
+
+	// Available reports whether THIS PROCESS actually constructed a
+	// generator for this provider (Rows' `constructed` argument — the
+	// same list cmd/jlp's buildAIGenerator returns and the workspace's
+	// adapter picker uses). False means every control on this row is a
+	// no-op: the override would be written, the badge would flip to
+	// "override", and no request could ever reach the provider, because
+	// buildAIGenerator's construction gates (an Anthropic API key, an
+	// Ollama model) do not consult this Service at all.
+	//
+	// Whole-branch review I-2. The failure it prevents is specific and
+	// nasty: on a host running Ollama with APP_AI_PROVIDER=fake and no
+	// APP_AI_OLLAMA_MODEL, /settings showed a fully populated,
+	// LIVE-ENUMERATED Ollama model dropdown — the ModelLister is built
+	// unconditionally, independent of the generator — so the operator
+	// picked a model, got a 303 and a success-shaped page, and nothing
+	// changed anywhere. A success UI over a silent no-op is worse than
+	// an error, and worse than an absent row.
+	//
+	// The row is kept rather than dropped so the operator learns WHY
+	// the provider isn't offered (the /settings template renders the
+	// reason and no controls); the write handlers reject the provider
+	// too, so a hand-made POST can't sneak past the missing form.
+	Available bool
 }
 
 // Service implements ports/ai.ModelResolver (see Model below) and
@@ -306,12 +330,50 @@ func (s *Service) Model(provider string) (model, effort string) {
 // (Phase 4 Task M), attempted fresh (subject to caching — see
 // listModels) on every call, bounded by ctx and modelListTimeout so a
 // slow or absent provider never makes this call hang.
-func (s *Service) Rows(ctx context.Context) []Row {
+//
+// constructed is the set of provider names this process actually built
+// a generator for (cmd/jlp's buildAIGenerator return value, threaded
+// through httpx.Options.AIProviders). It sets Row.Available — see that
+// field for why a row the process cannot serve must not be rendered as
+// a working control. Passed per call rather than held on the Service
+// because the Service is itself the ai.ModelResolver every adapter is
+// constructed WITH, so it necessarily exists before the answer does.
+// An empty/nil constructed marks every row unavailable, which is the
+// safe direction: it under-promises rather than over-promising.
+//
+// Enumeration is still attempted for unavailable providers and their
+// values still reported: the page's job is to explain the deployment,
+// and "Ollama is reachable and has these models, but this process built
+// no Ollama generator" is a more useful diagnosis than silence.
+func (s *Service) Rows(ctx context.Context, constructed []string) []Row {
+	available := make(map[string]bool, len(constructed))
+	for _, name := range constructed {
+		available[name] = true
+	}
 	rows := s.baseRows()
 	for i := range rows {
+		rows[i].Available = available[rows[i].Provider]
 		s.populateModelList(ctx, &rows[i])
 	}
 	return rows
+}
+
+// IsAvailable reports whether provider is one this process constructed
+// a generator for — the same question Rows answers per row, exposed for
+// the write handlers so a POST for an unavailable provider is rejected
+// rather than written and reported as a success (whole-branch review
+// I-2). Kept here beside Rows so the read and write paths cannot
+// disagree about what "available" means.
+func (s *Service) IsAvailable(provider string, constructed []string) bool {
+	if modelKey, _ := keysFor(provider); modelKey == "" {
+		return false // not a provider this Service knows at all
+	}
+	for _, name := range constructed {
+		if name == provider {
+			return true
+		}
+	}
+	return false
 }
 
 // baseRows builds every Row's model/effort override-or-config value —

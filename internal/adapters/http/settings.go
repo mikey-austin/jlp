@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -17,7 +18,7 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	Render(w, r, "settings", map[string]any{
 		"Title":    "設定",
 		"Identity": ident,
-		"Rows":     s.opts.Settings.Rows(r.Context()),
+		"Rows":     s.opts.Settings.Rows(r.Context(), s.opts.AIProviders),
 	})
 }
 
@@ -29,6 +30,9 @@ func (s *Server) settingsSetModel(w http.ResponseWriter, r *http.Request) {
 	provider := chi.URLParam(r, "provider")
 	if err := r.ParseForm(); err != nil {
 		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	if err := s.rejectUnavailableProvider(w, r, provider); err != nil {
 		return
 	}
 	model := strings.TrimSpace(r.FormValue("model"))
@@ -51,6 +55,9 @@ func (s *Server) settingsSetEffort(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad form", http.StatusBadRequest)
 		return
 	}
+	if err := s.rejectUnavailableProvider(w, r, provider); err != nil {
+		return
+	}
 	effort := strings.TrimSpace(r.FormValue("effort"))
 	if err := s.opts.Settings.SetEffort(r.Context(), provider, effort); err != nil {
 		s.renderSettingsError(w, r, err)
@@ -70,6 +77,25 @@ func (s *Server) settingsReset(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/settings", http.StatusSeeOther)
 }
 
+// rejectUnavailableProvider is the write-side half of whole-branch
+// review I-2: an override for a provider this process never constructed
+// can never take effect, so saving one and answering 303 would be a
+// success-shaped no-op. The page already hides the controls for such a
+// provider (settings.Row.Available), but the routes stay reachable — a
+// stale tab, a bookmarked form, curl — so the rejection lives here too,
+// surfaced in the form exactly like a validation failure. Returns a
+// non-nil error when it has already written a response; the caller must
+// return immediately.
+func (s *Server) rejectUnavailableProvider(w http.ResponseWriter, r *http.Request, provider string) error {
+	if s.opts.Settings.IsAvailable(provider, s.opts.AIProviders) {
+		return nil
+	}
+	err := fmt.Errorf("%q は、この配備では構成されていないため変更できません（起動時に生成されたAIプロバイダー: %s）",
+		provider, strings.Join(s.opts.AIProviders, ", "))
+	s.renderSettingsError(w, r, err)
+	return err
+}
+
 // renderSettingsError re-renders the /settings page with err's message
 // surfaced in the form — the brief's "invalid input must be rejected
 // ... and surfaced in the form" requirement — rather than a generic
@@ -83,7 +109,7 @@ func (s *Server) renderSettingsError(w http.ResponseWriter, r *http.Request, err
 	Render(w, r, "settings", map[string]any{
 		"Title":    "設定",
 		"Identity": ident,
-		"Rows":     s.opts.Settings.Rows(r.Context()),
+		"Rows":     s.opts.Settings.Rows(r.Context(), s.opts.AIProviders),
 		"Error":    err.Error(),
 	})
 }

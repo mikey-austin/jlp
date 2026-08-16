@@ -41,7 +41,7 @@ func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 		skills = append(skills, AgentSkill{
 			ID:          id,
 			Name:        def.Name,
-			Description: def.Description,
+			Description: s.descriptionFor(def),
 			Tags:        append(append([]string(nil), def.Tags...), toolTags(s.reg, def.Agent)...),
 			Examples:    def.Examples,
 			InputModes:  []string{textMode},
