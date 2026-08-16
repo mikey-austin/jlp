@@ -1,0 +1,14 @@
+{
+  "name": "a2a-chat",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Generic A2A chat client built on the official @a2a-js/sdk, defaulting to JLP",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@a2a-js/sdk": "1.0.1"
+  }
+}

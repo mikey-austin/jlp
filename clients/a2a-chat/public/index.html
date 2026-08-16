@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>A2A Chat</title>
+  <link rel="stylesheet" href="/styles.css" />
+  <script>
+    // Manual theme override for anyone who wants it (and handy for
+    // screenshotting both palettes without changing OS settings):
+    // ?theme=light or ?theme=dark on the URL. Omit it and the page
+    // just follows prefers-color-scheme, as normal — see styles.css.
+    (function () {
+      var theme = new URLSearchParams(location.search).get('theme');
+      if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+    })();
+  </script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <div class="topbar-title">
+        <span class="dot" id="conn-dot" aria-hidden="true"></span>
+        <h1 id="agent-name">A2A Chat</h1>
+      </div>
+      <button id="toggle-agent-panel" class="btn btn-ghost" type="button" aria-expanded="false" aria-controls="agent-panel">
+        Agent info
+      </button>
+    </header>
+
+    <section id="agent-panel" class="agent-panel" hidden>
+      <form id="connect-form" class="connect-form">
+        <label for="agent-url">Agent base URL</label>
+        <div class="connect-row">
+          <input id="agent-url" name="agentUrl" type="text" autocomplete="off" spellcheck="false"
+                 placeholder="http://app:8080/a2a/" />
+          <button class="btn" type="submit">Connect</button>
+        </div>
+        <p class="hint">Any A2A agent's base URL — nothing here is JLP-specific. A trailing slash is added
+          automatically (the SDK resolves the agent card relative to this URL).</p>
+        <p id="connect-error" class="error-text" hidden></p>
+      </form>
+
+      <dl id="card-details" class="card-details" hidden>
+        <div><dt>Description</dt><dd id="card-description"></dd></div>
+        <div><dt>Agent version</dt><dd id="card-version"></dd></div>
+        <div><dt>Protocol version</dt><dd id="card-protocol"></dd></div>
+        <div><dt>Transport</dt><dd id="card-transport"></dd></div>
+        <div><dt>Capabilities</dt><dd id="card-capabilities"></dd></div>
+      </dl>
+
+      <div id="card-skills" class="skills" hidden>
+        <h2>Skills</h2>
+        <ul id="skills-list"></ul>
+        <p class="hint">A2A has no wire-level skill selector — a plain message routes to the agent's
+          conversational default. Pick one below to tag the message with <code>metadata.skill</code>
+          explicitly; unrecognised ids are the agent's business, not this client's.</p>
+      </div>
+    </section>
+
+    <main id="thread" class="thread" aria-live="polite"></main>
+
+    <form id="composer" class="composer">
+      <select id="skill-select" class="skill-select" aria-label="Skill">
+        <option value="">(default)</option>
+      </select>
+      <textarea id="composer-input" rows="1" placeholder="Message the agent…" autocomplete="off"></textarea>
+      <button id="send-btn" class="btn btn-primary" type="submit">Send</button>
+      <button id="cancel-btn" class="btn btn-danger" type="button" hidden>Cancel</button>
+    </form>
+    <div class="composer-footer">
+      <button id="new-conversation" class="btn btn-ghost btn-small" type="button">New conversation</button>
+      <span id="context-id" class="context-id"></span>
+    </div>
+  </div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

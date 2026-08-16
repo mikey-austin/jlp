@@ -3,10 +3,10 @@ TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth up-mail up-mqtt up-signal down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register
+.PHONY: help init build up up-auth up-mail up-mqtt up-signal down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat
 
 help: ## Show available commands
-	@grep -hE '^[a-zA-Z_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
+	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
 
 init: ## One-time setup: create .env from example, generate Authelia dev users
 	@test -f .env || cp .env.example .env
@@ -41,6 +41,9 @@ up-signal: ## Start the dev stack plus the signal-cli JSON-RPC sidecar (Signal c
 
 signal-register: ## One-time Signal device link: prints a QR/URI to scan with the Signal app on the account's phone (needs `make up-signal` first; see deploy/signal/README.md)
 	$(COMPOSE) --profile signal exec signal-cli signal-cli --config /var/lib/signal-cli link -n "JLP"
+
+a2a-chat: ## Start the dev stack plus the generic A2A chat client (http://localhost:8090), app's A2A adapter enabled; set A2A_AGENT_URL to point it at a different agent instead (see clients/a2a-chat/README.md)
+	APP_A2A_ENABLED=true $(COMPOSE) --profile a2a-chat up -d
 
 mqtt-demo: ## Publish a sample vocabulary.lookup ingest event over MQTT (needs `make up-mqtt` first); appears on /vocabulary for the "dev" identity
 	$(COMPOSE) --profile mqtt exec mosquitto mosquitto_pub -t 'learner/dev/vocabulary/ingest' -m \

@@ -341,3 +341,13 @@ console.log(again.status.state);
 The resulting run appears in `/ai/agents` (agent `teacher`, prompt
 `a2a.chat`/`v1`) with its full tool-call trace, exactly like any local
 agentic-teacher run.
+
+## A ready-made client
+
+`clients/a2a-chat/` is a small, polished chat UI built on this same
+official SDK — `make a2a-chat` (http://localhost:8090). It's generic
+(everything it shows comes from whatever agent card it's pointed at,
+not from JLP specifically), handles the non-streaming progress state
+this adapter's `streaming: false` implies, and renders
+`TASK_STATE_FAILED` as an actual failure rather than an empty reply.
+See `clients/a2a-chat/README.md`.

@@ -226,6 +226,25 @@ services:
       - ./deploy/authelia/users.dev.yml:/config/users.yml:ro
       - autheliadata:/data
 
+  a2a-chat:
+    # Generic A2A chat client (task A2A-2): a small Node sidecar that
+    # holds the official @a2a-js/sdk client server-side (it's a Node
+    # package — running it in the browser would drag in Node deps and
+    # need CORS on the target agent) and serves a static UI over plain
+    # fetch. Defaults to JLP's in-network address, but nothing about it
+    # is JLP-specific — point A2A_AGENT_URL (or the "Connect" field in
+    # the UI) at any A2A agent's base URL. Not started by a plain `make
+    # up`; join it explicitly with `make a2a-chat` (mirrors ollama's/
+    # mailpit's own "--profile" join above). See clients/a2a-chat/README.md.
+    build: { context: clients/a2a-chat }
+    profiles: ["a2a-chat"]
+    ports: ["${A2A_CHAT_HOST_PORT:-8090}:3000"]
+    environment:
+      # Trailing slash matters — see server.js's normalizeAgentUrl()
+      # doc comment and docs/api/a2a.md's "trailing slash" callout.
+      A2A_AGENT_URL: ${A2A_AGENT_URL:-http://app:8080/a2a/}
+    depends_on: [app]
+
 volumes: { pgdata: {}, gomod: {}, gocache: {}, caddydata: {}, autheliadata: {}, ollamadata: {}, signaldata: {} }
 
 networks:

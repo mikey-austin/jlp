@@ -36,6 +36,7 @@ up-mqtt            Start the dev stack plus mosquitto (MQTT event bridge, PRD §
 up-signal          Start the dev stack plus the signal-cli JSON-RPC sidecar (Signal channel adapter, PRD §20/§20.1); set APP_SIGNAL_RPCURL + APP_SIGNAL_NUMBER together in .env once a device is linked (see deploy/signal/README.md), then `make restart`
 signal-register    One-time Signal device link: prints a QR/URI to scan with the Signal app on the account's phone (needs `make up-signal` first; see deploy/signal/README.md)
 ollama-pull        Pull a local model into the ollama service (m=qwen3:4b), starting it if needed
+a2a-chat           Start the dev stack plus the generic A2A chat client (http://localhost:8090), app's A2A adapter enabled; set A2A_AGENT_URL to point it at a different agent instead (see clients/a2a-chat/README.md)
 down               Stop the stack (including profile-gated services like Caddy/Authelia)
 restart            Restart the app service
 logs               Follow logs (s=<service>, default app)
@@ -392,6 +393,11 @@ routes entirely absent (404).
 > (`POST {path}/tasks` with `{skill, input, session_id}`) that was not
 > the A2A protocol and that no A2A client could speak. That shape is
 > retired — see `docs/api/a2a.md` for the migration.
+
+**A generic chat client for it** (and for any other A2A agent) lives at
+`clients/a2a-chat/` — `make a2a-chat` starts it at
+**http://localhost:8090**, built on the official `@a2a-js/sdk`. See
+`clients/a2a-chat/README.md`.
 
 ### Startup pricing warning
 
