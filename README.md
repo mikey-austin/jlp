@@ -360,20 +360,38 @@ unchanged.
 
 ### A2A protocol adapter (`APP_A2A_ENABLED`)
 
-`APP_A2A_ENABLED=true` (default `false`) mounts an A2A (agent-to-agent)
-adapter at `APP_A2A_PATH` (default `/a2a`, inside the same
-authenticated route group as every other route — Authelia/CSRF posture
-is unchanged): `GET {path}/.well-known/agent-card.json` and `POST
-{path}/tasks` expose three of JLP's own agents — Writing Reviewer,
-Learner Analyst, Lesson Planner — as A2A "skills" a remote agent can
-discover and invoke (PRD §29/§30). Every task runs through the exact
-same `application/agentrun.Runner` + `internal/tools.Registry`
-permissions the local agentic-teacher path uses — a remote caller gets
-no privilege a local agent lacks (Rule 13) — and shows up at
-`/ai/agents` like any other agent-run. See `docs/api/a2a.md` for the
-full contract, request/response shapes, and a worked example against
-the fake provider. Leave it unset to keep the adapter's routes entirely
-absent (404).
+`APP_A2A_ENABLED=true` (default `false`) mounts an [A2A
+protocol](https://a2a-protocol.org/) (agent-to-agent) adapter at
+`APP_A2A_PATH` (default `/a2a`, inside the same authenticated route
+group as every other route — Authelia/CSRF posture is unchanged). It
+speaks **A2A v1.0 over the JSON-RPC 2.0 binding**, so the official
+`@a2a-js/sdk` client talks to it directly:
+
+```js
+const client = await new ClientFactory().createFromUrl('http://localhost:28080/a2a/');
+const task = await client.sendMessage({ message: { messageId: crypto.randomUUID(), role: 'ROLE_USER', parts: [{ text: '「は」と「が」の違いは？' }] } });
+```
+
+Two routes: `GET {path}/.well-known/agent-card.json` (the agent card)
+and `POST {path}/v1` (the JSON-RPC endpoint, serving `SendMessage`,
+`GetTask`, and `CancelTask`). It exposes four of JLP's own agents as
+A2A skills — a conversational tutor (the default for a plain chat
+message), Writing Reviewer, Learner Analyst, Lesson Planner (PRD
+§29/§30). Streaming and push notifications are **not** served, and the
+card says so.
+
+Every task runs through the exact same `application/agentrun.Runner` +
+`internal/tools.Registry` permissions the local agentic-teacher path
+uses — a remote caller gets no privilege a local agent lacks (Rule 13)
+— and shows up at `/ai/agents` like any other agent-run. See
+`docs/api/a2a.md` for the full contract, wire shapes, and a worked
+example against the fake provider. Leave it unset to keep the adapter's
+routes entirely absent (404).
+
+> **Changed:** this adapter previously served a bespoke REST shape
+> (`POST {path}/tasks` with `{skill, input, session_id}`) that was not
+> the A2A protocol and that no A2A client could speak. That shape is
+> retired — see `docs/api/a2a.md` for the migration.
 
 ### Startup pricing warning
 

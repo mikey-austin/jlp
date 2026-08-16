@@ -71,7 +71,19 @@ func TestA2AMountedWhenEnabledServesAgentCard(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"review_writing"`) {
 		t.Fatalf("body = %s, want it to list the review_writing skill", rec.Body.String())
 	}
+	// The card's advertised JSON-RPC endpoint must reflect the path this
+	// package actually mounted the adapter at — an A2A client reads the
+	// endpoint from here and never has to know APP_A2A_PATH itself.
+	if !strings.Contains(rec.Body.String(), `"url":"http://example.com/a2a/v1"`) {
+		t.Fatalf("body = %s, want supportedInterfaces to advertise the mounted JSON-RPC endpoint", rec.Body.String())
+	}
 }
+
+// rpcBody is one JSON-RPC 2.0 request against the adapter's endpoint —
+// the only POST shape it serves now that the bespoke REST routes are
+// retired (see docs/api/a2a.md).
+const rpcBody = `{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":` +
+	`{"message":{"messageId":"m1","role":"ROLE_USER","parts":[{"text":"友達と映画を見ました。"}]}}}`
 
 // TestA2ARequiresAuthentication pins that the A2A mount is genuinely
 // inside the authenticated group, not a side door around it: an
@@ -84,7 +96,7 @@ func TestA2ARequiresAuthentication(t *testing.T) {
 	opts.Auth = fakeAuth{err: errors.New("no session")}
 	srv := NewServer(opts)
 
-	req := httptest.NewRequest(http.MethodPost, "/a2a/tasks", strings.NewReader(`{"skill":"review_writing","input":"hello"}`))
+	req := httptest.NewRequest(http.MethodPost, "/a2a/v1", strings.NewReader(rpcBody))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	srv.HandlerForTest().ServeHTTP(rec, req)
@@ -94,15 +106,21 @@ func TestA2ARequiresAuthentication(t *testing.T) {
 	}
 }
 
-// TestA2ATaskRunsAsTheAuthenticatedRequestIdentity pins that POST
-// /a2a/tasks actually completes a real run when reached through the
-// full HTTP stack (RequireIdentity → CSRFProtect → withA2AIdentity →
-// a2a.Server), using testOptions()' "dev" identity — the same
-// identity/session context every other authenticated route in this
-// test package runs as, never anything the request body could name.
+// TestA2ATaskRunsAsTheAuthenticatedRequestIdentity pins that a
+// SendMessage call actually completes a real run when reached through
+// the full HTTP stack (RequireIdentity → CSRFProtect → withA2AIdentity
+// → a2a.Server), using testOptions()' "dev" identity — the same
+// identity/session context every other authenticated route in this test
+// package runs as, never anything the request params could name.
+//
+// This also pins the CSRF posture the mount depends on: a JSON-RPC POST
+// from a non-browser A2A client sends no Origin/Sec-Fetch-Site header
+// at all, which csrf.go's csrfReject never rejects (see server.go's
+// comment at the mount site). If that ever changed, this test fails
+// here rather than silently in production.
 func TestA2ATaskRunsAsTheAuthenticatedRequestIdentity(t *testing.T) {
 	srv := NewServer(testOptionsWithA2A(t))
-	req := httptest.NewRequest(http.MethodPost, "/a2a/tasks", strings.NewReader(`{"skill":"review_writing","input":"友達と映画を見ました。"}`))
+	req := httptest.NewRequest(http.MethodPost, "/a2a/v1", strings.NewReader(rpcBody))
 	req.Header.Set("Content-Type", "application/json")
 	rec := httptest.NewRecorder()
 	srv.HandlerForTest().ServeHTTP(rec, req)
@@ -110,8 +128,24 @@ func TestA2ATaskRunsAsTheAuthenticatedRequestIdentity(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", rec.Code, rec.Body.String())
 	}
-	if !strings.Contains(rec.Body.String(), `"completed"`) {
-		t.Fatalf("body = %s, want status completed", rec.Body.String())
+	if !strings.Contains(rec.Body.String(), `"TASK_STATE_COMPLETED"`) {
+		t.Fatalf("body = %s, want a completed Task", rec.Body.String())
+	}
+}
+
+// TestA2ARPCEndpointAbsentWhenDisabled is the other half of
+// TestA2ARoutesAbsentWhenDisabled: it's the JSON-RPC endpoint, not the
+// card, that actually does anything, so "dormant unless
+// APP_A2A_ENABLED" has to hold for that route specifically.
+func TestA2ARPCEndpointAbsentWhenDisabled(t *testing.T) {
+	srv := NewServer(testOptions())
+	req := httptest.NewRequest(http.MethodPost, "/a2a/v1", strings.NewReader(rpcBody))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.HandlerForTest().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404 (A2A must be entirely unmounted when Options.A2A is nil): %s", rec.Code, rec.Body.String())
 	}
 }
 

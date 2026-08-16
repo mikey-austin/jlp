@@ -1,9 +1,20 @@
-// Package a2a implements Phase 4 Task 3's A2A (agent-to-agent)
-// protocol adapter (PRD §29/§30): it exposes three of JLP's own
-// agents — the Writing Reviewer (teacher), the Learner Analyst
-// (summary), and the Lesson Planner (lesson) — as A2A "skills" a
-// remote agent can discover (GET .well-known/agent-card.json) and
-// invoke (POST tasks) over plain HTTP+JSON.
+// Package a2a implements the A2A (agent-to-agent) protocol adapter
+// (PRD §29/§30): it exposes JLP's own agents — a conversational tutor
+// (teacher), the Writing Reviewer (teacher), the Learner Analyst
+// (summary), and the Lesson Planner (lesson) — as A2A "skills" a remote
+// agent can discover (GET .well-known/agent-card.json) and invoke over
+// the protocol's JSON-RPC 2.0 binding.
+//
+// Protocol: A2A **v1.0**, per the specification at
+// https://a2a-protocol.org/latest/specification/ (checked 2026-08-16:
+// "The latest released version is 1.0.0") and cross-checked against the
+// official client, @a2a-js/sdk@1.0.1, which is what actually has to
+// parse what this package emits. types.go carries the data model and
+// the three protobuf-JSON details that a from-memory implementation
+// reliably gets wrong; jsonrpc.go carries the envelope and the method
+// names. This package previously served a bespoke REST shape that no
+// A2A client could speak (POST /tasks with {skill,input}); that shape
+// is retired, not maintained alongside — see docs/api/a2a.md.
 //
 // Rule 13 is the point of this whole package (PRD §30): "agents own
 // reasoning; application services own state. A remote agent should not
@@ -30,7 +41,7 @@
 // it from the SAME request-scoped identity every other authenticated
 // route uses (RequireIdentity + the configured auth.Authenticator),
 // never from anything the HTTP client's body controls. See
-// TestCreateTaskIgnoresForgedIdentityInBody.
+// TestSendMessageIgnoresForgedIdentityInParams.
 package a2a
 
 import (
@@ -58,16 +69,33 @@ type Server struct {
 	reg    *tools.Registry
 	cfg    config.A2A
 
-	// mu/tasks back GET {path}/tasks/{task_id}: since task execution is
-	// synchronous (see task.go's handleCreateTask doc comment), this is
+	// mu/tasks/order back the GetTask method: since task execution is
+	// synchronous (see task.go's handleSendMessage doc comment), this is
 	// nothing more than a small response cache of tasks THIS process
 	// already computed — never a second source of truth for the run
 	// itself, which remains the agent_runs row application/agentrun.Runner
 	// already persisted (viewable at /ai/agents). A process restart
 	// loses this cache; the underlying agent_runs row does not.
+	//
+	// order is the insertion order of the ids in tasks, so the cache can
+	// be capped at maxCachedTasks: every Task holds a full model
+	// response, and the conversational default skill (task.go's
+	// defaultSkill) means a chat client can create them indefinitely, so
+	// an uncapped map is a slow leak in a long-running process. Evicting
+	// the oldest is safe precisely BECAUSE this is a cache and not the
+	// source of truth: a GetTask for an evicted id answers "task not
+	// found", the same answer a process restart already gives, while the
+	// agent_runs/tool_calls trace remains at /ai/agents either way.
 	mu    sync.RWMutex
 	tasks map[string]taskRecord
+	order []string
 }
+
+// maxCachedTasks caps Server.tasks. Sized for the single-learner LAN
+// posture this whole adapter is built for — far more than any real
+// conversation needs to page back through, small enough that the
+// worst-case retained model output stays bounded.
+const maxCachedTasks = 512
 
 // New wires an A2A Server over runner/reg — the same instances
 // cmd/jlp/main.go already constructed for the local agent-run path —
@@ -79,18 +107,44 @@ func New(runner *agentrun.Runner, reg *tools.Registry, cfg config.A2A) *Server {
 	return &Server{runner: runner, reg: reg, cfg: cfg, tasks: make(map[string]taskRecord)}
 }
 
+// remember caches task under id as identity's, evicting the oldest
+// entry once the cache is full. Callers must not hold s.mu.
+func (s *Server) remember(id string, rec taskRecord) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.tasks[id]; !exists {
+		s.order = append(s.order, id)
+	}
+	s.tasks[id] = rec
+	for len(s.order) > maxCachedTasks {
+		delete(s.tasks, s.order[0])
+		s.order = s.order[1:]
+	}
+}
+
+// rpcRoute is the JSON-RPC endpoint's path, relative to the adapter's
+// mount prefix. "/v1" matches the spec's own worked examples
+// ("https://api.example.com/a2a/v1") and, more usefully, keeps the
+// binding's major version in the URL rather than in a header nobody
+// reads. card.go's interfaceURL is what advertises it; a client never
+// has to guess it.
+const rpcRoute = "/v1"
+
 // Routes returns the adapter's own sub-router, relative to whatever
 // prefix the caller mounts it under (cfg.Path, by convention — see
 // internal/adapters/http/server.go):
 //
 //	GET  /.well-known/agent-card.json — the agent card (card.go)
-//	POST /tasks                       — run a skill (task.go)
-//	GET  /tasks/{task_id}             — read back a task's result
+//	POST /v1                          — the JSON-RPC 2.0 endpoint (jsonrpc.go)
+//
+// Two routes, not five: in A2A, every operation is a method on the one
+// JSON-RPC endpoint. The bespoke POST /tasks + GET /tasks/{id} pair
+// this replaced is gone rather than kept alongside — it had no external
+// consumers and no A2A client could speak it.
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/.well-known/agent-card.json", s.handleAgentCard)
-	r.Post("/tasks", s.handleCreateTask)
-	r.Get("/tasks/{task_id}", s.handleGetTask)
+	r.Post(rpcRoute, s.handleRPC)
 	return r
 }
 
@@ -126,9 +180,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		slog.Error("a2a: write response", "err", err)
 	}
-}
-
-// writeError writes {"error": msg} with status.
-func writeError(w http.ResponseWriter, status int, msg string) {
-	writeJSON(w, status, map[string]string{"error": msg})
 }
