@@ -10,7 +10,14 @@
 // do nothing at all — the dialog handler is in the app.js they never
 // re-fetch. Found by browser verification, not by reasoning: the
 // buttons rendered and were simply inert until the cache was cleared.
-const CACHE_NAME = "jlp-shell-v4";
+// v5: components.css gains .icon-btn (the logout glyph fix) and the
+// delete triggers become .btn--danger. This bump was forgotten when
+// .icon-btn shipped, so returning learners were served new markup
+// against the v4 stylesheet and the logout button rendered with no
+// styling at all — worse than the blank circle it was fixing. Forgetting
+// it is now a test failure, not a matter of memory: see
+// TestServiceWorkerCacheNameTracksPrecachedAssets.
+const CACHE_NAME = "jlp-shell-v5";
 
 const PRECACHE_URLS = [
   "/offline",
