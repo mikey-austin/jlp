@@ -2,8 +2,18 @@ COMPOSE := docker compose
 TOOLS   := $(COMPOSE) run --rm tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
+# Registry image for the LAN deployment (see the jlp-playbook in
+# platform-v2/home/ansible). The tag is date-stamped rather than
+# "latest" so a rollback is naming a tag that still exists, and so the
+# playbook records exactly which build is deployed — the same
+# convention as registry.nas.jackiemclean.net/caddy2:20260314-caddy-dns.
+REGISTRY  ?= registry.nas.jackiemclean.net
+IMAGE_NAME ?= jlp
+IMAGE_TAG ?= $(shell date +%Y%m%d)
+IMAGE     := $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
+
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth up-mail up-mqtt up-signal up-speech down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat
+.PHONY: help init build up up-auth up-mail up-mqtt up-signal up-speech down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat image image-push
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -160,6 +170,15 @@ deploy: ## Deploy to $(DEPLOY_HOST) over SSH (set in .env)
 	DOCKER_HOST=ssh://$$DEPLOY_HOST $(PROD_COMPOSE) up -d; \
 	DOCKER_HOST=ssh://$$DEPLOY_HOST $(PROD_COMPOSE) run --rm app migrate; \
 	echo "deployed to $$DEPLOY_HOST"
+
+image: ## Build the production image as $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG) (override IMAGE_TAG=... to pin)
+	docker build --target prod -t $(IMAGE) .
+	@echo "built $(IMAGE)"
+
+image-push: image ## Build and push the production image to $(REGISTRY)
+	docker push $(IMAGE)
+	@echo "pushed $(IMAGE)"
+	@echo "now set jlp_image to this tag in platform-v2/home/ansible/jlp-playbook.yaml and re-run the playbook"
 
 deploy-logs: ## Tail remote app logs
 	@set -a; [ -f .env ] && . ./.env; set +a; \
