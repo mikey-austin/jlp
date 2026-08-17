@@ -95,6 +95,10 @@ services:
       # internal/config.A2A's doc comment.
       APP_A2A_ENABLED: ${APP_A2A_ENABLED:-false}
       APP_A2A_PATH: ${APP_A2A_PATH:-}
+      # Where clients/a2a-chat is reachable. Empty (the default) renders
+      # no nav link rather than one pointing at a host that isn't there —
+      # see internal/config.A2A.ChatURL.
+      APP_A2A_CHATURL: ${APP_A2A_CHATURL:-}
       # Slack channel adapter (Phase 4 Task 4, PRD §20/§20.1): both
       # tokens empty (the default) keeps it entirely dormant — see
       # internal/config.Slack's doc comment. No new service needed here:
@@ -330,6 +334,11 @@ services:
       # Trailing slash matters — see server.js's normalizeAgentUrl()
       # doc comment and docs/api/a2a.md's "trailing slash" callout.
       A2A_AGENT_URL: ${A2A_AGENT_URL:-http://app:8080/a2a/}
+      # A JLP API token with the a2a:use scope (設定 → APIトークン).
+      # Only needed when the target agent authenticates its callers: the
+      # dev default APP_AUTH_MODE=static identifies an in-network request
+      # on its own, so this is empty here and required in production.
+      A2A_AUTH_TOKEN: ${A2A_AUTH_TOKEN:-}
     depends_on: [app]
 
 volumes: { pgdata: {}, gomod: {}, gocache: {}, caddydata: {}, autheliadata: {}, ollamadata: {}, signaldata: {}, whispermodels: {} }

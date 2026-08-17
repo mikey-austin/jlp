@@ -152,6 +152,9 @@ type Options struct {
 	// its own copy of config.Config just to read one string; only read
 	// when A2A above is non-nil.
 	A2APath string
+	// A2AChatURL is where clients/a2a-chat is deployed. Empty renders no
+	// nav link — see config.A2A.ChatURL for why that is the default.
+	A2AChatURL string
 	// Conversation drives the workspace's conversation pane (Phase 4
 	// Task 6, PRD §17.4): free-form dialogue turns and the
 	// end-of-conversation digest, governed by the session's

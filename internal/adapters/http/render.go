@@ -45,6 +45,9 @@ func (s *Server) render(w http.ResponseWriter, r *http.Request, page string, dat
 	if s.opts.LogoutPath != "" {
 		data["LogoutPath"] = s.opts.LogoutPath
 	}
+	if s.opts.A2AChatURL != "" {
+		data["A2AChatURL"] = s.opts.A2AChatURL
+	}
 	Render(w, r, page, data)
 }
 

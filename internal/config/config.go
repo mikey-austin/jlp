@@ -394,6 +394,15 @@ type A2A struct {
 	//     future route this list wasn't updated for) — belt and
 	//     suspenders, not a substitute for either check here.
 	Path string
+	// ChatURL is where the A2A chat client (clients/a2a-chat) is
+	// reachable, e.g. https://a2a.lan.jackiemclean.net. Empty — the
+	// default — renders no link at all rather than a link to a host that
+	// does not exist: the chat is a separately deployed service, and a
+	// dev machine or a deployment without it must not show a dead nav
+	// item. Independent of Enabled, because the two are genuinely
+	// separate: the adapter can be on with no chat UI deployed, and the
+	// chat can be pointed at some other agent entirely.
+	ChatURL string
 }
 
 // Slack configures Phase 4 Task 4's channel adapter
@@ -649,7 +658,7 @@ func Load() (Config, error) {
 		"ai.agycli.bin", "ai.agycli.model", "ai.agycli.effort", "ai.agycli.timeout",
 		"ai.routes", "ai.agenticteacher",
 		"summary.enabled", "summary.cron", "summary.to", "summary.from", "smtp.addr", "mqtt.url",
-		"a2a.enabled", "a2a.path",
+		"a2a.enabled", "a2a.path", "a2a.chaturl",
 		"slack.apptoken", "slack.bottoken", "slack.smokechannel",
 		"signal.rpcurl", "signal.number", "channels.allowfrom",
 		"speech.stturl", "speech.ttsurl"} {

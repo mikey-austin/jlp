@@ -566,6 +566,7 @@ func main() {
 			Auth:               authn,
 			Identities:         identities,
 			APITokens:          apiTokens,
+			A2AChatURL:         cfg.A2A.ChatURL,
 			Sessions:           sessionsSvc,
 			Writing:            writingSvc,
 			Events:             eventRepo,

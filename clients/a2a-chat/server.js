@@ -8,7 +8,13 @@ import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { ClientFactory } from '@a2a-js/sdk/client';
+import {
+  ClientFactory,
+  ClientFactoryOptions,
+  DefaultAgentCardResolver,
+  JsonRpcTransportFactory,
+  createAuthenticatingFetchWithRetry,
+} from '@a2a-js/sdk/client';
 import { Role, roleToJSON, taskStateToJSON } from '@a2a-js/sdk';
 import { isJsonRpcError, isRestError } from '@a2a-js/sdk/errors';
 
@@ -22,6 +28,43 @@ const PORT = Number(process.env.PORT || 3000);
 // point A2A_AGENT_URL (env var, or the "Connect" field in the UI) at
 // any A2A agent's base URL and it works the same way.
 const DEFAULT_AGENT_URL = process.env.A2A_AGENT_URL || 'http://app:8080/a2a/';
+
+// A2A_AUTH_TOKEN is a JLP API token minted with the `a2a:use` scope
+// (JLP: 設定 → APIトークン). It is required whenever the target agent
+// authenticates its callers, which JLP does in every mode except the
+// dev default `static`.
+//
+// The README used to say plainly that this client "does not work" in
+// authelia mode, and listed authenticating this process as one of two
+// honest ways forward. This is that: a credential belonging to this
+// service, sent on every request the SDK makes — including the agent
+// card fetch, which sits behind the same auth as everything else.
+const AUTH_TOKEN = process.env.A2A_AUTH_TOKEN || '';
+
+// The SDK's AuthenticationHandler contract. shouldRetryWithHeaders is
+// where a handler would refresh a short-lived credential after a 401; an
+// API token does not expire, so retrying with the same header would only
+// turn one 401 into two. Returning undefined lets the error surface,
+// which is what a misconfigured or revoked token should do.
+const authHandler = {
+  headers: async () =>
+    AUTH_TOKEN ? { Authorization: `Bearer ${AUTH_TOKEN}` } : {},
+  shouldRetryWithHeaders: async () => undefined,
+};
+
+const authFetch = createAuthenticatingFetchWithRetry(fetch, authHandler);
+
+// Both halves need the credential: the card resolver fetches
+// /.well-known/agent-card.json before any transport exists, and the
+// transport makes every call after that. Wiring only one of them is the
+// failure that looks like "connects, then 401s on the first message".
+function clientFactory() {
+  return new ClientFactory({
+    ...ClientFactoryOptions.default,
+    transports: [new JsonRpcTransportFactory({ fetchImpl: authFetch })],
+    cardResolver: new DefaultAgentCardResolver({ fetchImpl: authFetch }),
+  });
+}
 
 // GOTCHA (paid for once building JLP's own A2A adapter — see
 // docs/api/a2a.md): the SDK resolves the agent card with
@@ -57,7 +100,7 @@ const state = {
 async function connect(rawUrl) {
   const agentUrl = normalizeAgentUrl(rawUrl);
   try {
-    const client = await new ClientFactory().createFromUrl(agentUrl);
+    const client = await clientFactory().createFromUrl(agentUrl);
     const card = await client.getAgentCard();
     state.agentUrl = agentUrl;
     state.client = client;

@@ -152,34 +152,36 @@ silent empty reply):
 - A cancelled in-flight request surfaces as `Aborted` server-side /
   a distinct "cancelled" bubble client-side (see "Cancel" above).
 
-## Auth: what's actually been tested
+## Auth
 
-JLP's A2A routes sit inside its authenticated route group. This client
-was built and verified against JLP's default **`static`** auth mode
-(`APP_AUTH_MODE=static`), where an in-network request from this
-container is identified automatically — no credentials needed, and
-that's exactly the round trip `make a2a-chat` exercises.
+JLP's A2A routes sit inside its authenticated route group. In the dev
+default **`static`** mode (`APP_AUTH_MODE=static`) an in-network request
+from this container is identified automatically and needs no
+credentials — that is the round trip `make a2a-chat` exercises.
 
-**`authelia` mode was tested and does not work out of the box** — this
-is not a guess. With the stack running `APP_AUTH_MODE=authelia
---profile auth up`, a direct request to the app's own port (exactly
-what this client makes, in-network, bypassing Caddy) gets:
+In every other mode a bare request is refused. Verified, from inside
+this very container:
 
 ```sh
-$ curl -s -o /dev/null -w '%{http_code}\n' http://localhost:28080/a2a/.well-known/agent-card.json
-401
+$ wget -qO- --server-response http://app:8080/a2a/.well-known/agent-card.json
+  HTTP/1.1 401 Unauthorized
 ```
 
-This client makes plain, unauthenticated requests — no session cookie,
-no Authelia forward-auth flow, no login UI, and the SDK's
-`AuthenticationHandler` hook (`headers()` / `shouldRetryWithHeaders()`)
-isn't wired up here — so every call gets the same `401` the card fetch
-above did; the UI will show it as a connect error, not a silent hang.
-Making Authelia mode work would mean either authenticating this Node
-process itself (a service-account credential Authelia is configured to
-trust) or proxying its requests through an already-authenticated
-browser session — neither exists today. If you need A2A-over-Authelia,
-that's the honest starting point, not a "just try it."
+**Set `A2A_AUTH_TOKEN` to a JLP API token with the `a2a:use` scope** and
+the same call succeeds. Mint one in JLP under 設定 → APIトークン; it is
+shown once. The token is attached by the SDK's `AuthenticationHandler`
+to *both* the agent-card fetch and the transport — wiring only one of
+them produces the confusing failure where the client connects and then
+401s on the first message.
+
+This is what an earlier version of this README described as one of the
+two honest ways forward ("authenticating this Node process itself"). The
+token belongs to this service, is scoped to A2A alone, and can be
+revoked on its own without touching anything else.
+
+Because the token grants only `a2a:use`, it cannot be used against the
+rest of JLP's API: a request to `/api/v1/words` or `/api/v1/sessions`
+carrying it gets a 403.
 
 ## Theme
 

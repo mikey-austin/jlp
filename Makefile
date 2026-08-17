@@ -13,7 +13,7 @@ IMAGE_TAG ?= $(shell date +%Y%m%d)
 IMAGE     := $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth up-mail up-mqtt up-signal up-speech down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat image image-push
+.PHONY: help init build up up-auth up-mail up-mqtt up-signal up-speech down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat image image-push chat-image chat-image-push
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -179,6 +179,17 @@ image-push: image ## Build and push the production image to $(REGISTRY)
 	docker push $(IMAGE)
 	@echo "pushed $(IMAGE)"
 	@echo "now set jlp_image to this tag in platform-v2/home/ansible/jlp-playbook.yaml and re-run the playbook"
+
+CHAT_IMAGE := $(REGISTRY)/jlp-a2a-chat:$(IMAGE_TAG)
+
+chat-image: ## Build the A2A chat client image as $(REGISTRY)/jlp-a2a-chat:$(IMAGE_TAG)
+	docker build -t $(CHAT_IMAGE) clients/a2a-chat
+	@echo "built $(CHAT_IMAGE)"
+
+chat-image-push: chat-image ## Build and push the A2A chat client image to $(REGISTRY)
+	docker push $(CHAT_IMAGE)
+	@echo "pushed $(CHAT_IMAGE)"
+	@echo "now set jlp_chat_image to this tag in platform-v2/home/ansible/jlp-playbook.yaml and re-run the playbook"
 
 deploy-logs: ## Tail remote app logs
 	@set -a; [ -f .env ] && . ./.env; set +a; \
