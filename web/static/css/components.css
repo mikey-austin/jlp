@@ -1174,3 +1174,45 @@ p.hint {
     flex-basis: 100%;
   }
 }
+
+/* API token management (/settings/tokens).
+ *
+ * The reveal block is deliberately loud: the plaintext appears exactly
+ * once, is stored nowhere, and cannot be shown again — so it must not
+ * look like an ordinary field the learner can come back to. */
+.token-reveal {
+  border: 1px solid var(--warning);
+  background: var(--warning-soft);
+}
+.token-reveal__value,
+.token-reveal__usage {
+  overflow-x: auto;
+  padding: var(--space-3) var(--space-4);
+  border-radius: 8px;
+  background: var(--surface-2);
+  font-family: "JetBrains Mono", monospace;
+  font-size: var(--text-sm);
+  /* A token has no spaces to break at, and truncating one silently
+   * would hand the learner a credential that does not work. */
+  white-space: pre;
+}
+.token-form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  align-items: flex-start;
+}
+.token-form__scopes {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.token-form__scope {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+}

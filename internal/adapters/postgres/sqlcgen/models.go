@@ -72,6 +72,17 @@ type AnkiCard struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+type ApiToken struct {
+	ID         pgtype.UUID
+	IdentityID string
+	Name       string
+	TokenHash  string
+	Scopes     string
+	CreatedAt  pgtype.Timestamptz
+	LastUsedAt pgtype.Timestamptz
+	RevokedAt  pgtype.Timestamptz
+}
+
 // Operator settings (e.g. AI model/effort overrides) — GLOBAL, NOT identity-scoped. Do not add an identity_id column here; see internal/ports/storage.SettingsRepository.
 type AppSetting struct {
 	Key       string

@@ -226,6 +226,19 @@ document.addEventListener("click", function (evt) {
   var label = dialog.querySelector("[data-confirm-delete-label]");
   if (!form) return;
 
+  // The dialog's default copy describes SOFT delete, which is true for
+  // sessions/words/lessons and false for anything else. A trigger can
+  // override the title, the sentence after the label, and the confirm
+  // button; these captured defaults are what everything else keeps.
+  var title = dialog.querySelector("#confirm-delete-title");
+  var note = dialog.querySelector("[data-confirm-delete-note]");
+  var confirm = dialog.querySelector("[data-confirm-delete-confirm]");
+  var defaults = {
+    title: title ? title.textContent : "",
+    note: note ? note.textContent : "",
+    confirm: confirm ? confirm.textContent : "",
+  };
+
   var opener = null;
 
   document.addEventListener("click", function (evt) {
@@ -242,6 +255,9 @@ document.addEventListener("click", function (evt) {
     opener = trigger;
     form.setAttribute("action", action);
     if (label) label.textContent = trigger.getAttribute("data-confirm-delete-label") || "";
+    if (title) title.textContent = trigger.getAttribute("data-confirm-delete-title") || defaults.title;
+    if (note) note.textContent = trigger.getAttribute("data-confirm-delete-note") || defaults.note;
+    if (confirm) confirm.textContent = trigger.getAttribute("data-confirm-delete-confirm") || defaults.confirm;
     dialog.showModal();
   });
 

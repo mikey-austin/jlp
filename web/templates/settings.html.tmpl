@@ -3,6 +3,8 @@
   <p class="description">変更は<strong>次回のAIリクエスト</strong>から適用されます。すでに実行中のリクエストは、開始時点の設定のまま完了します。再起動は不要です。</p>
   {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
 
+  <p><a href="/settings/tokens">APIトークン</a> — ブラウザでログインできないクライアント（リーダーアプリ、A2Aチャット）用の鍵を発行・取り消しします。</p>
+
   <div class="cards">
     {{range .Rows}}{{$row := .}}<section class="card settings-row">
       <div class="settings-row__header">

@@ -1,0 +1,72 @@
+{{define "content"}}<section class="settings">
+  <h1>APIトークン</h1>
+  <p class="description">ブラウザでログインできないクライアント（単語を登録するリーダーアプリ、A2Aチャットなど）のための鍵です。アプリごとに1つ発行し、不要になったら個別に取り消せます。</p>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+
+  {{if .NewToken}}
+  {{/* Shown exactly once. Nothing stores the plaintext, so there is no
+       "show again" and the copy below is the only chance. */}}
+  <section class="card token-reveal" role="status">
+    <h2>新しいトークン</h2>
+    <p><strong>この画面を離れると二度と表示されません。</strong>いま控えてください。</p>
+    <pre class="token-reveal__value"><code>{{.NewToken}}</code></pre>
+    <p class="description">使い方（どちらでも同じです）:</p>
+    <pre class="token-reveal__usage"><code>Authorization: Bearer {{.NewToken}}</code></pre>
+    <p class="description">URLしか設定できないアプリの場合:</p>
+    <pre class="token-reveal__usage"><code>https://reader:{{.NewToken}}@jlp.lan.jackiemclean.net/api/v1/words</code></pre>
+  </section>
+  {{end}}
+
+  {{if .Enabled}}
+  <section class="card">
+    <h2>発行する</h2>
+    <form method="post" action="/settings/tokens" class="token-form">
+      <label>名前
+        <input type="text" name="name" required placeholder="kobo reader" autocomplete="off">
+      </label>
+      <fieldset class="token-form__scopes">
+        <legend>権限</legend>
+        {{range .Scopes}}
+        <label class="token-form__scope">
+          <input type="checkbox" name="scopes" value="{{.}}"> <code>{{.}}</code>
+        </label>
+        {{end}}
+      </fieldset>
+      <button type="submit" class="btn">発行</button>
+    </form>
+  </section>
+  {{end}}
+
+  <section class="card">
+    <h2>発行済み</h2>
+    <div class="table-card table-card--stack">
+      <table>
+        <thead><tr><th>名前</th><th>権限</th><th>作成</th><th>最終利用</th><th>状態</th><th></th></tr></thead>
+        <tbody>
+          {{range .Tokens}}<tr>
+            <td data-label="名前">{{.Name}}</td>
+            <td data-label="権限">{{range .Scopes}}<code>{{.}}</code> {{else}}<span class="empty">なし</span>{{end}}</td>
+            <td data-label="作成">{{.CreatedAt.Format "2006-01-02"}}</td>
+            <td data-label="最終利用">{{if .LastUsedAt}}{{.LastUsedAt.Format "2006-01-02 15:04"}}{{else}}<span class="empty">未使用</span>{{end}}</td>
+            <td data-label="状態">{{if .RevokedAt}}取り消し済み（{{.RevokedAt.Format "2006-01-02"}}）{{else}}有効{{end}}</td>
+            <td data-label="操作">{{if not .RevokedAt}}
+              {{/* Revoking is NOT a soft delete: there is no restore
+                   endpoint for a token, and the plaintext is gone, so
+                   the only way back is minting a new one. The dialog's
+                   default copy promises the opposite. */}}
+              <button type="button" class="btn btn--danger btn--sm no-print"
+                      data-confirm-delete="/settings/tokens/{{.ID}}/revoke"
+                      data-confirm-delete-label="{{.Name}}"
+                      data-confirm-delete-title="取り消しの確認"
+                      data-confirm-delete-note="のトークンを取り消します。このアプリはすぐにJLPへアクセスできなくなります。取り消しは元に戻せません — 必要になったら新しいトークンを発行してください。"
+                      data-confirm-delete-confirm="取り消す"
+                      aria-haspopup="dialog" aria-controls="confirm-delete-modal">取り消す</button>
+            {{end}}</td>
+          </tr>{{else}}<tr><td colspan="6" class="empty">まだトークンはありません。</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  {{template "confirm_delete" .}}
+</section>{{end}}

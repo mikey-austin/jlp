@@ -36,6 +36,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/agentrun"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
+	"github.com/mikeyaustin/jlp/internal/application/apitoken"
 	appchannel "github.com/mikeyaustin/jlp/internal/application/channel"
 	appconversation "github.com/mikeyaustin/jlp/internal/application/conversation"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
@@ -80,6 +81,10 @@ func main() {
 			os.Exit(1)
 		}
 		identities := postgres.NewIdentityRepository(pool)
+		// API tokens for clients that cannot run a browser login:
+		// reader apps posting to /api/v1/words, the A2A chat server.
+		// See internal/application/apitoken.
+		apiTokens := apitoken.New(postgres.NewAPITokenRepository(pool))
 		eventRepo := postgres.NewLearningEventRepository(pool)
 		bus := inprocbus.New()
 		recorder := learning.NewRecorder(eventRepo, bus)
@@ -560,6 +565,7 @@ func main() {
 			Addr:               fmt.Sprintf(":%d", cfg.Server.Port),
 			Auth:               authn,
 			Identities:         identities,
+			APITokens:          apiTokens,
 			Sessions:           sessionsSvc,
 			Writing:            writingSvc,
 			Events:             eventRepo,

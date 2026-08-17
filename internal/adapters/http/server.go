@@ -12,6 +12,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	appanki "github.com/mikeyaustin/jlp/internal/application/anki"
+	"github.com/mikeyaustin/jlp/internal/application/apitoken"
 	appconversation "github.com/mikeyaustin/jlp/internal/application/conversation"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
 	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
@@ -31,9 +32,13 @@ type Options struct {
 	Addr       string
 	Auth       auth.Authenticator
 	Identities storage.IdentityRepository
-	Sessions   *sessions.Service
-	Writing    *appwriting.Service
-	Events     storage.LearningEventRepository
+	// APITokens authenticates non-browser clients on /api/v1 and /a2a
+	// (see APIAuth). nil when there is no database, in which case those
+	// routes accept a session and nothing else.
+	APITokens *apitoken.Service
+	Sessions  *sessions.Service
+	Writing   *appwriting.Service
+	Events    storage.LearningEventRepository
 	// Feedback drives the workspace's フィードバックを取得 button and
 	// correction accept/reject buttons (Task 13): it wraps the Teacher
 	// agent with authorization, persistence, and learning events.
@@ -342,6 +347,14 @@ func (s *Server) routes() http.Handler {
 		r.Post("/settings/{provider}/model", s.settingsSetModel)
 		r.Post("/settings/{provider}/effort", s.settingsSetEffort)
 		r.Post("/settings/{provider}/reset", s.settingsReset)
+		// API tokens for non-browser clients. These are the credentials
+		// APIAuth checks on /api/v1 and /a2a; minting them is a browser
+		// action by the learner, so it lives in this session-authenticated
+		// group and NOT in the token-authenticated one — a token must
+		// never be able to mint another token.
+		r.Get("/settings/tokens", s.apiTokensPage)
+		r.Post("/settings/tokens", s.apiTokensCreate)
+		r.Post("/settings/tokens/{id}/revoke", s.apiTokensRevoke)
 		r.Post("/ratings", s.ratingsCreate)
 		r.Get("/grammar", s.grammarList)
 		r.Get("/grammar/{slug}", s.grammarDetail)
@@ -381,14 +394,31 @@ func (s *Server) routes() http.Handler {
 		// Phase 4 Task D: soft delete — see /sessions/{id}/delete above.
 		r.Post("/lessons/{id}/delete", s.lessonsDelete)
 		r.Post("/lessons/{id}/restore", s.lessonsRestore)
+	})
+
+	// The non-browser surfaces. These used to sit in the group above, on
+	// RequireIdentity, which worked while a session cookie was the only
+	// way in. Under OIDC it stopped working for the callers these routes
+	// exist for: a reader app has no browser to run a login flow in, so
+	// it can only ever be told 401.
+	//
+	// APIAuth accepts either — the learner's session, exactly as before,
+	// or an API token scoped to what that client was minted to do. It is
+	// a separate group precisely so token access CANNOT reach the HTML
+	// routes above: a token for a reader app must not be able to read a
+	// learner's correction history just because it can add words.
+	//
+	// CSRFProtect stays for the same reason it was here before: these are
+	// also reachable by a browser riding its cookie. A non-browser caller
+	// sends no Origin header and passes it unchanged (see csrf.go).
+	r.Group(func(r chi.Router) {
+		r.Use(APIAuth(s.opts.APITokens, s.opts.Auth, s.opts.Identities))
+		r.Use(CSRFProtect())
 
 		// /api/v1: the versioned JSON API (Task 16). It shares the exact
 		// same application services as the HTML routes above — no new
 		// application-layer code — proving HTMX isn't the domain boundary
-		// (PRD §38). It sits inside this same auth group so RequireIdentity
-		// covers it too; see middleware.go for how that middleware emits
-		// JSON 401s for paths under /api/ instead of the HTML routes'
-		// plain-text body.
+		// (PRD §38).
 		r.Route("/api/v1", func(r chi.Router) {
 			r.Get("/sessions", s.apiSessionsList)
 			r.Post("/sessions", s.apiSessionsCreate)
@@ -412,7 +442,7 @@ func (s *Server) routes() http.Handler {
 
 		// Phase 4 Task 3: the A2A protocol adapter (PRD §29/§30, Rule
 		// 13), mounted INSIDE this authenticated group deliberately —
-		// same RequireIdentity + CSRFProtect posture as every route
+		// same authenticated + CSRFProtect posture as every route
 		// above, not a separate unauthenticated surface. A2A task
 		// creation is a POST from a non-browser client, which sends no
 		// Origin/Sec-Fetch-Site header at all, so CSRFProtect's

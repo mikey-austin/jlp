@@ -4,10 +4,18 @@
       <h2 id="confirm-delete-title">削除の確認</h2>
       <button type="button" class="modal__close" data-modal-close aria-label="閉じる"><span aria-hidden="true">&times;</span></button>
     </div>
-    <p class="confirm-delete__body">「<span data-confirm-delete-label></span>」を削除します。一覧やページから消えますが、学習記録は消えません（/learner と /outcomes の数値は変わりません）。あとから元に戻せます。</p>
+    {{/* The title, the sentence after the label, and the confirm button
+         are all overridable per trigger (data-confirm-delete-title /
+         -note / -confirm). The defaults below describe SOFT delete —
+         "the record survives, you can undo this" — which is true of
+         sessions, words and lessons and false of anything else. The
+         token revoke button is the first non-soft-delete user, and
+         reusing this copy there would have told a learner an
+         irreversible action was reversible. */}}
+    <p class="confirm-delete__body">「<span data-confirm-delete-label></span>」<span data-confirm-delete-note>を削除します。一覧やページから消えますが、学習記録は消えません（/learner と /outcomes の数値は変わりません）。あとから元に戻せます。</span></p>
     <form method="post" data-confirm-delete-form class="confirm-delete__actions">
       <button type="button" class="btn btn--secondary" data-modal-close>キャンセル</button>
-      <button type="submit" class="btn btn--danger">削除する</button>
+      <button type="submit" class="btn btn--danger" data-confirm-delete-confirm>削除する</button>
     </form>
   </div>
 </dialog>{{end}}
