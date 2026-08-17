@@ -385,8 +385,20 @@ func TestStaticServiceWorkerHasServiceWorkerAllowedHeader(t *testing.T) {
 	if got := rec.Header().Get("Service-Worker-Allowed"); got != "/" {
 		t.Fatalf("Service-Worker-Allowed = %q, want \"/\"", got)
 	}
-	if !strings.Contains(rec.Body.String(), "jlp-shell-v3") {
-		t.Fatalf("sw.js body missing cache name jlp-shell-v3: %s", rec.Body.String())
+	// This once asserted the literal "jlp-shell-v3" and was satisfied by
+	// the old worker's line-3 COMMENT ("Cache name is versioned:
+	// jlp-shell-v3"), so it kept passing while the real constant moved to
+	// v4 and then v5 — it pinned prose, not behaviour. Assert the served
+	// constant equals the one the app derives from the current assets.
+	body := rec.Body.String()
+	want := `const CACHE_NAME = "` + currentShell().CacheName + `";`
+	if !strings.Contains(body, want) {
+		t.Fatalf("sw.js does not declare %s:\n%s", want, body)
+	}
+	// And that it precaches content-addressed URLs, which is what makes
+	// the cache-first strategy safe.
+	if !strings.Contains(body, "/static/css/components.") || strings.Contains(body, `"/static/css/components.css"`) {
+		t.Fatalf("sw.js precaches components.css unfingerprinted:\n%s", body)
 	}
 }
 

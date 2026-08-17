@@ -21,10 +21,17 @@ import (
 // every interval the scheduler ever stores is an exact multiple of 24h
 // (see application/retrieval's steps table), so integer division never
 // loses information here.
+// "asset" turns a logical static path into its content-addressed URL
+// (/static/css/app.css -> /static/css/app.<hash>.css). Templates must go
+// through it rather than writing /static/ paths directly: a plain path
+// is cacheable-but-not-versioned, which is how a learner ends up running
+// new markup against an old stylesheet. TestTemplatesRouteStaticThroughAsset
+// keeps that from creeping back.
 var funcs = template.FuncMap{
 	"percent": func(ratio float64) string { return fmt.Sprintf("%.0f", ratio*100) },
 	"lower":   strings.ToLower,
 	"days":    func(d time.Duration) int64 { return int64(d / (24 * time.Hour)) },
+	"asset":   assets.URL,
 }
 
 // render is what every page handler calls: Render below, plus the

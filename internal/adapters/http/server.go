@@ -252,16 +252,16 @@ func (s *Server) routes() http.Handler {
 	// outside the auth group like /healthz — the service worker serves it
 	// from cache with no network (and thus no session) available.
 	r.Get("/offline", s.offline)
-	fs := http.StripPrefix("/static/", http.FileServer(http.Dir("web/static")))
+	fs := http.StripPrefix("/static/", http.FileServer(http.Dir(assetRoot)))
 	// /static/sw.js needs its own exact-path route ahead of the wildcard
-	// below so we can set Service-Worker-Allowed: / on it — without that
-	// response header, a worker served from /static/ cannot register with
-	// scope '/' (the browser would otherwise restrict it to /static/*).
-	r.Get("/static/sw.js", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Service-Worker-Allowed", "/")
-		fs.ServeHTTP(w, r)
-	})
-	r.Handle("/static/*", fs)
+	// below: it is rendered from a template rather than read off disk, so
+	// that the fingerprinted asset URLs it precaches — and the cache name
+	// derived from them — change whenever an asset does. See assets.go.
+	r.Get("/static/sw.js", serviceWorker)
+	// assetHandler translates /static/css/app.<hash>.css back to the file
+	// on disk and picks the cache policy: a year and immutable when the
+	// hash matches the bytes, revalidate otherwise.
+	r.Handle("/static/*", assetHandler(fs))
 	// The login endpoints sit here, with /healthz and /static/*, for
 	// the obvious reason: a learner arriving at /auth/login has no
 	// session, and putting them inside the group below would mean

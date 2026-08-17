@@ -9,11 +9,11 @@
        toggle from here on. Kept tiny and inline on purpose. -->
   <script>(function(){try{var t=localStorage.getItem("jlp-theme");if(!t){t=(window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches)?"dark":"light";}document.documentElement.setAttribute("data-theme",t);}catch(e){document.documentElement.setAttribute("data-theme","light");}})();</script>
   <title>{{.Title}} — JLP</title>
-  <link rel="stylesheet" href="/static/fonts/fonts.css">
-  <link rel="stylesheet" href="/static/css/tokens.css">
-  <link rel="stylesheet" href="/static/css/components.css">
-  <link rel="stylesheet" href="/static/css/app.css">
-  <link rel="manifest" href="/static/manifest.webmanifest">
+  <link rel="stylesheet" href="{{asset "/static/fonts/fonts.css"}}">
+  <link rel="stylesheet" href="{{asset "/static/css/tokens.css"}}">
+  <link rel="stylesheet" href="{{asset "/static/css/components.css"}}">
+  <link rel="stylesheet" href="{{asset "/static/css/app.css"}}">
+  <link rel="manifest" href="{{asset "/static/manifest.webmanifest"}}">
   <meta name="theme-color" content="oklch(0.565 0.12 162)">
 </head>
 <body>
@@ -65,10 +65,10 @@
        section they're on without opening the menu — falls back to the
        button's own "メニュー" label when nothing matches (e.g. /offline). -->
   <script>(function(){var p=location.pathname;var label=document.getElementById("nav-toggle-label");document.querySelectorAll("#topnav a").forEach(function(a){var href=a.getAttribute("href");var hit=href==="/"?p==="/":(p===href||p.indexOf(href+"/")===0);if(hit){a.classList.add("is-active");a.setAttribute("aria-current","page");if(label){label.textContent=a.textContent;}}});})();</script>
-  <script src="/static/js/htmx.min.js" defer></script>
-  <script src="/static/js/alpine.min.js" defer></script>
-  <script src="/static/js/theme.js" defer></script>
-  <script src="/static/js/app.js" defer></script>
-  <script src="/static/js/record.js" defer></script>
+  <script src="{{asset "/static/js/htmx.min.js"}}" defer></script>
+  <script src="{{asset "/static/js/alpine.min.js"}}" defer></script>
+  <script src="{{asset "/static/js/theme.js"}}" defer></script>
+  <script src="{{asset "/static/js/app.js"}}" defer></script>
+  <script src="{{asset "/static/js/record.js"}}" defer></script>
 </body>
 </html>{{end}}

@@ -1,0 +1,67 @@
+// JLP PWA shell service worker — GENERATED, do not edit a served copy.
+//
+// Rendered by internal/adapters/http/assets.go from this template. The
+// cache name and every precached URL below are derived from the bytes of
+// the assets themselves, so editing a stylesheet changes this script,
+// which is what makes the browser reinstall the worker and drop the old
+// cache.
+//
+// This used to be a static file with a hand-bumped `jlp-shell-vN`
+// constant. Bumping it was missed twice in two days — once leaving the
+// 削除 buttons inert against a stale app.js, once leaving the logout
+// button unstyled against a stale components.css — and both times the
+// symptom appeared only for learners who already had the old copy, which
+// is the hardest audience to test against.
+const CACHE_NAME = "{{.CacheName}}";
+
+const PRECACHE_URLS = [
+{{- range .URLs}}
+  "{{.}}",
+{{- end}}
+];
+
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) => cache.addAll(PRECACHE_URLS))
+  );
+  self.skipWaiting();
+});
+
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches
+      .keys()
+      .then((names) =>
+        Promise.all(
+          names
+            .filter((name) => name !== CACHE_NAME)
+            .map((name) => caches.delete(name))
+        )
+      )
+      .then(() => self.clients.claim())
+  );
+});
+
+self.addEventListener("fetch", (event) => {
+  const { request } = event;
+
+  // Network-first for navigations, falling back to the cached offline
+  // shell when the network is unavailable.
+  if (request.mode === "navigate") {
+    event.respondWith(
+      fetch(request).catch(() => caches.match("/offline"))
+    );
+    return;
+  }
+
+  // Cache-first for static assets. Safe to the point of being boring now
+  // that every precached URL contains a hash of its own contents: a
+  // cached entry can only ever be the bytes its URL names, and a changed
+  // file arrives under a different URL that simply isn't in this cache.
+  const url = new URL(request.url);
+  if (url.pathname.startsWith("/static/")) {
+    event.respondWith(
+      caches.match(request).then((cached) => cached || fetch(request))
+    );
+  }
+});
