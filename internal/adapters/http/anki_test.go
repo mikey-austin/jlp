@@ -115,7 +115,7 @@ func ankiTestServer(t *testing.T, connector appanki.AnkiConnector) (h http.Handl
 	events = newFakeEventRepo()
 	rec := learning.NewRecorder(events, inprocbus.New())
 
-	opts.Sessions = sessions.NewService(sessionRepo)
+	opts.Sessions = sessions.NewService(sessionRepo, rec)
 	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
 	vocabRepo := newFakeVocabRepo()
@@ -388,7 +388,7 @@ func gatedAnkiTestServer(t *testing.T) (h http.Handler, correctionID string, car
 	events = newFakeEventRepo()
 	rec := learning.NewRecorder(events, inprocbus.New())
 
-	opts.Sessions = sessions.NewService(sessionRepo)
+	opts.Sessions = sessions.NewService(sessionRepo, rec)
 	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
 	vocabRepo := newFakeVocabRepo()

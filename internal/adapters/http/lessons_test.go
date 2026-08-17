@@ -26,10 +26,19 @@ import (
 type fakeLessonRepo struct {
 	byID         map[string]storage.Lesson
 	observations map[string][]storage.LessonObservation
+	// deleted mirrors the real table's deleted_at column: every read
+	// below honours it, so a handler test can assert a deleted lesson
+	// really stops reaching the page rather than merely that the delete
+	// route returned 303.
+	deleted map[string]time.Time
 }
 
 func newFakeLessonRepo() *fakeLessonRepo {
-	return &fakeLessonRepo{byID: map[string]storage.Lesson{}, observations: map[string][]storage.LessonObservation{}}
+	return &fakeLessonRepo{
+		byID:         map[string]storage.Lesson{},
+		observations: map[string][]storage.LessonObservation{},
+		deleted:      map[string]time.Time{},
+	}
 }
 
 func (f *fakeLessonRepo) Insert(_ context.Context, l storage.Lesson) error {
@@ -39,10 +48,14 @@ func (f *fakeLessonRepo) Insert(_ context.Context, l storage.Lesson) error {
 
 func (f *fakeLessonRepo) List(_ context.Context, identity learner.IdentityID) ([]storage.Lesson, error) {
 	var out []storage.Lesson
-	for _, l := range f.byID {
-		if l.IdentityID == identity {
-			out = append(out, l)
+	for id, l := range f.byID {
+		if l.IdentityID != identity {
+			continue
 		}
+		if _, gone := f.deleted[id]; gone {
+			continue
+		}
+		out = append(out, l)
 	}
 	return out, nil
 }
@@ -50,6 +63,9 @@ func (f *fakeLessonRepo) List(_ context.Context, identity learner.IdentityID) ([
 func (f *fakeLessonRepo) Get(_ context.Context, identity learner.IdentityID, id string) (storage.Lesson, error) {
 	l, ok := f.byID[id]
 	if !ok || l.IdentityID != identity {
+		return storage.Lesson{}, storage.ErrNotFound
+	}
+	if _, gone := f.deleted[id]; gone {
 		return storage.Lesson{}, storage.ErrNotFound
 	}
 	return l, nil
@@ -64,6 +80,9 @@ func (f *fakeLessonRepo) CompleteWithObservation(_ context.Context, identity lea
 	if !ok || l.IdentityID != identity {
 		return storage.Lesson{}, storage.ErrNotFound
 	}
+	if _, gone := f.deleted[lessonID]; gone {
+		return storage.Lesson{}, storage.ErrNotFound
+	}
 	l.Status = "completed"
 	l.CompletedAt = at
 	f.byID[lessonID] = l
@@ -72,7 +91,45 @@ func (f *fakeLessonRepo) CompleteWithObservation(_ context.Context, identity lea
 }
 
 func (f *fakeLessonRepo) Observations(_ context.Context, _ learner.IdentityID, lessonID string) ([]storage.LessonObservation, error) {
+	if _, gone := f.deleted[lessonID]; gone {
+		return nil, nil
+	}
 	return f.observations[lessonID], nil
+}
+
+// SoftDelete/Restore mirror the real adapter's contract exactly:
+// identity-scoped, idempotent, and ErrNotFound for both "unknown id"
+// and "someone else's id".
+func (f *fakeLessonRepo) SoftDelete(_ context.Context, identity learner.IdentityID, lessonID string, at time.Time) error {
+	l, ok := f.byID[lessonID]
+	if !ok || l.IdentityID != identity {
+		return storage.ErrNotFound
+	}
+	if _, already := f.deleted[lessonID]; !already {
+		f.deleted[lessonID] = at
+	}
+	return nil
+}
+
+func (f *fakeLessonRepo) Restore(_ context.Context, identity learner.IdentityID, lessonID string) error {
+	l, ok := f.byID[lessonID]
+	if !ok || l.IdentityID != identity {
+		return storage.ErrNotFound
+	}
+	delete(f.deleted, lessonID)
+	return nil
+}
+
+// isDeleted / exists let a handler test assert on the raw storage state
+// rather than on a status code.
+func (f *fakeLessonRepo) isDeleted(lessonID string) bool {
+	_, gone := f.deleted[lessonID]
+	return gone
+}
+
+func (f *fakeLessonRepo) exists(lessonID string) bool {
+	_, ok := f.byID[lessonID]
+	return ok
 }
 
 // lessonsTestServer wires a real chi router with a real

@@ -12,6 +12,7 @@ import (
 )
 
 const insertAnkiCard = `-- name: InsertAnkiCard :exec
+
 INSERT INTO anki_cards (id, identity_id, source_type, source_id, front, back, notes, status, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 `
@@ -28,6 +29,26 @@ type InsertAnkiCardParams struct {
 	CreatedAt  pgtype.Timestamptz
 }
 
+// Soft delete (Phase 4 Task D): anki_cards deliberately does NOT
+// cascade, and this is a decision rather than an omission.
+//
+// front/back/notes are DENORMALISED copies of a correction's original,
+// replacement and explanation, written once by application/anki's
+// GenerateFromCorrection and never re-read from corrections. So a card
+// made from a session the learner later deletes keeps showing that
+// session's sentence on /anki and in the TSV export. Filtering here
+// would fix that — and would also silently destroy flashcards the
+// learner explicitly reviewed and approved, as a side effect of tidying
+// a session. Deleting a session is not a request to delete your deck.
+//
+// What DID change: GetCorrection now filters, so a card can no longer
+// be CREATED from a deleted session's correction. New cards stop; old
+// cards stay. If a learner should be able to remove cards, that is its
+// own delete affordance on /anki, with its own confirmation — not a
+// cascade they never asked for.
+//
+// anki_cards is absent from softdelete_guard_test.go's guardedTables
+// for the same reason; this comment is the record of why.
 func (q *Queries) InsertAnkiCard(ctx context.Context, arg InsertAnkiCardParams) error {
 	_, err := q.db.Exec(ctx, insertAnkiCard,
 		arg.ID,

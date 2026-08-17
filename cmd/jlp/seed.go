@@ -104,7 +104,9 @@ func runSeed(ctx context.Context, cfg config.Config) error {
 		return err
 	}
 
-	sessionsSvc := sessions.NewService(postgres.NewSessionRepository(pool))
+	eventRepo := postgres.NewLearningEventRepository(pool)
+	recorder := learning.NewRecorder(eventRepo, inprocbus.New())
+	sessionsSvc := sessions.NewService(postgres.NewSessionRepository(pool), recorder)
 	existing, err := sessionsSvc.List(ctx, identity.ID)
 	if err != nil {
 		return fmt.Errorf("seed: list sessions: %w", err)
@@ -127,8 +129,6 @@ func runSeed(ctx context.Context, cfg config.Config) error {
 		slog.Info("seed: session created", "id", sess.ID, "title", sess.Title)
 	}
 
-	eventRepo := postgres.NewLearningEventRepository(pool)
-	recorder := learning.NewRecorder(eventRepo, inprocbus.New())
 	writingSvc := appwriting.NewService(postgres.NewDocumentRepository(pool), recorder)
 
 	doc, err := writingSvc.Open(ctx, identity.ID, sess.ID)

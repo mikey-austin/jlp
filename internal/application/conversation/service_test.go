@@ -68,6 +68,15 @@ func (f *fakeSessionRepo) List(_ context.Context, identity learner.IdentityID) (
 	return out, nil
 }
 
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeSessionRepo) SoftDelete(context.Context, learner.IdentityID, session.ID, time.Time) error {
+	return nil
+}
+
+func (f *fakeSessionRepo) Restore(context.Context, learner.IdentityID, session.ID) error {
+	return nil
+}
+
 // fakeConversationRepo mirrors the real postgres repo's identity-scoped
 // contract in memory: a conversation belongs to whichever identity
 // created it, and InsertTurn/ListTurns both refuse any other identity
@@ -291,6 +300,14 @@ func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabula
 }
 func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
 	panic("not used")
+}
+
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeVocabRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	return nil
+}
+func (f *fakeVocabRepo) Restore(context.Context, learner.IdentityID, string) error {
+	return nil
 }
 
 // fakeGrammarRepo is a minimal in-memory storage.GrammarRepository:

@@ -83,4 +83,20 @@ type LessonRepository interface {
 	// established; this mirrors AnkiCardRepository.List's identity-
 	// filtered-not-errored convention for a read-only listing.
 	Observations(ctx context.Context, identity learner.IdentityID, lessonID string) ([]LessonObservation, error)
+	// SoftDelete hides lessonID from /lessons and from every other read
+	// — List, Get, Observations and CompleteWithObservation all miss it
+	// afterwards, because the filter is in SQL (db/queries/lessons.sql)
+	// rather than at any caller. Nothing is erased: the
+	// tutor.lesson.created/completed events behind it stay, so /learner
+	// and /outcomes are unchanged, and Restore below undoes it.
+	//
+	// Identity-scoped from the request context, never from the request
+	// body: another identity's lesson returns ErrNotFound — the same
+	// response an unknown id gets, no existence oracle — and is left
+	// completely untouched. Idempotent: deleting an already-deleted
+	// lesson is a success and keeps the original deletion timestamp.
+	SoftDelete(ctx context.Context, identity learner.IdentityID, lessonID string, at time.Time) error
+	// Restore is the way back from SoftDelete, with the same
+	// identity-scoping and the same idempotence.
+	Restore(ctx context.Context, identity learner.IdentityID, lessonID string) error
 }

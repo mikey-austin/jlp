@@ -40,9 +40,9 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) er
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, identity_id, title, purpose, profile, created_at, updated_at
+SELECT id, identity_id, title, purpose, profile, created_at, updated_at, deleted_at
 FROM sessions
-WHERE id = $1 AND identity_id = $2
+WHERE id = $1 AND identity_id = $2 AND deleted_at IS NULL
 `
 
 type GetSessionParams struct {
@@ -61,14 +61,15 @@ func (q *Queries) GetSession(ctx context.Context, arg GetSessionParams) (Session
 		&i.Profile,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const listSessions = `-- name: ListSessions :many
-SELECT id, identity_id, title, purpose, profile, created_at, updated_at
+SELECT id, identity_id, title, purpose, profile, created_at, updated_at, deleted_at
 FROM sessions
-WHERE identity_id = $1
+WHERE identity_id = $1 AND deleted_at IS NULL
 ORDER BY updated_at DESC
 `
 
@@ -89,6 +90,7 @@ func (q *Queries) ListSessions(ctx context.Context, identityID string) ([]Sessio
 			&i.Profile,
 			&i.CreatedAt,
 			&i.UpdatedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -98,4 +100,69 @@ func (q *Queries) ListSessions(ctx context.Context, identityID string) ([]Sessio
 		return nil, err
 	}
 	return items, nil
+}
+
+const restoreSession = `-- name: RestoreSession :execrows
+UPDATE sessions SET deleted_at = NULL
+WHERE id = $1 AND identity_id = $2
+`
+
+type RestoreSessionParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+}
+
+// The way back (`jlp restore session <identity> <id>`, and the undo
+// affordance /sessions offers straight after a delete). Same
+// identity-scoping and same idempotence as SoftDeleteSession above:
+// restoring a session that was never deleted is a success, and another
+// identity's session matches zero rows.
+func (q *Queries) RestoreSession(ctx context.Context, arg RestoreSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, restoreSession, arg.ID, arg.IdentityID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const softDeleteSession = `-- name: SoftDeleteSession :execrows
+UPDATE sessions SET deleted_at = COALESCE(deleted_at, $3::timestamptz)
+WHERE id = $1 AND identity_id = $2
+`
+
+type SoftDeleteSessionParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+	At         pgtype.Timestamptz
+}
+
+// The learner's "delete this session" (Phase 4 Task D). Three
+// properties, all carried by this one statement rather than by the
+// caller:
+//
+//  1. Identity-scoped from the request context, never from the body:
+//     identity_id is part of the WHERE, so another identity's session
+//     matches zero rows and is reported EXACTLY like an id that does
+//     not exist (storage.ErrNotFound) — no existence oracle, and the
+//     row is left untouched.
+//  2. Idempotent: there is no "AND deleted_at IS NULL" here on
+//     purpose. Deleting an already-deleted session still matches its
+//     row, so :execrows is 1 and the caller sees success, not an
+//     error.
+//  3. Non-destructive and stable: COALESCE keeps the ORIGINAL deletion
+//     timestamp on a repeat delete, so "when did I delete this" stays
+//     answerable, and updated_at is deliberately NOT bumped so a
+//     restored session reappears at its real place in the list.
+//
+// The documents, feedback requests, corrections and conversation turns
+// hanging off the session are not touched: they disappear from every
+// read because their own queries test this row's deleted_at through an
+// EXISTS sub-select (see db/queries/documents.sql, feedback.sql,
+// conversations.sql), which is also what makes a restore complete.
+func (q *Queries) SoftDeleteSession(ctx context.Context, arg SoftDeleteSessionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteSession, arg.ID, arg.IdentityID, arg.At)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

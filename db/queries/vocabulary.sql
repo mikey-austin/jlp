@@ -3,9 +3,18 @@ SELECT item_id FROM vocabulary_events
 WHERE identity_id = $1 AND client_event_id = $2;
 
 -- name: GetVocabularyItem :one
+-- DELIBERATELY sees soft-deleted rows, and is the only vocabulary read
+-- that does. Its single caller is the client_event_id replay branch
+-- inside postgres/vocabulary.go's UpsertOnLookup: the item id comes
+-- from the vocabulary_events row this exact client event already wrote,
+-- and the contract is "a retried POST returns what the first one
+-- returned, unchanged". Filtering here would turn a replayed lookup of
+-- a since-deleted word into an error instead of the same idempotent
+-- response. Nothing renders this row to a learner — Ingest's own return
+-- value goes back to the API caller that just retried.
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,
-       meaning_en, tags
+       meaning_en, tags, deleted_at
 FROM vocabulary_items
 WHERE id = $1;
 
@@ -18,10 +27,38 @@ ON CONFLICT (identity_id, expression) DO UPDATE SET
     last_event = EXCLUDED.last_event,
     reading    = CASE WHEN EXCLUDED.reading <> '' THEN EXCLUDED.reading ELSE vocabulary_items.reading END,
     meaning    = CASE WHEN EXCLUDED.meaning <> '' THEN EXCLUDED.meaning ELSE vocabulary_items.meaning END,
-    source     = CASE WHEN EXCLUDED.source  <> '' THEN EXCLUDED.source  ELSE vocabulary_items.source  END
+    source     = CASE WHEN EXCLUDED.source  <> '' THEN EXCLUDED.source  ELSE vocabulary_items.source  END,
+    -- Soft delete (Phase 4 Task D): a fresh lookup RESURRECTS a
+    -- deleted word. UNIQUE (identity_id, expression) means the
+    -- conflict lands on the deleted row, so the only alternative is
+    -- leaving deleted_at set — and then a learner who looks the word
+    -- up again in the browser extension sees their lookup vanish into
+    -- a row they cannot reach, with no way to tell why. A word coming
+    -- back after you deliberately looked it up again is visible and
+    -- undoable; a lookup silently going nowhere is neither.
+    --
+    -- This applies ONLY to this query — one expression at a time.
+    -- UpsertVocabularyWord below (the bulk deck sync) and
+    -- InsertVocabularyItemIfAbsent (the expression-bank seed) both
+    -- leave deleted_at alone, because a delete must survive the next
+    -- automatic sync — otherwise deleting a synced word would be
+    -- permanently impossible.
+    --
+    -- Be precise about who "the learner" is here: resurrect is a
+    -- property of THIS QUERY, not of any particular caller, and it has
+    -- two — POST /api/v1/vocabulary/events and the MQTT bridge, whose
+    -- identity comes from the topic (learner/{id}/vocabulary/ingest)
+    -- with no per-message auth. So a broker publisher, including a
+    -- retained message replayed on reconnect, can undo a word delete.
+    -- That is a consequence of the MQTT channel's existing trust model,
+    -- not something resurrect introduces: the same publisher can
+    -- already CREATE vocabulary for that identity, which is strictly
+    -- more than bringing one back. Worth knowing before that channel is
+    -- exposed beyond a trusted LAN broker.
+    deleted_at = NULL
 RETURNING id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
           lookups, productions, successful_productions, first_seen, last_event,
-          meaning_en, tags;
+          meaning_en, tags, deleted_at;
 
 -- name: InsertVocabularyEvent :exec
 INSERT INTO vocabulary_events (id, identity_id, item_id, type, payload, client_event_id, occurred_at)
@@ -43,14 +80,15 @@ UPDATE vocabulary_items SET
     productions            = productions + 1,
     successful_productions = successful_productions + CASE WHEN sqlc.arg(successful)::boolean THEN 1 ELSE 0 END,
     last_event              = sqlc.arg(at)::timestamptz
-WHERE id = sqlc.arg(id) AND identity_id = sqlc.arg(identity_id);
+WHERE id = sqlc.arg(id) AND identity_id = sqlc.arg(identity_id) AND deleted_at IS NULL;
 
 -- name: ListVocabularyItems :many
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,
-       meaning_en, tags
+       meaning_en, tags, deleted_at
 FROM vocabulary_items
 WHERE identity_id = $1
+  AND deleted_at IS NULL
   AND (
         sqlc.arg(filter)::text = ''
         OR (sqlc.arg(filter)::text = 'looked-up' AND lookups > 0)
@@ -77,9 +115,10 @@ ORDER BY last_event DESC;
 -- comment for why limit<=0 is a documented "no cap" affordance.
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,
-       meaning_en, tags
+       meaning_en, tags, deleted_at
 FROM vocabulary_items
 WHERE identity_id = $1
+  AND deleted_at IS NULL
   AND (
         (lookups >= 3 AND productions = 0)
         OR (kind IN ('expression', 'pattern') AND productions = 0)
@@ -88,7 +127,14 @@ ORDER BY lookups DESC
 LIMIT NULLIF(sqlc.arg(limit_count)::int, 0);
 
 -- name: ListVocabularyExpressions :many
-SELECT id, expression FROM vocabulary_items WHERE identity_id = $1;
+-- The candidate set application/vocabulary.Service.DetectProduction
+-- scans reviewed text against. The deleted_at filter is not cosmetic
+-- here: a deleted word left in this set would keep collecting
+-- vocabulary.produced / vocabulary.produced-correctly events and keep
+-- re-scheduling itself in retrieval_items, so a word the learner
+-- removed would go on generating work for them from a row they cannot
+-- see.
+SELECT id, expression FROM vocabulary_items WHERE identity_id = $1 AND deleted_at IS NULL;
 
 -- name: GetVocabularyItemsByExpressions :many
 -- Bounded lookup for a SMALL, caller-supplied set of expressions —
@@ -102,9 +148,9 @@ SELECT id, expression FROM vocabulary_items WHERE identity_id = $1;
 -- large a learner's vocabulary grows.
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,
-       meaning_en, tags
+       meaning_en, tags, deleted_at
 FROM vocabulary_items
-WHERE identity_id = $1 AND expression = ANY(sqlc.arg(expressions)::text[]);
+WHERE identity_id = $1 AND deleted_at IS NULL AND expression = ANY(sqlc.arg(expressions)::text[]);
 
 -- name: UpsertVocabularyWord :exec
 -- Phase 3 Task 8's bulk sync path (POST /api/v1/words): unlike
@@ -126,3 +172,28 @@ ON CONFLICT (identity_id, expression) DO UPDATE SET
     source     = CASE WHEN EXCLUDED.source     <> '' THEN EXCLUDED.source     ELSE vocabulary_items.source     END,
     tags       = CASE WHEN jsonb_array_length(EXCLUDED.tags) > 0 THEN EXCLUDED.tags ELSE vocabulary_items.tags END,
     last_event = EXCLUDED.last_event;
+-- deleted_at is deliberately absent from that SET list. A bulk deck
+-- sync must never undo a delete: if it did, a word the learner removed
+-- would return on the very next sync and could never be got rid of.
+-- Only UpsertVocabularyItemOnLookup — one expression, looked up by the
+-- learner on purpose, right now — clears deleted_at. See its comment.
+
+-- name: SoftDeleteVocabularyItem :execrows
+-- The learner's "delete this word" (Phase 4 Task D). Identity-scoped,
+-- idempotent, and non-destructive for exactly the reasons
+-- db/queries/sessions.sql's SoftDeleteSession spells out — read that
+-- comment; this is the same statement over a different table, on
+-- purpose, so there is one shape to understand rather than three.
+--
+-- The vocabulary_events rows behind the item are untouched, as are the
+-- learning_events its lookups and productions produced: /learner's
+-- vocabulary funnel and /outcomes are computed from those and must not
+-- move when a learner tidies their word list.
+UPDATE vocabulary_items SET deleted_at = COALESCE(deleted_at, sqlc.arg(at)::timestamptz)
+WHERE id = $1 AND identity_id = $2;
+
+-- name: RestoreVocabularyItem :execrows
+-- The way back — see SoftDeleteSession/RestoreSession in
+-- db/queries/sessions.sql.
+UPDATE vocabulary_items SET deleted_at = NULL
+WHERE id = $1 AND identity_id = $2;

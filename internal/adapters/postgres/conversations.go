@@ -63,6 +63,15 @@ func (r *ConversationRepository) GetOrCreateForSession(ctx context.Context, iden
 		UpdatedAt:  now,
 	})
 	if err != nil {
+		// InsertConversation is guarded on the session being live (see
+		// db/queries/conversations.sql), so zero rows means "that
+		// session is deleted, or was never this identity's". Mapped to
+		// storage.ErrNotFound for the same reason DocumentRepository.
+		// GetOrCreateForSession maps it: callers branch on ErrNotFound
+		// to answer 404 rather than 500.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", false, storage.ErrNotFound
+		}
 		return "", false, err
 	}
 	return uuid.UUID(row.ID.Bytes).String(), true, nil

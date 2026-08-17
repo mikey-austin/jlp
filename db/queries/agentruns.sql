@@ -21,18 +21,43 @@ FROM agent_runs ar
 WHERE ar.id = $8 AND ar.identity_id = $9;
 
 -- name: ListAgentRuns :many
+-- Soft delete, session cascade (Phase 4 Task D) — see the header
+-- comment in db/queries/documents.sql for the shape.
+--
+-- agent_runs looks like an operational record, and mostly is, but
+-- system/input/output hold the learner's own text VERBATIM: for a
+-- feedback run, input is the selection they asked to have reviewed
+-- (application/agentrun.Runner sets it from the first user message),
+-- and a get_recent_writing tool call's result carries up to 1000 runes
+-- of that session's document. /ai/agents renders all of it. Filtering
+-- an operational record felt unnecessary until you notice it is a
+-- second, unindexed copy of the writing.
+--
+-- session_id is nullable (00018), and a NULL one belongs to no session
+-- — lesson generation, the weekly summary — so it must stay visible;
+-- that is what the "IS NULL OR" half says. No statistic reads
+-- agent_runs: AgentUsageStats is over ai_requests, so nothing on
+-- /learner moves.
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
        status, turns, started_at, ended_at, error, system, input, output
 FROM agent_runs
-WHERE identity_id = $1
+WHERE agent_runs.identity_id = $1
+  AND (agent_runs.session_id IS NULL
+       OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = agent_runs.session_id AND s.deleted_at IS NULL))
 ORDER BY started_at DESC
 LIMIT $2;
 
 -- name: GetAgentRun :one
+-- Same filter as ListAgentRuns above, and the reason the two child
+-- queries below need none of their own: /ai/agents/{id} resolves the
+-- run through this query first, so a deleted session's trace 404s
+-- before its tool calls or turns are ever fetched.
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
        status, turns, started_at, ended_at, error, system, input, output
 FROM agent_runs
-WHERE id = $1 AND identity_id = $2;
+WHERE agent_runs.id = $1 AND agent_runs.identity_id = $2
+  AND (agent_runs.session_id IS NULL
+       OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = agent_runs.session_id AND s.deleted_at IS NULL));
 
 -- name: ListToolCallsForRun :many
 SELECT id, agent_run_id, tool_name, arguments, result, is_error, duration_ms, created_at

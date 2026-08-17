@@ -260,6 +260,13 @@ func (s *Server) routes() http.Handler {
 		r.Get("/sessions", s.sessionsList)
 		r.Post("/sessions", s.sessionsCreate)
 		r.Get("/sessions/{id}", s.sessionsWorkspace)
+		// Phase 4 Task D: soft delete. POST rather than DELETE because
+		// the control is a plain <form> inside the confirmation
+		// <dialog> and HTML forms cannot issue DELETE — the same
+		// verb-suffix shape /lessons/{id}/complete and /anki/{id}/status
+		// already use. Both are inside this CSRF-protected group.
+		r.Post("/sessions/{id}/delete", s.sessionsDelete)
+		r.Post("/sessions/{id}/restore", s.sessionsRestore)
 		r.Post("/sessions/{id}/feedback", s.feedbackRequest)
 		// GET /sessions/{id}/feedback/{feedbackID}: Phase 4 Task W item 2 —
 		// clicking a feedback-history row loads that past review into the
@@ -316,6 +323,9 @@ func (s *Server) routes() http.Handler {
 		// beliefs changed anything.
 		r.Get("/outcomes", s.outcomesPage)
 		r.Get("/vocabulary", s.vocabularyPage)
+		// Phase 4 Task D: soft delete — see /sessions/{id}/delete above.
+		r.Post("/vocabulary/{id}/delete", s.vocabularyDelete)
+		r.Post("/vocabulary/{id}/restore", s.vocabularyRestore)
 		r.Get("/practice", s.practicePage)
 		r.Post("/practice/start", s.practiceStart)
 		r.Post("/practice/{id}/answer", s.practiceAnswer)
@@ -338,6 +348,9 @@ func (s *Server) routes() http.Handler {
 		r.Post("/lessons", s.lessonsGenerate)
 		r.Get("/lessons/{id}", s.lessonsDetail)
 		r.Post("/lessons/{id}/complete", s.lessonsComplete)
+		// Phase 4 Task D: soft delete — see /sessions/{id}/delete above.
+		r.Post("/lessons/{id}/delete", s.lessonsDelete)
+		r.Post("/lessons/{id}/restore", s.lessonsRestore)
 
 		// /api/v1: the versioned JSON API (Task 16). It shares the exact
 		// same application services as the HTML routes above — no new

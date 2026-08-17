@@ -29,6 +29,9 @@ linters:
         # internal/agent/teacher/teacher_test.go,
         # internal/agent/drill/drill_test.go,
         # internal/application/vocabulary/service_test.go,
+        # internal/application/sessions/service_test.go (Phase 4 Task D —
+        # soft delete's Delete/Restore record a learning event, so the
+        # session service now takes a learning.Recorder over an EventBus),
         # internal/application/feedback/service_test.go,
         # internal/application/writing/service_test.go,
         # internal/application/practice/service_test.go,

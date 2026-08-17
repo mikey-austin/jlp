@@ -41,5 +41,7 @@ func AllTypes() []Type {
 		TypeConversationTurn,
 		TypeConversationSummarised,
 		TypeSpeechTranscribed,
+		TypeContentDeleted,
+		TypeContentRestored,
 	}
 }

@@ -47,6 +47,11 @@ textarea:focus-visible,
   cursor: pointer;
   box-shadow: var(--shadow-sm);
   text-decoration: none;
+  /* A button's label is never a paragraph: it is one short phrase that
+   * must stay on one line. Without this, a button in a narrow table
+   * column breaks mid-word — /vocabulary's 削除 rendered as 削 / 除
+   * stacked, which reads as two characters rather than one word. */
+  white-space: nowrap;
   transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 .btn:hover {
@@ -285,6 +290,42 @@ p.hint {
  * <dialog> shown via showModal() sizes against the initial containing
  * block); .modal__panel's own overflow-y keeps a tall form scrollable
  * rather than clipped when the viewport is short. */
+
+/* The delete-confirmation modal (partials/confirm_delete.html.tmpl)
+ * reuses .modal/.modal__panel/.modal__header wholesale; these two rules
+ * are the only thing it adds — the explanatory line and the
+ * cancel/confirm pair. wrap on the actions row is what keeps the two
+ * buttons inside the gutter at 390px rather than overflowing. */
+.confirm-delete__body {
+  margin: 0 0 var(--space-4);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  line-height: 1.7;
+}
+.confirm-delete__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+}
+
+/* The undo affordance a list shows straight after a delete
+ * (partials/confirm_delete.html.tmpl's "undo_delete"). It sits on
+ * .card, which owns its own padding, so this rule only lays out the
+ * message and the button. */
+.undo-delete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+.undo-delete p {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
 
 /* ============================== Badges ================================= */
 

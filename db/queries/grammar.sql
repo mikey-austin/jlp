@@ -57,5 +57,13 @@ FROM corrections c
 JOIN correction_concepts cc ON cc.correction_id = c.id AND cc.concept_slug = $2 AND cc.resolved
 JOIN feedback_requests f ON f.id = c.feedback_request_id AND f.identity_id = $1
 WHERE NOT (c.status = 'presented' AND c.revealed = false AND (c.hint_ja <> '' OR c.hint_en <> ''))
+  -- Soft delete, session cascade (Phase 4 Task D) — see the header
+  -- comment in db/queries/documents.sql. This query renders the
+  -- learner's own sentences on /grammar/{slug}, so it follows the
+  -- "rendered text hides, counted history stays" line: ConceptStats
+  -- above deliberately does NOT filter (it is a count of what the
+  -- learner has encountered, and those encounters happened), while
+  -- the text of a correction from a deleted session must not appear.
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL)
 ORDER BY c.created_at DESC
 LIMIT $3;

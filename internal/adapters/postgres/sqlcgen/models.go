@@ -231,6 +231,7 @@ type Lesson struct {
 	Status      string
 	CreatedAt   pgtype.Timestamptz
 	CompletedAt pgtype.Timestamptz
+	DeletedAt   pgtype.Timestamptz
 }
 
 type LessonObservation struct {
@@ -262,6 +263,7 @@ type Session struct {
 	Profile    []byte
 	CreatedAt  pgtype.Timestamptz
 	UpdatedAt  pgtype.Timestamptz
+	DeletedAt  pgtype.Timestamptz
 }
 
 type ToolCall struct {
@@ -301,4 +303,5 @@ type VocabularyItem struct {
 	LastEvent             pgtype.Timestamptz
 	MeaningEn             string
 	Tags                  []byte
+	DeletedAt             pgtype.Timestamptz
 }

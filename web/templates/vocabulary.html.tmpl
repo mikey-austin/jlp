@@ -6,9 +6,10 @@
     <a href="/vocabulary?filter=produced"{{if eq .Filter "produced"}} class="is-active"{{end}}>使えた</a>
     <a href="/vocabulary?filter=activate"{{if eq .Filter "activate"}} class="is-active"{{end}}>活性化候補</a>
   </nav>
+  {{template "undo_delete" .}}
   <div class="table-card table-card--stack">
     <table>
-      <thead><tr><th>表現</th><th>読み方</th><th>意味</th><th>English</th><th>タグ</th><th>種類</th><th>検索回数</th><th>使用</th></tr></thead>
+      <thead><tr><th>表現</th><th>読み方</th><th>意味</th><th>English</th><th>タグ</th><th>種類</th><th>検索回数</th><th>使用</th><th></th></tr></thead>
       <tbody>
         {{range .Items}}<tr>
           <td data-label="表現">{{.Expression}}</td>
@@ -19,8 +20,11 @@
           <td data-label="種類"><span class="badge badge--type">{{.KindLabel}}</span></td>
           <td data-label="検索回数">{{.Lookups}}</td>
           <td data-label="使用">✓{{.SuccessfulProductions}} ✗{{.FailedProductions}}</td>
-        </tr>{{else}}<tr><td colspan="8" class="empty">語彙がありません</td></tr>{{end}}
+          <td data-label="操作"><button type="button" class="btn btn--secondary btn--sm no-print" data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Expression}}" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td>
+        </tr>{{else}}<tr><td colspan="9" class="empty">語彙がありません</td></tr>{{end}}
       </tbody>
     </table>
   </div>
+
+  {{template "confirm_delete" .}}
 </section>{{end}}

@@ -170,6 +170,42 @@ func (s *Service) Complete(ctx context.Context, identity learner.IdentityID, les
 	return l, nil
 }
 
+// Delete soft-deletes lessonID: the guide disappears from /lessons, its
+// detail page 404s, and its tutor observations go with it. Nothing is
+// erased — the tutor.lesson.created/tutor.lesson.completed events stay,
+// so /learner and /outcomes read exactly the same afterwards — and
+// Restore below brings it back.
+//
+// identity MUST come from the request context (httpx.IdentityFrom),
+// never from a form field, a query parameter or a JSON body. Another
+// learner's lesson returns storage.ErrNotFound — the same error an
+// unknown id returns — and is left untouched. Deleting an
+// already-deleted lesson is a success, not an error.
+func (s *Service) Delete(ctx context.Context, identity learner.IdentityID, lessonID string) error {
+	if err := s.repo.SoftDelete(ctx, identity, lessonID, time.Now().UTC()); err != nil {
+		return err
+	}
+	// Log-and-continue, not hard-fail: the delete is already durable —
+	// see Generate's own event-recording comment for the same reasoning.
+	if err := s.rec.RecordDeletion(ctx, identity, learning.KindLesson, lessonID); err != nil {
+		slog.Error("record content.deleted", "identity", identity, "kind", "lesson", "subject", lessonID, "err", err)
+	}
+	return nil
+}
+
+// Restore undoes Delete. Same identity-from-context rule, same
+// ErrNotFound-for-someone-else's-lesson contract, and restoring a
+// lesson that was never deleted is a success.
+func (s *Service) Restore(ctx context.Context, identity learner.IdentityID, lessonID string) error {
+	if err := s.repo.Restore(ctx, identity, lessonID); err != nil {
+		return err
+	}
+	if err := s.rec.RecordRestore(ctx, identity, learning.KindLesson, lessonID); err != nil {
+		slog.Error("record content.restored", "identity", identity, "kind", "lesson", "subject", lessonID, "err", err)
+	}
+	return nil
+}
+
 // formatPriorities mirrors application/feedback.Service.recentErrors'
 // formatting exactly, so a tutor and the Teacher agent see priorities
 // phrased the same way.

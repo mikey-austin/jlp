@@ -33,10 +33,19 @@ type fakeLessonRepo struct {
 	mu           sync.Mutex
 	byID         map[string]storage.Lesson
 	observations map[string][]storage.LessonObservation // key: lesson ID
+	// deleted mirrors the real table's deleted_at column. Every read
+	// below honours it, because a fake that ignored soft delete would
+	// let the Delete tests pass while the thing they are actually
+	// asserting — "it stops coming back from reads" — went untested.
+	deleted map[string]time.Time
 }
 
 func newFakeLessonRepo() *fakeLessonRepo {
-	return &fakeLessonRepo{byID: map[string]storage.Lesson{}, observations: map[string][]storage.LessonObservation{}}
+	return &fakeLessonRepo{
+		byID:         map[string]storage.Lesson{},
+		observations: map[string][]storage.LessonObservation{},
+		deleted:      map[string]time.Time{},
+	}
 }
 
 func (f *fakeLessonRepo) Insert(_ context.Context, l storage.Lesson) error {
@@ -50,10 +59,14 @@ func (f *fakeLessonRepo) List(_ context.Context, identity learner.IdentityID) ([
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []storage.Lesson
-	for _, l := range f.byID {
-		if l.IdentityID == identity {
-			out = append(out, l)
+	for id, l := range f.byID {
+		if l.IdentityID != identity {
+			continue
 		}
+		if _, gone := f.deleted[id]; gone {
+			continue
+		}
+		out = append(out, l)
 	}
 	return out, nil
 }
@@ -63,6 +76,9 @@ func (f *fakeLessonRepo) Get(_ context.Context, identity learner.IdentityID, id 
 	defer f.mu.Unlock()
 	l, ok := f.byID[id]
 	if !ok || l.IdentityID != identity {
+		return storage.Lesson{}, storage.ErrNotFound
+	}
+	if _, gone := f.deleted[id]; gone {
 		return storage.Lesson{}, storage.ErrNotFound
 	}
 	return l, nil
@@ -81,6 +97,11 @@ func (f *fakeLessonRepo) CompleteWithObservation(_ context.Context, identity lea
 	if !ok || l.IdentityID != identity {
 		return storage.Lesson{}, storage.ErrNotFound
 	}
+	// A deleted lesson is invisible to reads, so it must not be
+	// completable either — the same test CompleteLesson applies in SQL.
+	if _, gone := f.deleted[lessonID]; gone {
+		return storage.Lesson{}, storage.ErrNotFound
+	}
 	l.Status = "completed"
 	l.CompletedAt = at
 	f.byID[lessonID] = l
@@ -91,7 +112,55 @@ func (f *fakeLessonRepo) CompleteWithObservation(_ context.Context, identity lea
 func (f *fakeLessonRepo) Observations(_ context.Context, _ learner.IdentityID, lessonID string) ([]storage.LessonObservation, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if _, gone := f.deleted[lessonID]; gone {
+		return nil, nil
+	}
 	return f.observations[lessonID], nil
+}
+
+// SoftDelete/Restore mirror the real adapter's contract exactly:
+// identity-scoped, idempotent, and ErrNotFound for both "unknown id"
+// and "someone else's id" — the property the cross-identity tests in
+// softdelete_test.go rely on.
+func (f *fakeLessonRepo) SoftDelete(_ context.Context, identity learner.IdentityID, lessonID string, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l, ok := f.byID[lessonID]
+	if !ok || l.IdentityID != identity {
+		return storage.ErrNotFound
+	}
+	if _, already := f.deleted[lessonID]; !already {
+		f.deleted[lessonID] = at
+	}
+	return nil
+}
+
+func (f *fakeLessonRepo) Restore(_ context.Context, identity learner.IdentityID, lessonID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	l, ok := f.byID[lessonID]
+	if !ok || l.IdentityID != identity {
+		return storage.ErrNotFound
+	}
+	delete(f.deleted, lessonID)
+	return nil
+}
+
+// isDeleted / exists let a test assert on the raw storage state rather
+// than on what a read returns — the difference between "the delete was
+// refused" and "the row was quietly removed anyway".
+func (f *fakeLessonRepo) isDeleted(lessonID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, gone := f.deleted[lessonID]
+	return gone
+}
+
+func (f *fakeLessonRepo) exists(lessonID string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	_, ok := f.byID[lessonID]
+	return ok
 }
 
 // fakePriorityRepo is a minimal storage.PriorityRepository double:
@@ -200,6 +269,15 @@ func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabula
 	panic("not used by lessons service tests")
 }
 func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
+	panic("not used by lessons service tests")
+}
+
+// Soft delete (Phase 4 Task D) — unused by these tests; present to
+// satisfy the port.
+func (f *fakeVocabRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	panic("not used by lessons service tests")
+}
+func (f *fakeVocabRepo) Restore(context.Context, learner.IdentityID, string) error {
 	panic("not used by lessons service tests")
 }
 

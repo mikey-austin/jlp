@@ -184,6 +184,53 @@ func (r *LessonRepository) Observations(ctx context.Context, identity learner.Id
 	return out, nil
 }
 
+// SoftDelete marks the lesson deleted — see
+// storage.LessonRepository.SoftDelete for the contract. The rows-
+// affected count is the whole authorization answer: SoftDeleteLesson's
+// WHERE carries identity_id, so zero rows means "no such lesson for
+// THIS identity", whether the id belongs to someone else or to nobody,
+// and both come back as ErrNotFound. Mirrors SessionRepository.
+// SoftDelete exactly, including mapping a malformed id to ErrNotFound
+// rather than a distinguishable parse error.
+func (r *LessonRepository) SoftDelete(ctx context.Context, identity learner.IdentityID, lessonID string, at time.Time) error {
+	pgID, err := parseUUID(lessonID)
+	if err != nil {
+		return storage.ErrNotFound
+	}
+	rows, err := r.q.SoftDeleteLesson(ctx, sqlcgen.SoftDeleteLessonParams{
+		ID:         pgID,
+		IdentityID: string(identity),
+		At:         pgtype.Timestamptz{Time: at, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
+// Restore clears the deletion mark — see
+// storage.LessonRepository.Restore.
+func (r *LessonRepository) Restore(ctx context.Context, identity learner.IdentityID, lessonID string) error {
+	pgID, err := parseUUID(lessonID)
+	if err != nil {
+		return storage.ErrNotFound
+	}
+	rows, err := r.q.RestoreLesson(ctx, sqlcgen.RestoreLessonParams{
+		ID:         pgID,
+		IdentityID: string(identity),
+	})
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
 func fromLessonRow(row sqlcgen.Lesson) storage.Lesson {
 	return storage.Lesson{
 		ID:          uuid.UUID(row.ID.Bytes).String(),

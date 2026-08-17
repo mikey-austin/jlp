@@ -45,7 +45,13 @@ type fakeVocabRepo struct {
 	items        map[string]*vocabulary.Item // key: identity/expression
 	byID         map[string]*vocabulary.Item // key: item id
 	clientEvents map[string]string           // key: identity/clientEventID -> item id
-	nextID       int
+	// deleted mirrors the real table's deleted_at column, keyed by item
+	// id. Every read below honours it, because a fake that ignored soft
+	// delete would let the Delete tests pass while the thing they are
+	// actually asserting — "it stops coming back from reads" — went
+	// untested.
+	deleted map[string]time.Time
+	nextID  int
 
 	productions []productionCall
 	bulkUpserts []bulkUpsertCall
@@ -62,6 +68,7 @@ func newFakeVocabRepo() *fakeVocabRepo {
 		items:        map[string]*vocabulary.Item{},
 		byID:         map[string]*vocabulary.Item{},
 		clientEvents: map[string]string{},
+		deleted:      map[string]time.Time{},
 	}
 }
 
@@ -112,6 +119,9 @@ func (f *fakeVocabRepo) UpsertOnLookup(_ context.Context, identity learner.Ident
 	if clientEventID != "" {
 		f.clientEvents[clientEventKey(identity, clientEventID)] = item.ID
 	}
+	// Resurrect-on-lookup, mirroring UpsertVocabularyItemOnLookup's
+	// "deleted_at = NULL" in db/queries/vocabulary.sql.
+	delete(f.deleted, item.ID)
 
 	return *item, false, nil
 }
@@ -136,6 +146,9 @@ func (f *fakeVocabRepo) List(_ context.Context, identity learner.IdentityID, fil
 		if item.IdentityID != identity {
 			continue
 		}
+		if _, gone := f.deleted[item.ID]; gone {
+			continue
+		}
 		switch filter {
 		case "", "looked-up":
 			// every item was created by a lookup
@@ -154,9 +167,13 @@ func (f *fakeVocabRepo) List(_ context.Context, identity learner.IdentityID, fil
 func (f *fakeVocabRepo) AllExpressions(_ context.Context, identity learner.IdentityID) (map[string]string, error) {
 	out := map[string]string{}
 	for _, item := range f.items {
-		if item.IdentityID == identity {
-			out[item.Expression] = item.ID
+		if item.IdentityID != identity {
+			continue
 		}
+		if _, gone := f.deleted[item.ID]; gone {
+			continue
+		}
+		out[item.Expression] = item.ID
 	}
 	return out, nil
 }
@@ -168,9 +185,14 @@ func (f *fakeVocabRepo) AllExpressions(_ context.Context, identity learner.Ident
 func (f *fakeVocabRepo) GetByExpressions(_ context.Context, identity learner.IdentityID, expressions []string) ([]vocabulary.Item, error) {
 	out := make([]vocabulary.Item, 0, len(expressions))
 	for _, expr := range expressions {
-		if item, ok := f.items[vocabKey(identity, expr)]; ok {
-			out = append(out, *item)
+		item, ok := f.items[vocabKey(identity, expr)]
+		if !ok {
+			continue
 		}
+		if _, gone := f.deleted[item.ID]; gone {
+			continue
+		}
+		out = append(out, *item)
 	}
 	return out, nil
 }
@@ -229,6 +251,43 @@ type bulkUpsertCall struct {
 // always vocabulary.KindWord on first insert, matching the real
 // adapter (this endpoint is word-only, unlike UpsertOnLookup's
 // caller-supplied Kind).
+// SoftDelete/Restore mirror the real adapter's contract exactly:
+// identity-scoped, idempotent, and ErrNotFound for both "unknown id"
+// and "someone else's id" — the property the cross-identity tests in
+// softdelete_test.go rely on.
+func (f *fakeVocabRepo) SoftDelete(_ context.Context, identity learner.IdentityID, itemID string, at time.Time) error {
+	item, ok := f.byID[itemID]
+	if !ok || item.IdentityID != identity {
+		return storage.ErrNotFound
+	}
+	if _, already := f.deleted[itemID]; !already {
+		f.deleted[itemID] = at
+	}
+	return nil
+}
+
+func (f *fakeVocabRepo) Restore(_ context.Context, identity learner.IdentityID, itemID string) error {
+	item, ok := f.byID[itemID]
+	if !ok || item.IdentityID != identity {
+		return storage.ErrNotFound
+	}
+	delete(f.deleted, itemID)
+	return nil
+}
+
+// isDeleted / exists let a test assert on the raw storage state rather
+// than on what a read returns — the difference between "the delete was
+// refused" and "the row was quietly removed anyway".
+func (f *fakeVocabRepo) isDeleted(itemID string) bool {
+	_, gone := f.deleted[itemID]
+	return gone
+}
+
+func (f *fakeVocabRepo) exists(itemID string) bool {
+	_, ok := f.byID[itemID]
+	return ok
+}
+
 func (f *fakeVocabRepo) BulkUpsertWords(_ context.Context, identity learner.IdentityID, words []storage.WordInput, at time.Time) (int, error) {
 	f.bulkUpserts = append(f.bulkUpserts, bulkUpsertCall{Identity: identity, Words: words})
 	for _, w := range words {

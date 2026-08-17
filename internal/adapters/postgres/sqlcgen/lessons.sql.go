@@ -13,8 +13,8 @@ import (
 
 const completeLesson = `-- name: CompleteLesson :one
 UPDATE lessons SET status = 'completed', completed_at = $3
-WHERE id = $1 AND identity_id = $2
-RETURNING id, identity_id, plan, status, created_at, completed_at
+WHERE id = $1 AND identity_id = $2 AND deleted_at IS NULL
+RETURNING id, identity_id, plan, status, created_at, completed_at, deleted_at
 `
 
 type CompleteLessonParams struct {
@@ -27,7 +27,10 @@ type CompleteLessonParams struct {
 // see postgres/lessons.go's CompleteWithObservation, the ONLY caller of
 // either query: a lesson must never end up "completed" without its
 // triggering observation actually attached, or vice versa. Not called
-// standalone by anything else.
+// standalone by anything else. The deleted_at test is the same one Get
+// applies: a deleted lesson is invisible to reads, so it must not be
+// completable either — otherwise the tutor's observation would attach
+// to something the learner can no longer see.
 func (q *Queries) CompleteLesson(ctx context.Context, arg CompleteLessonParams) (Lesson, error) {
 	row := q.db.QueryRow(ctx, completeLesson, arg.ID, arg.IdentityID, arg.CompletedAt)
 	var i Lesson
@@ -38,14 +41,15 @@ func (q *Queries) CompleteLesson(ctx context.Context, arg CompleteLessonParams) 
 		&i.Status,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getLesson = `-- name: GetLesson :one
-SELECT id, identity_id, plan, status, created_at, completed_at
+SELECT id, identity_id, plan, status, created_at, completed_at, deleted_at
 FROM lessons
-WHERE id = $1 AND identity_id = $2
+WHERE id = $1 AND identity_id = $2 AND deleted_at IS NULL
 `
 
 type GetLessonParams struct {
@@ -63,6 +67,7 @@ func (q *Queries) GetLesson(ctx context.Context, arg GetLessonParams) (Lesson, e
 		&i.Status,
 		&i.CreatedAt,
 		&i.CompletedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -94,7 +99,7 @@ func (q *Queries) InsertLesson(ctx context.Context, arg InsertLessonParams) erro
 const insertLessonObservation = `-- name: InsertLessonObservation :execrows
 INSERT INTO lesson_observations (id, lesson_id, author, notes, subjects, created_at)
 SELECT $1, $2, $3, $4, $5, $6
-WHERE EXISTS (SELECT 1 FROM lessons l WHERE l.id = $2 AND l.identity_id = $7)
+WHERE EXISTS (SELECT 1 FROM lessons l WHERE l.id = $2 AND l.identity_id = $7 AND l.deleted_at IS NULL)
 `
 
 type InsertLessonObservationParams struct {
@@ -111,11 +116,11 @@ type InsertLessonObservationParams struct {
 // postgres/lessons.go's CompleteWithObservation. Identity check via a
 // join to lessons itself, the same "never trust the caller, check via
 // a join" shape UpsertAIRating (ai_ratings.sql) uses: nothing is
-// written unless lesson_id actually belongs to identity_id. :execrows
-// lets the caller tell "wrote" from "no such lesson for this identity"
-// apart — zero rows affected means the latter, mapped to
-// storage.ErrNotFound (and, since this runs inside the same
-// transaction, rolls back CompleteLesson's status flip too).
+// written unless lesson_id actually belongs to identity_id AND is not
+// soft-deleted. :execrows lets the caller tell "wrote" from "no such
+// lesson for this identity" apart — zero rows affected means the
+// latter, mapped to storage.ErrNotFound (and, since this runs inside
+// the same transaction, rolls back CompleteLesson's status flip too).
 func (q *Queries) InsertLessonObservation(ctx context.Context, arg InsertLessonObservationParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertLessonObservation,
 		arg.ID,
@@ -136,7 +141,7 @@ const listLessonObservations = `-- name: ListLessonObservations :many
 SELECT o.id, o.lesson_id, o.author, o.notes, o.subjects, o.created_at
 FROM lesson_observations o
 JOIN lessons l ON o.lesson_id = l.id
-WHERE o.lesson_id = $1 AND l.identity_id = $2
+WHERE o.lesson_id = $1 AND l.identity_id = $2 AND l.deleted_at IS NULL
 ORDER BY o.created_at DESC
 `
 
@@ -148,6 +153,8 @@ type ListLessonObservationsParams struct {
 // Scoped via the same join, but filters rather than errors on a
 // mismatch — see storage.LessonRepository.Observations' doc comment
 // for why (the caller always Gets the lesson first, which does error).
+// A soft-deleted lesson's observations are filtered here for the same
+// reason: the lesson itself is unreachable, so its notes must be too.
 func (q *Queries) ListLessonObservations(ctx context.Context, arg ListLessonObservationsParams) ([]LessonObservation, error) {
 	rows, err := q.db.Query(ctx, listLessonObservations, arg.LessonID, arg.IdentityID)
 	if err != nil {
@@ -176,9 +183,9 @@ func (q *Queries) ListLessonObservations(ctx context.Context, arg ListLessonObse
 }
 
 const listLessons = `-- name: ListLessons :many
-SELECT id, identity_id, plan, status, created_at, completed_at
+SELECT id, identity_id, plan, status, created_at, completed_at, deleted_at
 FROM lessons
-WHERE identity_id = $1
+WHERE identity_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC
 `
 
@@ -198,6 +205,7 @@ func (q *Queries) ListLessons(ctx context.Context, identityID string) ([]Lesson,
 			&i.Status,
 			&i.CreatedAt,
 			&i.CompletedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -207,4 +215,48 @@ func (q *Queries) ListLessons(ctx context.Context, identityID string) ([]Lesson,
 		return nil, err
 	}
 	return items, nil
+}
+
+const restoreLesson = `-- name: RestoreLesson :execrows
+UPDATE lessons SET deleted_at = NULL
+WHERE id = $1 AND identity_id = $2
+`
+
+type RestoreLessonParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+}
+
+// The way back — see SoftDeleteSession/RestoreSession in
+// db/queries/sessions.sql.
+func (q *Queries) RestoreLesson(ctx context.Context, arg RestoreLessonParams) (int64, error) {
+	result, err := q.db.Exec(ctx, restoreLesson, arg.ID, arg.IdentityID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const softDeleteLesson = `-- name: SoftDeleteLesson :execrows
+UPDATE lessons SET deleted_at = COALESCE(deleted_at, $3::timestamptz)
+WHERE id = $1 AND identity_id = $2
+`
+
+type SoftDeleteLessonParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+	At         pgtype.Timestamptz
+}
+
+// The learner's "delete this lesson guide" (Phase 4 Task D). Identity-
+// scoped, idempotent, and non-destructive for exactly the reasons
+// db/queries/sessions.sql's SoftDeleteSession spells out — read that
+// comment; this is the same statement over a different table, on
+// purpose, so there is one shape to understand rather than three.
+func (q *Queries) SoftDeleteLesson(ctx context.Context, arg SoftDeleteLessonParams) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteLesson, arg.ID, arg.IdentityID, arg.At)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }

@@ -111,6 +111,15 @@ func (panicVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabulary
 	panic("not used by planner wiring tests")
 }
 
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (panicVocabRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	panic("not used by planner wiring tests")
+}
+
+func (panicVocabRepo) Restore(context.Context, learner.IdentityID, string) error {
+	panic("not used by planner wiring tests")
+}
+
 // TestHandleEventTriggersPlannerRecomputeWhenWired pins the live-path
 // half of the brief's Step 3 wiring — now debounced (see
 // debounce_test.go for the full coalescing contract): once SetPlanner

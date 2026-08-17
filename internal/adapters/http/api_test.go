@@ -10,8 +10,10 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	"github.com/mikeyaustin/jlp/internal/application/analytics"
 	"github.com/mikeyaustin/jlp/internal/application/feedback"
+	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	"github.com/mikeyaustin/jlp/internal/domain/correction"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
@@ -155,7 +157,7 @@ func TestAPISessionsCreateRepositoryErrorReturns500AndHidesDetail(t *testing.T) 
 	opts := testOptionsWithSessions()
 	repo := newFakeSessionRepo()
 	repo.createErr = errors.New("pq: connection refused to host db.internal:5432 user=jlp password=hunter2")
-	opts.Sessions = sessions.NewService(repo)
+	opts.Sessions = sessions.NewService(repo, learning.NewRecorder(newFakeEventRepo(), inprocbus.New()))
 
 	srv := NewServer(opts)
 	h := srv.HandlerForTest()

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -77,6 +78,54 @@ func (r *SessionRepository) List(ctx context.Context, identity learner.IdentityI
 		out = append(out, s)
 	}
 	return out, nil
+}
+
+// SoftDelete marks the session deleted — see
+// storage.SessionRepository.SoftDelete for the contract. The rows-
+// affected count is the whole authorization answer: SoftDeleteSession's
+// WHERE carries identity_id, so zero rows means "no such session for
+// THIS identity", whether the id belongs to someone else or to nobody,
+// and both come back as ErrNotFound. A malformed id maps to ErrNotFound
+// too rather than a parse error, so a caller probing with junk learns
+// nothing an unknown-but-valid id would not also tell them.
+func (r *SessionRepository) SoftDelete(ctx context.Context, identity learner.IdentityID, id session.ID, at time.Time) error {
+	pgID, err := toPgUUID(id)
+	if err != nil {
+		return storage.ErrNotFound
+	}
+	rows, err := r.q.SoftDeleteSession(ctx, sqlcgen.SoftDeleteSessionParams{
+		ID:         pgID,
+		IdentityID: string(identity),
+		At:         pgtype.Timestamptz{Time: at, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
+// Restore clears the deletion mark — see
+// storage.SessionRepository.Restore. Same identity-scoping and same
+// zero-rows-is-ErrNotFound mapping as SoftDelete above.
+func (r *SessionRepository) Restore(ctx context.Context, identity learner.IdentityID, id session.ID) error {
+	pgID, err := toPgUUID(id)
+	if err != nil {
+		return storage.ErrNotFound
+	}
+	rows, err := r.q.RestoreSession(ctx, sqlcgen.RestoreSessionParams{
+		ID:         pgID,
+		IdentityID: string(identity),
+	})
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
 }
 
 func toPgUUID(id session.ID) (pgtype.UUID, error) {

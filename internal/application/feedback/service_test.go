@@ -69,6 +69,15 @@ func (f *fakeSessionRepo) List(_ context.Context, identity learner.IdentityID) (
 	return out, nil
 }
 
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeSessionRepo) SoftDelete(context.Context, learner.IdentityID, session.ID, time.Time) error {
+	return nil
+}
+
+func (f *fakeSessionRepo) Restore(context.Context, learner.IdentityID, session.ID) error {
+	return nil
+}
+
 type fakeDocRepo struct {
 	docs map[string]writing.Document // key: identity+"/"+id
 }
@@ -538,6 +547,15 @@ func (f *fakeVocabRepo) SeedBank(context.Context, learner.IdentityID, []vocabula
 // reasoning as SeedBank above.
 func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
 	panic("not used by feedback service tests")
+}
+
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeVocabRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	return nil
+}
+
+func (f *fakeVocabRepo) Restore(context.Context, learner.IdentityID, string) error {
+	return nil
 }
 
 // fakeRetrievalRepo is a storage.RetrievalRepository double: only Due

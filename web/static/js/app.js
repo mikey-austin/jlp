@@ -195,6 +195,74 @@ document.addEventListener("click", function (evt) {
   }
 })();
 
+// Delete-confirmation modal (partials/confirm_delete.html.tmpl): the
+// one <dialog> on a page, shared by every delete control on it. A
+// delete that fires on a single click, in an app someone uses daily,
+// eventually destroys work — so nothing deletes without passing
+// through here.
+//
+// It reuses the same native <dialog> the new-session modal above uses,
+// for the same reasons (showModal() supplies the focus trap and
+// Esc-to-close; a click landing on the dialog itself is a backdrop
+// click; the "close" event covers all three closing paths). What
+// differs is the trigger arrangement: there is one dialog and MANY
+// triggers — one per row — so instead of a hardcoded id pair, each
+// trigger carries the POST target and the human-readable name of the
+// thing it deletes:
+//
+//   <button data-confirm-delete="/sessions/{id}/delete"
+//           data-confirm-delete-label="日記の練習">削除</button>
+//
+// and this handler copies those onto the dialog's form before opening
+// it. The form is a plain method="post" — CSRFProtect (internal/
+// adapters/http/csrf.go) covers it by origin, and with JS off the
+// triggers simply do nothing rather than deleting unconfirmed.
+(function () {
+  "use strict";
+  var dialog = document.getElementById("confirm-delete-modal");
+  if (!dialog) return;
+
+  var form = dialog.querySelector("[data-confirm-delete-form]");
+  var label = dialog.querySelector("[data-confirm-delete-label]");
+  if (!form) return;
+
+  var opener = null;
+
+  document.addEventListener("click", function (evt) {
+    var trigger = evt.target.closest("[data-confirm-delete]");
+    if (!trigger) return;
+    evt.preventDefault();
+    // A trigger with an empty target opens nothing rather than opening a
+    // dialog whose form would fall back to posting at the CURRENT url.
+    // Every trigger the templates emit carries one; this is here so that
+    // if one ever doesn't, the failure is "the button does nothing"
+    // rather than "the button posts somewhere unintended".
+    var action = trigger.getAttribute("data-confirm-delete");
+    if (!action) return;
+    opener = trigger;
+    form.setAttribute("action", action);
+    if (label) label.textContent = trigger.getAttribute("data-confirm-delete-label") || "";
+    dialog.showModal();
+  });
+
+  dialog.querySelectorAll("[data-modal-close]").forEach(function (btn) {
+    btn.addEventListener("click", function () {
+      dialog.close();
+    });
+  });
+
+  dialog.addEventListener("click", function (evt) {
+    if (evt.target === dialog) dialog.close();
+  });
+
+  // Focus goes back to the row's own delete button, not to a fixed
+  // element: with one dialog serving many rows, "the trigger" is
+  // whichever one opened it.
+  dialog.addEventListener("close", function () {
+    if (opener) opener.focus();
+  });
+})();
+
 // Hamburger nav (layout.html.tmpl): #nav-toggle shows/hides #topnav
 // below the 900px breakpoint (components.css) where the inline nav no
 // longer fits the header in one row. #topnav has no native modal

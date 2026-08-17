@@ -176,6 +176,14 @@ func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []s
 	panic("not used by practice service tests")
 }
 
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeVocabRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	return nil
+}
+func (f *fakeVocabRepo) Restore(context.Context, learner.IdentityID, string) error {
+	return nil
+}
+
 // --- test harness ---
 
 var iAdjectivePastConcept = grammar.Concept{Slug: "i-adjective-past", Name: "い-adjective past tense", JLPTLevel: 5}

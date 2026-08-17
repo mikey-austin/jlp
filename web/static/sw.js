@@ -4,7 +4,13 @@
 // precached shell assets below change so the activate handler evicts
 // the stale cache on the next load (later tasks must respect this).
 // v3: Phase 4 Task 8 adds record.js.
-const CACHE_NAME = "jlp-shell-v3";
+// v4: Phase 4 Task D changes app.js (the delete-confirmation dialog)
+// and components.css (its styles), both precached below. Without this
+// bump an existing learner keeps the v3 copies and their 削除 buttons
+// do nothing at all — the dialog handler is in the app.js they never
+// re-fetch. Found by browser verification, not by reasoning: the
+// buttons rendered and were simply inert until the cache was cleared.
+const CACHE_NAME = "jlp-shell-v4";
 
 const PRECACHE_URLS = [
   "/offline",

@@ -14,7 +14,8 @@ import (
 const getDocument = `-- name: GetDocument :one
 SELECT id, session_id, identity_id, content, version, updated_at
 FROM documents
-WHERE id = $1 AND identity_id = $2
+WHERE documents.id = $1 AND documents.identity_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = documents.session_id AND s.deleted_at IS NULL)
 `
 
 type GetDocumentParams struct {
@@ -37,9 +38,11 @@ func (q *Queries) GetDocument(ctx context.Context, arg GetDocumentParams) (Docum
 }
 
 const getDocumentBySession = `-- name: GetDocumentBySession :one
+
 SELECT id, session_id, identity_id, content, version, updated_at
 FROM documents
-WHERE session_id = $1 AND identity_id = $2
+WHERE documents.session_id = $1 AND documents.identity_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = documents.session_id AND s.deleted_at IS NULL)
 `
 
 type GetDocumentBySessionParams struct {
@@ -47,6 +50,22 @@ type GetDocumentBySessionParams struct {
 	IdentityID string
 }
 
+// Soft delete, session cascade (Phase 4 Task D).
+//
+// documents and document_versions carry no deleted_at of their own: a
+// document belongs to exactly one session (UNIQUE documents.session_id,
+// 00003 migration), so "is this document deleted?" has one answer —
+// "is its session deleted?". Every query below therefore tests the
+// OWNING SESSION's deleted_at, spelled the same way each time:
+//
+//	AND EXISTS (SELECT 1 FROM sessions s
+//	             WHERE s.id = <docs>.session_id AND s.deleted_at IS NULL)
+//
+// EXISTS rather than a JOIN so the projection stays exactly the
+// documents table's own column list and sqlc keeps emitting the plain
+// Document row struct. internal/adapters/postgres/softdelete_guard_test.go
+// fails the build if a new query in this file omits the predicate
+// without an explicit, reasoned exemption.
 func (q *Queries) GetDocumentBySession(ctx context.Context, arg GetDocumentBySessionParams) (Document, error) {
 	row := q.db.QueryRow(ctx, getDocumentBySession, arg.SessionID, arg.IdentityID)
 	var i Document
@@ -63,7 +82,8 @@ func (q *Queries) GetDocumentBySession(ctx context.Context, arg GetDocumentBySes
 
 const insertDocument = `-- name: InsertDocument :one
 INSERT INTO documents (id, session_id, identity_id, content, version, updated_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+SELECT $1, $2, $3, $4, $5, $6
+WHERE EXISTS (SELECT 1 FROM sessions s WHERE s.id = $2 AND s.deleted_at IS NULL)
 RETURNING id, session_id, identity_id, content, version, updated_at
 `
 
@@ -76,6 +96,14 @@ type InsertDocumentParams struct {
 	UpdatedAt  pgtype.Timestamptz
 }
 
+// Guarded, not a bare INSERT: postgres/documents.go's
+// GetOrCreateForSession falls through to this the moment
+// GetDocumentBySession finds nothing — which, now that that query
+// filters deleted sessions, includes "the session was deleted and its
+// document is hidden". Without the guard that fallthrough would try to
+// insert a SECOND document for the same session_id and hit the UNIQUE
+// index as a 500 instead of a clean miss. Zero rows here surfaces as
+// pgx.ErrNoRows, which the adapter maps to storage.ErrNotFound.
 func (q *Queries) InsertDocument(ctx context.Context, arg InsertDocumentParams) (Document, error) {
 	row := q.db.QueryRow(ctx, insertDocument,
 		arg.ID,
@@ -124,6 +152,7 @@ SELECT dv.id, dv.document_id, dv.version, dv.content, dv.created_at
 FROM document_versions dv
 JOIN documents d ON d.id = dv.document_id
 WHERE dv.document_id = $1 AND d.identity_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = d.session_id AND s.deleted_at IS NULL)
 ORDER BY dv.version DESC
 LIMIT $3
 `
@@ -163,7 +192,8 @@ func (q *Queries) ListDocumentVersions(ctx context.Context, arg ListDocumentVers
 const updateDocumentContent = `-- name: UpdateDocumentContent :one
 UPDATE documents
 SET content = $3, version = version + 1, updated_at = now()
-WHERE id = $1 AND identity_id = $2
+WHERE documents.id = $1 AND documents.identity_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = documents.session_id AND s.deleted_at IS NULL)
 RETURNING id, session_id, identity_id, content, version, updated_at
 `
 
@@ -173,6 +203,11 @@ type UpdateDocumentContentParams struct {
 	Content    string
 }
 
+// The predicate matters more here than on any read: POST /documents/{id}
+// autosaves by document id alone and never resolves the session, so
+// without this a deleted session's document would stay fully writable
+// from a stale tab. Zero rows maps to storage.ErrNotFound in the
+// adapter, the same miss a wrong identity already produces.
 func (q *Queries) UpdateDocumentContent(ctx context.Context, arg UpdateDocumentContentParams) (Document, error) {
 	row := q.db.QueryRow(ctx, updateDocumentContent, arg.ID, arg.IdentityID, arg.Content)
 	var i Document

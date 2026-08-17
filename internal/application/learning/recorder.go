@@ -13,6 +13,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/ports/events"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -52,4 +53,46 @@ func (r *Recorder) Record(ctx context.Context, ev event.LearningEvent) error {
 		slog.Error("event publish", "type", ev.Type, "err", err)
 	}
 	return nil
+}
+
+// Kind names what a learner deleted or restored, for
+// RecordDeletion/RecordRestore's Evidence. All three ids are bare
+// UUIDs, so the kind cannot be inferred from the event's Subject and
+// has to be carried explicitly.
+type Kind string
+
+const (
+	KindSession    Kind = "session"
+	KindVocabulary Kind = "vocabulary"
+	KindLesson     Kind = "lesson"
+)
+
+// RecordDeletion appends the content.deleted event for a soft delete
+// (Phase 4 Task D). It exists so the three delete paths — sessions,
+// vocabulary items, lessons — cannot each invent their own spelling of
+// the same event: one Evidence shape, one Type, defined once. See
+// event.TypeContentDeleted for why a soft delete records an event at
+// all.
+//
+// SessionID is deliberately left nil even when kind is KindSession:
+// filing a session's deletion inside that same session would put the
+// record inside the thing it is a record of.
+func (r *Recorder) RecordDeletion(ctx context.Context, identity learner.IdentityID, kind Kind, subject string) error {
+	return r.Record(ctx, event.LearningEvent{
+		IdentityID: identity,
+		Type:       event.TypeContentDeleted,
+		Subject:    subject,
+		Evidence:   map[string]any{"kind": string(kind)},
+	})
+}
+
+// RecordRestore appends the content.restored event — the mirror of
+// RecordDeletion, same Evidence shape.
+func (r *Recorder) RecordRestore(ctx context.Context, identity learner.IdentityID, kind Kind, subject string) error {
+	return r.Record(ctx, event.LearningEvent{
+		IdentityID: identity,
+		Type:       event.TypeContentRestored,
+		Subject:    subject,
+		Evidence:   map[string]any{"kind": string(kind)},
+	})
 }

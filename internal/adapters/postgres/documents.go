@@ -57,6 +57,17 @@ func (r *DocumentRepository) GetOrCreateForSession(ctx context.Context, identity
 		UpdatedAt:  pgtype.Timestamptz{Time: time.Now().UTC(), Valid: true},
 	})
 	if err != nil {
+		// InsertDocument is guarded on the session being live (see
+		// db/queries/documents.sql), so zero rows here means "that
+		// session is deleted, or was never this identity's" — the same
+		// miss the Get above already reports, and it must reach the
+		// caller as storage.ErrNotFound rather than as a raw driver
+		// error. Callers branch on ErrNotFound to answer 404 instead of
+		// 500; letting pgx.ErrNoRows escape this adapter would turn a
+		// deleted session's workspace into an internal error.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return writing.Document{}, false, storage.ErrNotFound
+		}
 		return writing.Document{}, false, err
 	}
 	return fromDocumentRow(row), true, nil

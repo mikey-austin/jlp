@@ -14,9 +14,23 @@ INSERT INTO corrections (
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13);
 
 -- name: UpdateCorrectionStatus :one
+-- Soft delete, session cascade (Phase 4 Task D) — see the header
+-- comment in db/queries/documents.sql. corrections reach a session only
+-- through their feedback_requests row, so every query in this file
+-- tests f.session_id's session, spelled the same way each time:
+--
+--     AND EXISTS (SELECT 1 FROM sessions s
+--                  WHERE s.id = f.session_id AND s.deleted_at IS NULL)
+--
+-- On the four mutating statements (this one, RetryCorrection,
+-- RevealCorrection, RecordConfidence) it is what stops a stale open tab
+-- from accepting, retrying or revealing a correction inside a session
+-- the learner has since deleted; zero rows maps to storage.ErrNotFound,
+-- the same miss a wrong identity already produces.
 UPDATE corrections c SET status = $3
 FROM feedback_requests f
 WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL)
 RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
           c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
           c.status, c.attempts, c.confidence, c.revealed, f.session_id;
@@ -44,6 +58,7 @@ UPDATE corrections c SET
     status = CASE WHEN $3 = c.replacement THEN 'accepted' ELSE c.status END
 FROM feedback_requests f
 WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2 AND c.status = 'presented'
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL)
 RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
           c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
           c.status, c.attempts, c.confidence, c.revealed, f.session_id;
@@ -52,6 +67,7 @@ RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
 UPDATE corrections c SET revealed = true
 FROM feedback_requests f
 WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2 AND c.status = 'presented'
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL)
 RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
           c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
           c.status, c.attempts, c.confidence, c.revealed, f.session_id;
@@ -65,7 +81,8 @@ SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
        c.status, c.attempts, c.confidence, c.revealed, f.session_id
 FROM corrections c
 JOIN feedback_requests f ON c.feedback_request_id = f.id
-WHERE c.id = $1 AND f.identity_id = $2;
+WHERE c.id = $1 AND f.identity_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL);
 
 -- name: RecentCorrections :many
 -- Identity-scoped, unfiltered by status (Phase 3 Task 4, PRD §18): a
@@ -79,6 +96,12 @@ SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
 FROM corrections c
 JOIN feedback_requests f ON c.feedback_request_id = f.id
 WHERE f.identity_id = $1
+  -- Identity-wide, so this is the one correction read a deleted session
+  -- would otherwise leak from: it backs the agent tools
+  -- get_correction_history and get_recent_errors (internal/tools/
+  -- learner.go) and the lesson-guide generator, none of which are
+  -- session-scoped and none of which could apply the rule themselves.
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL)
 ORDER BY c.created_at DESC
 LIMIT $2;
 
@@ -86,6 +109,7 @@ LIMIT $2;
 UPDATE corrections c SET confidence = $3
 FROM feedback_requests f
 WHERE c.id = $1 AND c.feedback_request_id = f.id AND f.identity_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL)
 RETURNING c.id, c.feedback_request_id, c.position, c.original, c.replacement,
           c.type, c.severity, c.explanation_ja, c.explanation_en, c.hint_ja, c.hint_en,
           c.status, c.attempts, c.confidence, c.revealed, f.session_id;
@@ -107,6 +131,7 @@ FROM feedback_requests f
 LEFT JOIN corrections c ON c.feedback_request_id = f.id
 LEFT JOIN ai_requests a ON a.id = f.ai_request_id
 WHERE f.identity_id = $1 AND f.session_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL)
 GROUP BY f.id, f.selection_text, f.created_at, a.provider, a.model
 ORDER BY f.created_at DESC;
 
@@ -121,7 +146,8 @@ SELECT f.id, f.selection_text, f.corrected_text, f.created_at,
        COALESCE(a.model, '') AS model
 FROM feedback_requests f
 LEFT JOIN ai_requests a ON a.id = f.ai_request_id
-WHERE f.id = $1 AND f.identity_id = $2;
+WHERE f.id = $1 AND f.identity_id = $2
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL);
 
 -- name: ListCorrectionsForFeedback :many
 -- Every correction for one feedback_request_id, in Position order — NOT
@@ -136,4 +162,5 @@ SELECT c.id, c.feedback_request_id, c.position, c.original, c.replacement,
 FROM corrections c
 JOIN feedback_requests f ON c.feedback_request_id = f.id
 WHERE c.feedback_request_id = $1
+  AND EXISTS (SELECT 1 FROM sessions s WHERE s.id = f.session_id AND s.deleted_at IS NULL)
 ORDER BY c.position;

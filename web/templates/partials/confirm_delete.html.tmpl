@@ -1,0 +1,20 @@
+{{define "confirm_delete"}}<dialog id="confirm-delete-modal" class="modal" aria-labelledby="confirm-delete-title">
+  <div class="modal__panel">
+    <div class="modal__header">
+      <h2 id="confirm-delete-title">削除の確認</h2>
+      <button type="button" class="modal__close" data-modal-close aria-label="閉じる"><span aria-hidden="true">&times;</span></button>
+    </div>
+    <p class="confirm-delete__body">「<span data-confirm-delete-label></span>」を削除します。一覧やページから消えますが、学習記録は消えません（/learner と /outcomes の数値は変わりません）。あとから元に戻せます。</p>
+    <form method="post" data-confirm-delete-form class="confirm-delete__actions">
+      <button type="button" class="btn btn--secondary" data-modal-close>キャンセル</button>
+      <button type="submit" class="btn btn--danger">削除する</button>
+    </form>
+  </div>
+</dialog>{{end}}
+
+{{define "undo_delete"}}{{if .RestoreAction}}<div class="card undo-delete no-print" role="status">
+  <p>削除しました。学習記録は残っています。</p>
+  <form method="post" action="{{.RestoreAction}}">
+    <button type="submit" class="btn btn--secondary btn--sm">削除を取り消す</button>
+  </form>
+</div>{{end}}{{end}}

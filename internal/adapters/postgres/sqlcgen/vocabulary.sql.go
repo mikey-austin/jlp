@@ -31,11 +31,20 @@ func (q *Queries) GetVocabularyEventItemByClientID(ctx context.Context, arg GetV
 const getVocabularyItem = `-- name: GetVocabularyItem :one
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,
-       meaning_en, tags
+       meaning_en, tags, deleted_at
 FROM vocabulary_items
 WHERE id = $1
 `
 
+// DELIBERATELY sees soft-deleted rows, and is the only vocabulary read
+// that does. Its single caller is the client_event_id replay branch
+// inside postgres/vocabulary.go's UpsertOnLookup: the item id comes
+// from the vocabulary_events row this exact client event already wrote,
+// and the contract is "a retried POST returns what the first one
+// returned, unchanged". Filtering here would turn a replayed lookup of
+// a since-deleted word into an error instead of the same idempotent
+// response. Nothing renders this row to a learner — Ingest's own return
+// value goes back to the API caller that just retried.
 func (q *Queries) GetVocabularyItem(ctx context.Context, id pgtype.UUID) (VocabularyItem, error) {
 	row := q.db.QueryRow(ctx, getVocabularyItem, id)
 	var i VocabularyItem
@@ -55,6 +64,7 @@ func (q *Queries) GetVocabularyItem(ctx context.Context, id pgtype.UUID) (Vocabu
 		&i.LastEvent,
 		&i.MeaningEn,
 		&i.Tags,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -62,9 +72,9 @@ func (q *Queries) GetVocabularyItem(ctx context.Context, id pgtype.UUID) (Vocabu
 const getVocabularyItemsByExpressions = `-- name: GetVocabularyItemsByExpressions :many
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,
-       meaning_en, tags
+       meaning_en, tags, deleted_at
 FROM vocabulary_items
-WHERE identity_id = $1 AND expression = ANY($2::text[])
+WHERE identity_id = $1 AND deleted_at IS NULL AND expression = ANY($2::text[])
 `
 
 type GetVocabularyItemsByExpressionsParams struct {
@@ -106,6 +116,7 @@ func (q *Queries) GetVocabularyItemsByExpressions(ctx context.Context, arg GetVo
 			&i.LastEvent,
 			&i.MeaningEn,
 			&i.Tags,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -185,9 +196,10 @@ func (q *Queries) InsertVocabularyItemIfAbsent(ctx context.Context, arg InsertVo
 const listVocabularyActivationCandidates = `-- name: ListVocabularyActivationCandidates :many
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,
-       meaning_en, tags
+       meaning_en, tags, deleted_at
 FROM vocabulary_items
 WHERE identity_id = $1
+  AND deleted_at IS NULL
   AND (
         (lookups >= 3 AND productions = 0)
         OR (kind IN ('expression', 'pattern') AND productions = 0)
@@ -238,6 +250,7 @@ func (q *Queries) ListVocabularyActivationCandidates(ctx context.Context, arg Li
 			&i.LastEvent,
 			&i.MeaningEn,
 			&i.Tags,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -250,7 +263,7 @@ func (q *Queries) ListVocabularyActivationCandidates(ctx context.Context, arg Li
 }
 
 const listVocabularyExpressions = `-- name: ListVocabularyExpressions :many
-SELECT id, expression FROM vocabulary_items WHERE identity_id = $1
+SELECT id, expression FROM vocabulary_items WHERE identity_id = $1 AND deleted_at IS NULL
 `
 
 type ListVocabularyExpressionsRow struct {
@@ -258,6 +271,13 @@ type ListVocabularyExpressionsRow struct {
 	Expression string
 }
 
+// The candidate set application/vocabulary.Service.DetectProduction
+// scans reviewed text against. The deleted_at filter is not cosmetic
+// here: a deleted word left in this set would keep collecting
+// vocabulary.produced / vocabulary.produced-correctly events and keep
+// re-scheduling itself in retrieval_items, so a word the learner
+// removed would go on generating work for them from a row they cannot
+// see.
 func (q *Queries) ListVocabularyExpressions(ctx context.Context, identityID string) ([]ListVocabularyExpressionsRow, error) {
 	rows, err := q.db.Query(ctx, listVocabularyExpressions, identityID)
 	if err != nil {
@@ -281,9 +301,10 @@ func (q *Queries) ListVocabularyExpressions(ctx context.Context, identityID stri
 const listVocabularyItems = `-- name: ListVocabularyItems :many
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,
-       meaning_en, tags
+       meaning_en, tags, deleted_at
 FROM vocabulary_items
 WHERE identity_id = $1
+  AND deleted_at IS NULL
   AND (
         $2::text = ''
         OR ($2::text = 'looked-up' AND lookups > 0)
@@ -326,6 +347,7 @@ func (q *Queries) ListVocabularyItems(ctx context.Context, arg ListVocabularyIte
 			&i.LastEvent,
 			&i.MeaningEn,
 			&i.Tags,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -342,7 +364,7 @@ UPDATE vocabulary_items SET
     productions            = productions + 1,
     successful_productions = successful_productions + CASE WHEN $1::boolean THEN 1 ELSE 0 END,
     last_event              = $2::timestamptz
-WHERE id = $3 AND identity_id = $4
+WHERE id = $3 AND identity_id = $4 AND deleted_at IS NULL
 `
 
 type RecordVocabularyProductionParams struct {
@@ -362,6 +384,61 @@ func (q *Queries) RecordVocabularyProduction(ctx context.Context, arg RecordVoca
 	return err
 }
 
+const restoreVocabularyItem = `-- name: RestoreVocabularyItem :execrows
+UPDATE vocabulary_items SET deleted_at = NULL
+WHERE id = $1 AND identity_id = $2
+`
+
+type RestoreVocabularyItemParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+}
+
+// The way back — see SoftDeleteSession/RestoreSession in
+// db/queries/sessions.sql.
+func (q *Queries) RestoreVocabularyItem(ctx context.Context, arg RestoreVocabularyItemParams) (int64, error) {
+	result, err := q.db.Exec(ctx, restoreVocabularyItem, arg.ID, arg.IdentityID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const softDeleteVocabularyItem = `-- name: SoftDeleteVocabularyItem :execrows
+
+UPDATE vocabulary_items SET deleted_at = COALESCE(deleted_at, $3::timestamptz)
+WHERE id = $1 AND identity_id = $2
+`
+
+type SoftDeleteVocabularyItemParams struct {
+	ID         pgtype.UUID
+	IdentityID string
+	At         pgtype.Timestamptz
+}
+
+// deleted_at is deliberately absent from that SET list. A bulk deck
+// sync must never undo a delete: if it did, a word the learner removed
+// would return on the very next sync and could never be got rid of.
+// Only UpsertVocabularyItemOnLookup — one expression, looked up by the
+// learner on purpose, right now — clears deleted_at. See its comment.
+// The learner's "delete this word" (Phase 4 Task D). Identity-scoped,
+// idempotent, and non-destructive for exactly the reasons
+// db/queries/sessions.sql's SoftDeleteSession spells out — read that
+// comment; this is the same statement over a different table, on
+// purpose, so there is one shape to understand rather than three.
+//
+// The vocabulary_events rows behind the item are untouched, as are the
+// learning_events its lookups and productions produced: /learner's
+// vocabulary funnel and /outcomes are computed from those and must not
+// move when a learner tidies their word list.
+func (q *Queries) SoftDeleteVocabularyItem(ctx context.Context, arg SoftDeleteVocabularyItemParams) (int64, error) {
+	result, err := q.db.Exec(ctx, softDeleteVocabularyItem, arg.ID, arg.IdentityID, arg.At)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const upsertVocabularyItemOnLookup = `-- name: UpsertVocabularyItemOnLookup :one
 INSERT INTO vocabulary_items
     (id, identity_id, expression, reading, meaning, kind, source, lookups, productions, successful_productions, first_seen, last_event)
@@ -371,10 +448,38 @@ ON CONFLICT (identity_id, expression) DO UPDATE SET
     last_event = EXCLUDED.last_event,
     reading    = CASE WHEN EXCLUDED.reading <> '' THEN EXCLUDED.reading ELSE vocabulary_items.reading END,
     meaning    = CASE WHEN EXCLUDED.meaning <> '' THEN EXCLUDED.meaning ELSE vocabulary_items.meaning END,
-    source     = CASE WHEN EXCLUDED.source  <> '' THEN EXCLUDED.source  ELSE vocabulary_items.source  END
+    source     = CASE WHEN EXCLUDED.source  <> '' THEN EXCLUDED.source  ELSE vocabulary_items.source  END,
+    -- Soft delete (Phase 4 Task D): a fresh lookup RESURRECTS a
+    -- deleted word. UNIQUE (identity_id, expression) means the
+    -- conflict lands on the deleted row, so the only alternative is
+    -- leaving deleted_at set — and then a learner who looks the word
+    -- up again in the browser extension sees their lookup vanish into
+    -- a row they cannot reach, with no way to tell why. A word coming
+    -- back after you deliberately looked it up again is visible and
+    -- undoable; a lookup silently going nowhere is neither.
+    --
+    -- This applies ONLY to this query — one expression at a time.
+    -- UpsertVocabularyWord below (the bulk deck sync) and
+    -- InsertVocabularyItemIfAbsent (the expression-bank seed) both
+    -- leave deleted_at alone, because a delete must survive the next
+    -- automatic sync — otherwise deleting a synced word would be
+    -- permanently impossible.
+    --
+    -- Be precise about who "the learner" is here: resurrect is a
+    -- property of THIS QUERY, not of any particular caller, and it has
+    -- two — POST /api/v1/vocabulary/events and the MQTT bridge, whose
+    -- identity comes from the topic (learner/{id}/vocabulary/ingest)
+    -- with no per-message auth. So a broker publisher, including a
+    -- retained message replayed on reconnect, can undo a word delete.
+    -- That is a consequence of the MQTT channel's existing trust model,
+    -- not something resurrect introduces: the same publisher can
+    -- already CREATE vocabulary for that identity, which is strictly
+    -- more than bringing one back. Worth knowing before that channel is
+    -- exposed beyond a trusted LAN broker.
+    deleted_at = NULL
 RETURNING id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
           lookups, productions, successful_productions, first_seen, last_event,
-          meaning_en, tags
+          meaning_en, tags, deleted_at
 `
 
 type UpsertVocabularyItemOnLookupParams struct {
@@ -416,6 +521,7 @@ func (q *Queries) UpsertVocabularyItemOnLookup(ctx context.Context, arg UpsertVo
 		&i.LastEvent,
 		&i.MeaningEn,
 		&i.Tags,
+		&i.DeletedAt,
 	)
 	return i, err
 }

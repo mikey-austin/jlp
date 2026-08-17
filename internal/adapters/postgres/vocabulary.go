@@ -309,6 +309,53 @@ func (r *VocabularyRepository) BulkUpsertWords(ctx context.Context, identity lea
 	return len(words), nil
 }
 
+// SoftDelete marks the item deleted — see
+// storage.VocabularyRepository.SoftDelete for the contract. The rows-
+// affected count is the whole authorization answer: SoftDeleteVocabulary
+// Item's WHERE carries identity_id, so zero rows means "no such item for
+// THIS identity", whether the id belongs to someone else or to nobody,
+// and both come back as ErrNotFound. Mirrors SessionRepository.
+// SoftDelete exactly, including mapping a malformed id to ErrNotFound
+// rather than a distinguishable parse error.
+func (r *VocabularyRepository) SoftDelete(ctx context.Context, identity learner.IdentityID, itemID string, at time.Time) error {
+	id, err := parseUUID(itemID)
+	if err != nil {
+		return storage.ErrNotFound
+	}
+	rows, err := r.q.SoftDeleteVocabularyItem(ctx, sqlcgen.SoftDeleteVocabularyItemParams{
+		ID:         id,
+		IdentityID: string(identity),
+		At:         pgtype.Timestamptz{Time: at, Valid: true},
+	})
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
+// Restore clears the deletion mark — see
+// storage.VocabularyRepository.Restore.
+func (r *VocabularyRepository) Restore(ctx context.Context, identity learner.IdentityID, itemID string) error {
+	id, err := parseUUID(itemID)
+	if err != nil {
+		return storage.ErrNotFound
+	}
+	rows, err := r.q.RestoreVocabularyItem(ctx, sqlcgen.RestoreVocabularyItemParams{
+		ID:         id,
+		IdentityID: string(identity),
+	})
+	if err != nil {
+		return err
+	}
+	if rows == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
+}
+
 // ensure the interface is satisfied at compile time.
 var _ storage.VocabularyRepository = (*VocabularyRepository)(nil)
 

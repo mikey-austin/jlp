@@ -47,7 +47,9 @@ const getAgentRun = `-- name: GetAgentRun :one
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
        status, turns, started_at, ended_at, error, system, input, output
 FROM agent_runs
-WHERE id = $1 AND identity_id = $2
+WHERE agent_runs.id = $1 AND agent_runs.identity_id = $2
+  AND (agent_runs.session_id IS NULL
+       OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = agent_runs.session_id AND s.deleted_at IS NULL))
 `
 
 type GetAgentRunParams struct {
@@ -55,6 +57,10 @@ type GetAgentRunParams struct {
 	IdentityID string
 }
 
+// Same filter as ListAgentRuns above, and the reason the two child
+// queries below need none of their own: /ai/agents/{id} resolves the
+// run through this query first, so a deleted session's trace 404s
+// before its tool calls or turns are ever fetched.
 func (q *Queries) GetAgentRun(ctx context.Context, arg GetAgentRunParams) (AgentRun, error) {
 	row := q.db.QueryRow(ctx, getAgentRun, arg.ID, arg.IdentityID)
 	var i AgentRun
@@ -194,7 +200,9 @@ const listAgentRuns = `-- name: ListAgentRuns :many
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
        status, turns, started_at, ended_at, error, system, input, output
 FROM agent_runs
-WHERE identity_id = $1
+WHERE agent_runs.identity_id = $1
+  AND (agent_runs.session_id IS NULL
+       OR EXISTS (SELECT 1 FROM sessions s WHERE s.id = agent_runs.session_id AND s.deleted_at IS NULL))
 ORDER BY started_at DESC
 LIMIT $2
 `
@@ -204,6 +212,23 @@ type ListAgentRunsParams struct {
 	Limit      int32
 }
 
+// Soft delete, session cascade (Phase 4 Task D) — see the header
+// comment in db/queries/documents.sql for the shape.
+//
+// agent_runs looks like an operational record, and mostly is, but
+// system/input/output hold the learner's own text VERBATIM: for a
+// feedback run, input is the selection they asked to have reviewed
+// (application/agentrun.Runner sets it from the first user message),
+// and a get_recent_writing tool call's result carries up to 1000 runes
+// of that session's document. /ai/agents renders all of it. Filtering
+// an operational record felt unnecessary until you notice it is a
+// second, unindexed copy of the writing.
+//
+// session_id is nullable (00018), and a NULL one belongs to no session
+// — lesson generation, the weekly summary — so it must stay visible;
+// that is what the "IS NULL OR" half says. No statistic reads
+// agent_runs: AgentUsageStats is over ai_requests, so nothing on
+// /learner moves.
 func (q *Queries) ListAgentRuns(ctx context.Context, arg ListAgentRunsParams) ([]AgentRun, error) {
 	rows, err := q.db.Query(ctx, listAgentRuns, arg.IdentityID, arg.Limit)
 	if err != nil {

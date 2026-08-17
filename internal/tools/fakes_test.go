@@ -66,6 +66,15 @@ func (f *fakeSessionRepo) List(_ context.Context, identity learner.IdentityID) (
 	return out, nil
 }
 
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeSessionRepo) SoftDelete(context.Context, learner.IdentityID, session.ID, time.Time) error {
+	return nil
+}
+
+func (f *fakeSessionRepo) Restore(context.Context, learner.IdentityID, session.ID) error {
+	return nil
+}
+
 // --- documents ---
 
 type fakeDocumentRepo struct {
@@ -162,6 +171,14 @@ func (f *fakeVocabRepo) GetByExpressions(context.Context, learner.IdentityID, []
 }
 func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []storage.WordInput, time.Time) (int, error) {
 	return 0, nil
+}
+
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeVocabRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	return nil
+}
+func (f *fakeVocabRepo) Restore(context.Context, learner.IdentityID, string) error {
+	return nil
 }
 
 // --- identities ---
@@ -398,6 +415,14 @@ func (f *fakeLessonRepo) CompleteWithObservation(context.Context, learner.Identi
 }
 func (f *fakeLessonRepo) Observations(context.Context, learner.IdentityID, string) ([]storage.LessonObservation, error) {
 	return nil, nil
+}
+
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeLessonRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	return nil
+}
+func (f *fakeLessonRepo) Restore(context.Context, learner.IdentityID, string) error {
+	return nil
 }
 
 // --- anki cards ---

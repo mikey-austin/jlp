@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	"github.com/mikeyaustin/jlp/internal/application/learning"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	domsession "github.com/mikeyaustin/jlp/internal/domain/session"
@@ -15,9 +17,17 @@ import (
 const testIdentity = learner.IdentityID("test-learner-a")
 const otherIdentity = learner.IdentityID("test-learner-b")
 
+// newSessionService wires the session service these tool tests read
+// through. The Recorder is only reached by Delete/Restore, which no
+// tool calls — the session tools are read-only — so the shared
+// fakeEventRepo double is enough here.
+func newSessionService(repo *fakeSessionRepo) *sessions.Service {
+	return sessions.NewService(repo, learning.NewRecorder(newFakeEventRepo(), inprocbus.New()))
+}
+
 func TestGetActiveSessionReturnsMostRecentlyUpdated(t *testing.T) {
 	repo := newFakeSessionRepo()
-	svc := sessions.NewService(repo)
+	svc := newSessionService(repo)
 	older := domsession.Session{ID: "s-old", IdentityID: testIdentity, Title: "old", UpdatedAt: time.Now().Add(-time.Hour)}
 	newer := domsession.Session{ID: "s-new", IdentityID: testIdentity, Title: "new", UpdatedAt: time.Now()}
 	if err := repo.Create(context.Background(), older); err != nil {
@@ -43,7 +53,7 @@ func TestGetActiveSessionReturnsMostRecentlyUpdated(t *testing.T) {
 }
 
 func TestGetActiveSessionNoSessionsReturnsInactive(t *testing.T) {
-	svc := sessions.NewService(newFakeSessionRepo())
+	svc := newSessionService(newFakeSessionRepo())
 	tool := findTool(t, tools.SessionTools(svc), "get_active_session")
 
 	out, err := tool.Handler(context.Background(), testIdentity, nil, nil)
@@ -57,7 +67,7 @@ func TestGetActiveSessionNoSessionsReturnsInactive(t *testing.T) {
 
 func TestGetActiveSessionIsIdentityScoped(t *testing.T) {
 	repo := newFakeSessionRepo()
-	svc := sessions.NewService(repo)
+	svc := newSessionService(repo)
 	if err := repo.Create(context.Background(), domsession.Session{ID: "s-a", IdentityID: otherIdentity, Title: "not yours", UpdatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +84,7 @@ func TestGetActiveSessionIsIdentityScoped(t *testing.T) {
 
 func TestGetSessionContextDelegatesAndReturnsCompactShape(t *testing.T) {
 	repo := newFakeSessionRepo()
-	svc := sessions.NewService(repo)
+	svc := newSessionService(repo)
 	s := domsession.Session{ID: "s-1", IdentityID: testIdentity, Title: "旅行について", Purpose: "diary", UpdatedAt: time.Now()}
 	if err := repo.Create(context.Background(), s); err != nil {
 		t.Fatal(err)
@@ -100,7 +110,7 @@ func TestGetSessionContextDelegatesAndReturnsCompactShape(t *testing.T) {
 
 func TestGetSessionContextWrongIdentityMisses(t *testing.T) {
 	repo := newFakeSessionRepo()
-	svc := sessions.NewService(repo)
+	svc := newSessionService(repo)
 	if err := repo.Create(context.Background(), domsession.Session{ID: "s-1", IdentityID: otherIdentity, Title: "not yours", UpdatedAt: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +123,7 @@ func TestGetSessionContextWrongIdentityMisses(t *testing.T) {
 }
 
 func TestGetSessionContextMissingArgIsAnError(t *testing.T) {
-	svc := sessions.NewService(newFakeSessionRepo())
+	svc := newSessionService(newFakeSessionRepo())
 	tool := findTool(t, tools.SessionTools(svc), "get_session_context")
 
 	_, err := tool.Handler(context.Background(), testIdentity, nil, json.RawMessage(`{}`))

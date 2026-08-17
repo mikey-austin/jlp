@@ -111,6 +111,43 @@ type VocabularyRepository interface {
 	// unioned), while an empty/nil incoming Tags leaves the stored list
 	// untouched.
 	BulkUpsertWords(ctx context.Context, identity learner.IdentityID, words []WordInput, at time.Time) (int, error)
+	// SoftDelete hides itemID from every read on this interface — List
+	// (all four /vocabulary filter tabs), ListActivationCandidates,
+	// AllExpressions and GetByExpressions — plus the agent tools, the
+	// JSON API and the weekly summary that sit on top of them. The
+	// filter is in SQL (db/queries/vocabulary.sql), so no caller can
+	// forget it. AllExpressions matters most: a deleted word left in
+	// that set would keep collecting production events and keep
+	// re-scheduling itself for retrieval practice from a row the
+	// learner cannot see.
+	//
+	// Nothing is erased. The vocabulary_events and learning_events
+	// behind the item stay, so /learner's vocabulary funnel and
+	// /outcomes do not move, and Restore below undoes it.
+	//
+	// Identity-scoped from the request context, never from the request
+	// body: another identity's item returns ErrNotFound — the same
+	// response an unknown id gets, no existence oracle — and is left
+	// completely untouched. Idempotent: deleting an already-deleted
+	// item is a success and keeps the original deletion timestamp.
+	//
+	// One thing does undo a delete without Restore, deliberately:
+	// UpsertOnLookup. Looking the same expression up again is an
+	// explicit act, and UNIQUE (identity_id, expression) means that
+	// lookup would otherwise land on the hidden row and vanish. A bulk
+	// sync (BulkUpsertWords) and the expression-bank seed (SeedBank) do
+	// NOT resurrect, or a synced word could never be deleted at all.
+	//
+	// Note that resurrect belongs to UpsertOnLookup, not to any caller:
+	// its two callers are POST /api/v1/vocabulary/events and the MQTT
+	// bridge, whose identity comes from the topic with no per-message
+	// auth — see db/queries/vocabulary.sql's UpsertVocabularyItemOnLookup
+	// for why that is a property of the MQTT channel rather than of this
+	// design.
+	SoftDelete(ctx context.Context, identity learner.IdentityID, itemID string, at time.Time) error
+	// Restore is the way back from SoftDelete, with the same
+	// identity-scoping and the same idempotence.
+	Restore(ctx context.Context, identity learner.IdentityID, itemID string) error
 }
 
 // WordInput is one entry of POST /api/v1/words's "words" array,

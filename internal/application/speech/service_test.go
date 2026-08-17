@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	appspeech "github.com/mikeyaustin/jlp/internal/application/speech"
@@ -65,6 +66,15 @@ func (f *fakeSessionRepo) Get(_ context.Context, identity learner.IdentityID, id
 
 func (f *fakeSessionRepo) List(context.Context, learner.IdentityID) ([]session.Session, error) {
 	panic("not used")
+}
+
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeSessionRepo) SoftDelete(context.Context, learner.IdentityID, session.ID, time.Time) error {
+	return nil
+}
+
+func (f *fakeSessionRepo) Restore(context.Context, learner.IdentityID, session.ID) error {
+	return nil
 }
 
 // fakeRecognizer is a canned ai.SpeechRecognizer double.

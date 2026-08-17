@@ -70,6 +70,15 @@ func (f *fakeSessionRepo) List(_ context.Context, identity learner.IdentityID) (
 	return out, nil
 }
 
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeSessionRepo) SoftDelete(context.Context, learner.IdentityID, session.ID, time.Time) error {
+	return nil
+}
+
+func (f *fakeSessionRepo) Restore(context.Context, learner.IdentityID, session.ID) error {
+	return nil
+}
+
 // fakeDocRepo is a fully functional in-memory storage.DocumentRepository
 // (unlike feedback/service_test.go's own double, which panics on
 // GetOrCreateForSession/Save — application/channel.Service is the first
@@ -300,6 +309,14 @@ func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []s
 	panic("not used by channel service tests")
 }
 
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeVocabRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	return nil
+}
+func (f *fakeVocabRepo) Restore(context.Context, learner.IdentityID, string) error {
+	return nil
+}
+
 // fakeExerciseRepo mirrors application/practice/service_test.go's own
 // double.
 type fakeExerciseRepo struct {
@@ -384,7 +401,7 @@ func newTestHarness(allowFrom string) *testHarness {
 	vocabSvc := appvocabulary.NewService(vocabRepo, rec)
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, events, grammarRepo, prioRepo, vocabRepo, time.Now)
 
-	sessionsSvc := sessions.NewService(sessionRepo)
+	sessionsSvc := sessions.NewService(sessionRepo, rec)
 	teacherAgent := teacher.New(fakeai.New())
 	feedbackSvc := feedback.NewService(sessionRepo, docRepo, feedbackRepo, grammarRepo, prioRepo, teachingPlanner, vocabSvc, teacherAgent, rec, false, nil, nil)
 

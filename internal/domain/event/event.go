@@ -131,6 +131,30 @@ const (
 	// scoped to the identity that spoke, not to whichever session's
 	// conversation pane happened to be open.
 	TypeSpeechTranscribed Type = "speech.transcribed"
+
+	// The two Phase 4 Task D soft-delete events: TypeContentDeleted
+	// fires when a learner hides a session, a vocabulary item or a
+	// lesson; TypeContentRestored fires when they bring one back
+	// (/sessions' undo affordance, or `jlp restore`). Subject is the
+	// row's id and Evidence carries {"kind": "session" | "vocabulary" |
+	// "lesson"} — the kind cannot be inferred from Subject, since all
+	// three are bare UUIDs.
+	//
+	// Recording a deletion as an event is not a contradiction of soft
+	// delete, it is the point of it: learning_events is immutable and
+	// append-only, so hiding content leaves no trace anywhere else, and
+	// without these two types the log would show a learner's practice
+	// but never show them tidying up afterwards. Nothing consumes them
+	// yet — the learner model deliberately does not react, exactly like
+	// TypeAnkiCardCreated — they exist so the audit trail of what was
+	// removed, and when, survives.
+	//
+	// Session-less (SessionID nil) even when the deleted thing IS a
+	// session, matching TypeVocabularyImported and
+	// TypeSpeechTranscribed: attaching a deletion to the very session it
+	// deletes would file the record inside the thing it is a record of.
+	TypeContentDeleted  Type = "content.deleted"
+	TypeContentRestored Type = "content.restored"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

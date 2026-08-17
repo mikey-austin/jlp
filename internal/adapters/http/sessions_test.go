@@ -34,6 +34,11 @@ import (
 // tests, mirroring the port and scoped by identity like the real adapters.
 type fakeSessionRepo struct {
 	byKey map[string]session.Session
+	// deleted mirrors the real table's deleted_at column: Get and List
+	// honour it, so a handler test can assert a deleted session really
+	// stops reaching the page rather than merely that the delete route
+	// returned 303.
+	deleted map[string]time.Time
 	// createErr, when set, makes Create fail — used to exercise the
 	// handlers' repository-failure path (must surface as 500 without
 	// echoing this error's text back to the client).
@@ -41,7 +46,7 @@ type fakeSessionRepo struct {
 }
 
 func newFakeSessionRepo() *fakeSessionRepo {
-	return &fakeSessionRepo{byKey: map[string]session.Session{}}
+	return &fakeSessionRepo{byKey: map[string]session.Session{}, deleted: map[string]time.Time{}}
 }
 
 func (f *fakeSessionRepo) key(identity learner.IdentityID, id session.ID) string {
@@ -57,8 +62,12 @@ func (f *fakeSessionRepo) Create(_ context.Context, s session.Session) error {
 }
 
 func (f *fakeSessionRepo) Get(_ context.Context, identity learner.IdentityID, id session.ID) (session.Session, error) {
-	s, ok := f.byKey[f.key(identity, id)]
+	key := f.key(identity, id)
+	s, ok := f.byKey[key]
 	if !ok {
+		return session.Session{}, storage.ErrNotFound
+	}
+	if _, gone := f.deleted[key]; gone {
 		return session.Session{}, storage.ErrNotFound
 	}
 	return s, nil
@@ -66,12 +75,52 @@ func (f *fakeSessionRepo) Get(_ context.Context, identity learner.IdentityID, id
 
 func (f *fakeSessionRepo) List(_ context.Context, identity learner.IdentityID) ([]session.Session, error) {
 	var out []session.Session
-	for _, s := range f.byKey {
-		if s.IdentityID == identity {
-			out = append(out, s)
+	for key, s := range f.byKey {
+		if s.IdentityID != identity {
+			continue
 		}
+		if _, gone := f.deleted[key]; gone {
+			continue
+		}
+		out = append(out, s)
 	}
 	return out, nil
+}
+
+// SoftDelete/Restore mirror the real adapter's contract exactly:
+// identity-scoped, idempotent, and ErrNotFound for both "unknown id"
+// and "someone else's id".
+func (f *fakeSessionRepo) SoftDelete(_ context.Context, identity learner.IdentityID, id session.ID, at time.Time) error {
+	key := f.key(identity, id)
+	if _, ok := f.byKey[key]; !ok {
+		return storage.ErrNotFound
+	}
+	if _, already := f.deleted[key]; !already {
+		f.deleted[key] = at
+	}
+	return nil
+}
+
+func (f *fakeSessionRepo) Restore(_ context.Context, identity learner.IdentityID, id session.ID) error {
+	key := f.key(identity, id)
+	if _, ok := f.byKey[key]; !ok {
+		return storage.ErrNotFound
+	}
+	delete(f.deleted, key)
+	return nil
+}
+
+// isDeleted / exists let a handler test assert on the raw storage state
+// rather than on a status code — the difference between "the delete was
+// refused" and "the row was quietly removed anyway".
+func (f *fakeSessionRepo) isDeleted(identity learner.IdentityID, id session.ID) bool {
+	_, gone := f.deleted[f.key(identity, id)]
+	return gone
+}
+
+func (f *fakeSessionRepo) exists(identity learner.IdentityID, id session.ID) bool {
+	_, ok := f.byKey[f.key(identity, id)]
+	return ok
 }
 
 // fakeDocRepo is an in-memory storage.DocumentRepository for HTTP-layer
@@ -240,9 +289,9 @@ func testOptionsWithSessions() Options {
 	// TestWorkspaceHidesTheRecordButtonWhenSpeechIsNotConfigured.
 	opts.SpeechEnabled = true
 	sessRepo := newFakeSessionRepo()
-	opts.Sessions = sessions.NewService(sessRepo)
 	events := newFakeEventRepo()
 	rec := learning.NewRecorder(events, inprocbus.New())
+	opts.Sessions = sessions.NewService(sessRepo, rec)
 	docRepo := newFakeDocRepo()
 	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
@@ -455,7 +504,7 @@ func TestSessionsCreateRepositoryErrorReturns500AndHidesDetail(t *testing.T) {
 	opts := testOptionsWithSessions()
 	repo := newFakeSessionRepo()
 	repo.createErr = errors.New("pq: connection refused to host db.internal:5432 user=jlp password=hunter2")
-	opts.Sessions = sessions.NewService(repo)
+	opts.Sessions = sessions.NewService(repo, learning.NewRecorder(newFakeEventRepo(), inprocbus.New()))
 
 	srv := NewServer(opts)
 	h := srv.HandlerForTest()

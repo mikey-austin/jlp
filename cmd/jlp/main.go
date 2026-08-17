@@ -77,10 +77,11 @@ func main() {
 			os.Exit(1)
 		}
 		identities := postgres.NewIdentityRepository(pool)
-		sessionsSvc := sessions.NewService(postgres.NewSessionRepository(pool))
 		eventRepo := postgres.NewLearningEventRepository(pool)
 		bus := inprocbus.New()
 		recorder := learning.NewRecorder(eventRepo, bus)
+		sessionRepo := postgres.NewSessionRepository(pool)
+		sessionsSvc := sessions.NewService(sessionRepo, recorder)
 		writingSvc := appwriting.NewService(postgres.NewDocumentRepository(pool), recorder)
 
 		// grammarRepo is shared between the planner's JLPT-weight lookups
@@ -626,6 +627,21 @@ func main() {
 			os.Exit(1)
 		}
 		slog.Info("slack-smoke: message sent")
+	case "restore":
+		// Soft delete's durable way back (Phase 4 Task D): `jlp restore
+		// <session|word|lesson> <identity> <id>`. The list's undo button
+		// covers the misclick; this covers noticing a week later. See
+		// restore.go.
+		cfg, err := config.Load()
+		if err != nil {
+			slog.Error("config", "err", err)
+			os.Exit(1)
+		}
+		if err := runRestore(context.Background(), cfg, os.Args[2:]); err != nil {
+			slog.Error("restore", "err", err)
+			os.Exit(1)
+		}
+		slog.Info("restore complete")
 	default:
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)

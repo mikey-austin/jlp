@@ -101,6 +101,14 @@ func (f *fakeVocabRepo) BulkUpsertWords(context.Context, learner.IdentityID, []s
 	panic("not used by summary service tests")
 }
 
+// Soft delete (Phase 4 Task D) — unused by these tests; present to satisfy the port.
+func (f *fakeVocabRepo) SoftDelete(context.Context, learner.IdentityID, string, time.Time) error {
+	return nil
+}
+func (f *fakeVocabRepo) Restore(context.Context, learner.IdentityID, string) error {
+	return nil
+}
+
 // fakeNotifier captures every Notification handed to Send.
 type fakeNotifier struct {
 	sent    []notifications.Notification

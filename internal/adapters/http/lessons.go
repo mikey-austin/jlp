@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -75,10 +76,53 @@ func (s *Server) lessonsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	Render(w, r, "lessons", map[string]any{
-		"Title":    "レッスン",
-		"Identity": ident,
-		"Lessons":  toLessonViews(list),
+		"Title":         "レッスン",
+		"Identity":      ident,
+		"Lessons":       toLessonViews(list),
+		"RestoreAction": undoRestoreAction(r, "/lessons"),
 	})
+}
+
+// lessonsDelete handles POST /lessons/{id}/delete: the learner's
+// confirmed 削除 of one lesson guide. It stops appearing on /lessons,
+// its detail page 404s, and its tutor observations go with it. Nothing
+// is erased — the tutor.lesson.created/completed events stay, so
+// /learner and /outcomes are unchanged.
+//
+// The identity comes from the request context and NOTHING else. The id
+// in the path is the only caller-supplied input, and the repository's
+// WHERE pairs it with this identity, so another learner's lesson
+// answers 404 exactly like an id that never existed and is left
+// untouched.
+func (s *Server) lessonsDelete(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	id := chi.URLParam(r, "id")
+	if err := s.opts.Lessons.Delete(r.Context(), ident.ID, id); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "could not delete lesson", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/lessons?"+url.Values{"undo": {id}}.Encode(), http.StatusSeeOther)
+}
+
+// lessonsRestore handles POST /lessons/{id}/restore — the undo
+// affordance's target. Same identity-from-context rule and same
+// 404-for-someone-else's-lesson contract as lessonsDelete.
+func (s *Server) lessonsRestore(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	id := chi.URLParam(r, "id")
+	if err := s.opts.Lessons.Restore(r.Context(), ident.ID, id); err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			http.NotFound(w, r)
+			return
+		}
+		http.Error(w, "could not restore lesson", http.StatusInternalServerError)
+		return
+	}
+	http.Redirect(w, r, "/lessons", http.StatusSeeOther)
 }
 
 // lessonsGenerate handles the 「レッスンガイド作成」 button: POST /lessons,

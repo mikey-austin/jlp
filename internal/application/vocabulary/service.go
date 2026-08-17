@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -245,6 +246,48 @@ func (s *Service) List(ctx context.Context, identity learner.IdentityID, filter 
 // the whole vocabulary.
 func (s *Service) GetByExpressions(ctx context.Context, identity learner.IdentityID, expressions []string) ([]vocabulary.Item, error) {
 	return s.repo.GetByExpressions(ctx, identity, expressions)
+}
+
+// Delete soft-deletes itemID: the word disappears from all four
+// /vocabulary filter tabs, from the agent tools, from the activation
+// candidates the teacher agent is fed, from the production-detection
+// scan and from the weekly summary. Nothing is erased — its
+// vocabulary_events and its learning_events stay, so /learner's
+// vocabulary funnel and /outcomes read exactly the same afterwards —
+// and Restore below brings it back.
+//
+// identity MUST come from the request context (httpx.IdentityFrom),
+// never from a form field, a query parameter or a JSON body. Another
+// learner's item returns storage.ErrNotFound — the same error an
+// unknown id returns — and is left untouched. Deleting an
+// already-deleted item is a success, not an error.
+//
+// One thing brings a word back without Restore, on purpose: looking it
+// up again (Ingest). See storage.VocabularyRepository.SoftDelete.
+func (s *Service) Delete(ctx context.Context, identity learner.IdentityID, itemID string) error {
+	if err := s.repo.SoftDelete(ctx, identity, itemID, time.Now().UTC()); err != nil {
+		return err
+	}
+	// Log-and-continue: the delete is already durable, so a failure to
+	// append its audit event must not report the delete as failed — the
+	// same tradeoff Ingest's own event recording makes.
+	if err := s.rec.RecordDeletion(ctx, identity, learning.KindVocabulary, itemID); err != nil {
+		slog.Error("record content.deleted", "identity", identity, "kind", "vocabulary", "subject", itemID, "err", err)
+	}
+	return nil
+}
+
+// Restore undoes Delete. Same identity-from-context rule, same
+// ErrNotFound-for-someone-else's-item contract, and restoring an item
+// that was never deleted is a success.
+func (s *Service) Restore(ctx context.Context, identity learner.IdentityID, itemID string) error {
+	if err := s.repo.Restore(ctx, identity, itemID); err != nil {
+		return err
+	}
+	if err := s.rec.RecordRestore(ctx, identity, learning.KindVocabulary, itemID); err != nil {
+		slog.Error("record content.restored", "identity", identity, "kind", "vocabulary", "subject", itemID, "err", err)
+	}
+	return nil
 }
 
 // formatSource combines an IngestEvent's Source.Type/Title into an

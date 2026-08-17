@@ -324,7 +324,7 @@ func feedbackTestServerWithMode(t *testing.T, content, teacherMode string) (http
 	events := newFakeEventRepo()
 	rec := learning.NewRecorder(events, inprocbus.New())
 
-	opts.Sessions = sessions.NewService(sessionRepo)
+	opts.Sessions = sessions.NewService(sessionRepo, rec)
 	opts.Writing = appwriting.NewService(docRepo, rec)
 	opts.Events = events
 	vocabRepo := newFakeVocabRepo()
