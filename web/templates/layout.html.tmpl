@@ -39,7 +39,7 @@
            sits outside the authenticated group CSRFProtect guards. */}}
       {{with .LogoutPath}}
       <form method="post" action="{{.}}" class="logout-form">
-        <button type="submit" class="theme-toggle">ログアウト</button>
+        <button type="submit" class="icon-btn"><span aria-hidden="true">🚪</span> ログアウト</button>
       </form>
       {{end}}
       <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">

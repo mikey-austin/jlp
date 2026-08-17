@@ -926,6 +926,18 @@ p.hint {
   font-weight: 600;
 }
 
+/* .icon-btn is the topbar's icon+label pill: the theme toggle, the
+ * logout button, and anything else that must shrink to its glyph on a
+ * phone. The collapse rule below sets font-size: 0 on the button and
+ * restores it only for the [aria-hidden] glyph, so **a control using
+ * this class MUST contain one** — the logout button once did not, and
+ * rendered as a blank circle at <=480px. TestIconButtonsAllCarryAGlyph
+ * pins that.
+ *
+ * It exists because .theme-toggle was being reused for controls that
+ * are not the theme toggle, which meant borrowing behaviour named after
+ * something else. */
+.icon-btn,
 .theme-toggle {
   display: inline-flex;
   align-items: center;
@@ -942,6 +954,7 @@ p.hint {
   cursor: pointer;
   box-shadow: var(--shadow-sm);
 }
+.icon-btn:hover,
 .theme-toggle:hover {
   border-color: var(--primary);
   color: var(--primary);
@@ -1051,6 +1064,7 @@ p.hint {
  * accessible name) — it is the rendered size that collapses, which is
  * what buys back the space the first row needs at 320px. */
 @media (max-width: 480px) {
+  .icon-btn,
   .theme-toggle {
     font-size: 0;
     gap: 0;
@@ -1058,6 +1072,7 @@ p.hint {
     min-width: var(--tap);
     justify-content: center;
   }
+  .icon-btn > [aria-hidden="true"],
   .theme-toggle > [aria-hidden="true"] {
     font-size: var(--text-lg);
   }

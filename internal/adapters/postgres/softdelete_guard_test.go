@@ -4,6 +4,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -247,7 +248,7 @@ func isIdentByte(s string, i int) bool {
 // satisfy it.
 func loadQueries(t *testing.T) []sqlQuery {
 	t.Helper()
-	dir := filepath.Join("..", "..", "..", "db", "queries")
+	dir := repoPath("db", "queries")
 
 	// WalkDir, not ReadDir: a query file tucked into a subdirectory
 	// would otherwise be invisible to this guard — the one way to add a
@@ -301,4 +302,23 @@ func loadQueries(t *testing.T) []sqlQuery {
 		}
 	}
 	return out
+}
+
+// repoPath resolves a path relative to the repository root, derived from
+// THIS SOURCE FILE rather than the process working directory.
+//
+// The obvious filepath.Join("..","..","..", …) is wrong here: `go test`
+// in this checkout runs with the working directory set to the module
+// root, so those relative paths escaped the worktree and read the main
+// checkout instead — a different copy of the repository. A guard test
+// that silently validates someone else's files passes for the wrong
+// reason, which is worse than not existing.
+func repoPath(parts ...string) string {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		panic("runtime.Caller failed; cannot locate the repository root")
+	}
+	// <repo>/internal/<group>/<pkg>/<file>_test.go → up three.
+	root := filepath.Join(filepath.Dir(thisFile), "..", "..", "..")
+	return filepath.Join(append([]string{root}, parts...)...)
 }
