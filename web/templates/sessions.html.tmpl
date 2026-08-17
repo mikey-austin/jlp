@@ -8,7 +8,7 @@
     <table>
       <thead><tr><th>タイトル</th><th>目的</th><th>更新</th><th></th></tr></thead>
       <tbody>
-        {{range .Sessions}}<tr><td><a href="/sessions/{{.ID}}">{{.Title}}</a></td><td>{{.Purpose}}</td><td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td><td><button type="button" class="btn btn--secondary btn--sm no-print" data-confirm-delete="/sessions/{{.ID}}/delete" data-confirm-delete-label="{{.Title}}" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td></tr>{{else}}<tr><td colspan="4" class="empty">セッションがありません</td></tr>{{end}}
+        {{range .Sessions}}<tr><td><a href="/sessions/{{.ID}}">{{.Title}}</a></td><td>{{.Purpose}}</td><td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td><td><button type="button" class="btn btn--danger btn--sm no-print" data-confirm-delete="/sessions/{{.ID}}/delete" data-confirm-delete-label="{{.Title}}" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td></tr>{{else}}<tr><td colspan="4" class="empty">セッションがありません</td></tr>{{end}}
       </tbody>
     </table>
   </div>

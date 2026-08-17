@@ -13,7 +13,7 @@
           <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
           <td><span class="badge">{{.Status}}</span></td>
           <td><a href="/lessons/{{.ID}}" class="chip">開く</a>
-              <button type="button" class="btn btn--secondary btn--sm no-print" data-confirm-delete="/lessons/{{.ID}}/delete" data-confirm-delete-label="{{.CreatedAt.Format "2006-01-02 15:04"}} のレッスンガイド" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td>
+              <button type="button" class="btn btn--danger btn--sm no-print" data-confirm-delete="/lessons/{{.ID}}/delete" data-confirm-delete-label="{{.CreatedAt.Format "2006-01-02 15:04"}} のレッスンガイド" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td>
         </tr>{{else}}<tr><td colspan="3" class="empty">レッスンガイドがありません。上のボタンから作成できます。</td></tr>{{end}}
       </tbody>
     </table>

@@ -379,8 +379,22 @@ func TestListPagesShipTheDeleteConfirmationDialog(t *testing.T) {
 		// The trigger must be a button, not a bare form submit: a form
 		// would bypass the dialog entirely when JS is unavailable, which
 		// is the one case where deleting silently would be worst.
-		if !strings.Contains(body, `type="button" class="btn btn--secondary btn--sm no-print" data-confirm-delete=`) {
-			t.Errorf("GET %s delete trigger is not the confirmation-dialog button shape", path)
+		//
+		// Only type="button" is asserted, not the full class attribute.
+		// This test pinned the whole class string once, which meant
+		// restyling the trigger failed a test about dialog wiring — it
+		// claimed a behaviour and enforced an appearance. How the trigger
+		// *looks* is TestDeleteTriggersLookDangerous's business.
+		at := strings.Index(body, "data-confirm-delete=")
+		if at < 0 {
+			continue // already reported above
+		}
+		start := strings.LastIndex(body[:at], "<")
+		end := strings.Index(body[at:], ">")
+		if start < 0 || end < 0 {
+			t.Errorf("GET %s: could not bound the delete trigger tag", path)
+		} else if tag := body[start : at+end]; !strings.Contains(tag, `type="button"`) {
+			t.Errorf("GET %s delete trigger is not a type=\"button\" (it would bypass the dialog without JS):\n%s", path, tag)
 		}
 	}
 }
