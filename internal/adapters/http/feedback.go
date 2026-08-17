@@ -372,6 +372,17 @@ func (s *Server) feedbackRequest(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		// The client deliberately sees a generic message — the error can
+		// quote model output — but the server must not swallow it. This
+		// handler previously returned 500 with NO log line at all, which
+		// made a production failure undiagnosable: ai_requests showed the
+		// provider call succeeding, the app logged nothing, and the only
+		// symptom was a 500 in the browser.
+		slog.Error("feedback: request failed",
+			"err", err,
+			"session_id", sid,
+			"identity", ident.ID,
+			"provider_override", override)
 		http.Error(w, "could not get feedback", http.StatusInternalServerError)
 		return
 	}

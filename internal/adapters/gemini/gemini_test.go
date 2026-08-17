@@ -800,3 +800,104 @@ func contains(haystack []string, needle string) bool {
 	}
 	return false
 }
+
+
+// TestTranslateInfersStringTypeForUntypedEnum pins the fix for a
+// production 500.
+//
+// correction_result.v2 writes the correction `type` field as
+// {"enum": [...]} with no "type" of its own — legal JSON Schema, which
+// infers the type from the members. Gemini's OpenAPI-shaped schema does
+// not infer, and measured against the live API it SILENTLY IGNORES such
+// an enum rather than rejecting it: the model then returned "incorrect"
+// (a severity value) for the type field, which satisfied Gemini and
+// failed JLP's own validation after repair and retry — a 500 with the
+// answer thrown away.
+//
+// A rejected schema would have failed loudly on the first call. This one
+// only failed in production, so it gets a test naming the shape.
+func TestTranslateInfersStringTypeForUntypedEnum(t *testing.T) {
+	raw := json.RawMessage(`{
+	  "type": "object",
+	  "properties": {
+	    "kind":  {"enum": ["grammar", "particle"]},
+	    "typed": {"type": "string", "enum": ["a", "b"]},
+	    "mixed": {"enum": ["a", 2]},
+	    "count": {"type": "integer"}
+	  }
+	}`)
+
+	out, blockers, err := translateSchema(raw)
+	if err != nil {
+		t.Fatalf("translateSchema: %v", err)
+	}
+	if len(blockers) != 0 {
+		t.Fatalf("blockers = %v, want none", blockers)
+	}
+
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatalf("unmarshal translated: %v", err)
+	}
+	props, _ := got["properties"].(map[string]any)
+
+	kind, _ := props["kind"].(map[string]any)
+	if kind["type"] != "string" {
+		t.Errorf("untyped string enum: type = %v, want \"string\" — Gemini ignores an enum it cannot type", kind["type"])
+	}
+	if _, ok := kind["enum"]; !ok {
+		t.Error("untyped string enum lost its enum during translation")
+	}
+
+	typed, _ := props["typed"].(map[string]any)
+	if typed["type"] != "string" {
+		t.Errorf("already-typed enum: type = %v, want it left as \"string\"", typed["type"])
+	}
+
+	mixed, _ := props["mixed"].(map[string]any)
+	if _, typedNow := mixed["type"]; typedNow {
+		t.Errorf("mixed-type enum gained a type %v, want none — no single correct answer", mixed["type"])
+	}
+
+	count, _ := props["count"].(map[string]any)
+	if count["type"] != "integer" {
+		t.Errorf("non-enum node was rewritten: %v", count)
+	}
+}
+
+// TestTranslateRealCorrectionResultV2TypesItsEnums runs the real schema
+// that broke production, not a hand-written stand-in.
+func TestTranslateRealCorrectionResultV2TypesItsEnums(t *testing.T) {
+	raw, err := schemas.Get("correction_result.v2")
+	if err != nil {
+		t.Fatalf("schemas.Get: %v", err)
+	}
+	out, blockers, err := translateSchema(raw)
+	if err != nil {
+		t.Fatalf("translateSchema: %v", err)
+	}
+	if len(blockers) != 0 {
+		t.Fatalf("blockers = %v, want none (v2 must use responseSchema, not the fallback)", blockers)
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	corrections, _ := doc["properties"].(map[string]any)["corrections"].(map[string]any)
+	items, _ := corrections["items"].(map[string]any)
+	itemProps, _ := items["properties"].(map[string]any)
+
+	for _, field := range []string{"type", "severity"} {
+		node, ok := itemProps[field].(map[string]any)
+		if !ok {
+			t.Fatalf("correction item has no %q property", field)
+		}
+		if _, hasEnum := node["enum"]; !hasEnum {
+			continue
+		}
+		if node["type"] != "string" {
+			t.Errorf("%s: type = %v, want \"string\" so Gemini honours the enum", field, node["type"])
+		}
+	}
+}

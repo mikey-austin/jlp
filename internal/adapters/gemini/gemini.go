@@ -367,6 +367,7 @@ func walkSchema(node any, namesNotKeywords bool, found map[string]bool) any {
 			}
 			out[key] = walkSchema(child, containerKeywords[key], found)
 		}
+		inferEnumType(out)
 		return out
 	case []any:
 		out := make([]any, 0, len(v))
@@ -377,6 +378,40 @@ func walkSchema(node any, namesNotKeywords bool, found map[string]bool) any {
 	default:
 		return v
 	}
+}
+
+// inferEnumType adds `"type": "string"` to a node that has a string
+// enum but no declared type.
+//
+// JSON Schema infers the type from the enum's members, so
+// correction_result.v2 legitimately writes `"type": {"enum": [...]}`
+// with no type of its own. Gemini's schema is OpenAPI-shaped and does
+// NOT infer: measured against the live API, an untyped enum is silently
+// IGNORED — not rejected — and the model then generates a free-form
+// string. That produced the production 500: for the correction `type`
+// field it returned "incorrect" (a severity value), which passed
+// Gemini's own constraints and then failed JLP's schema validation
+// after repair and retry, surfacing as a 500 with the model's answer
+// discarded.
+//
+// Silent is what makes this worth a dedicated step: a rejected schema
+// would have failed loudly at the first call, in development.
+func inferEnumType(node map[string]any) {
+	if _, typed := node["type"]; typed {
+		return
+	}
+	enum, ok := node["enum"].([]any)
+	if !ok || len(enum) == 0 {
+		return
+	}
+	for _, v := range enum {
+		if _, isString := v.(string); !isString {
+			// A mixed or non-string enum has no single OpenAPI type to
+			// declare; leave it alone rather than guess wrong.
+			return
+		}
+	}
+	node["type"] = "string"
 }
 
 // promptSchema prepares a schema for the PROMPT fallback, which is a
