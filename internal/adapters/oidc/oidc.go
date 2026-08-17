@@ -466,7 +466,14 @@ func (a *Authenticator) logoutTarget(ctx context.Context) string {
 	if a.cfg.LogoutURL != "" {
 		return a.cfg.LogoutURL
 	}
-	if _, _, err := a.discover(ctx); err == nil && a.endSession != "" {
+	if _, _, err := a.discover(ctx); err != nil {
+		// Signing out must not fail because the provider is down: the
+		// local session is already gone by the time we get here.
+		return "/"
+	}
+	a.discoverMu.Lock()
+	defer a.discoverMu.Unlock()
+	if a.endSession != "" {
 		return a.endSession
 	}
 	return "/"
@@ -745,6 +752,14 @@ func safeNext(next string) string {
 	// "//host" and "/\host" are both protocol-relative URLs to another
 	// origin that still start with a single "/".
 	if strings.HasPrefix(next, "//") || strings.HasPrefix(next, `/\`) {
+		return ""
+	}
+	// This ends up in a Location (or HX-Redirect) header. Go's own
+	// header writer would reject a newline here, turning a crafted
+	// `next` into a 500 rather than a smuggled header — but failing on
+	// the input is better than failing on the output, and a control
+	// character has no business in a path either way.
+	if strings.ContainsFunc(next, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
 		return ""
 	}
 	u, err := url.Parse(next)

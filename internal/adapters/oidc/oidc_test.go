@@ -737,6 +737,8 @@ func TestNextIsRestrictedToLocalPaths(t *testing.T) {
 		"/\\evil.example",
 		"http://evil.example",
 		"javascript:alert(1)",
+		"/sessions\r\nX-Injected: 1",
+		"/sessions\nSet-Cookie: jlp_session=forged",
 	} {
 		rec := startLoginFlow(t, a, next).finish(t, a, idp)
 		if rec.Code != http.StatusFound {
