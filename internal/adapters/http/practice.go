@@ -60,7 +60,7 @@ func toExerciseResultView(eval exercise.Evaluation) exerciseResultView {
 // /practice/start into #exercise-area.
 func (s *Server) practicePage(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
-	Render(w, r, "practice", map[string]any{
+	s.render(w, r, "practice", map[string]any{
 		"Title":    "練習",
 		"Identity": ident,
 	})

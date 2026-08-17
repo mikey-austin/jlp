@@ -35,15 +35,67 @@ type Database struct {
 	URL string
 }
 
+// Auth selects which auth.Authenticator cmd/jlp builds. Three modes,
+// in descending order of how much they can actually prove:
+//
+//   - "oidc": JLP runs the login itself against an OpenID Connect
+//     provider and verifies a signed ID token (internal/adapters/oidc).
+//     The only mode whose security does not depend on the network
+//     topology. This is what the LAN deployment runs.
+//   - "authelia": trust Remote-User headers from a peer in
+//     TrustedProxies (internal/adapters/authelia). Kept as the fallback
+//     if OIDC ever misbehaves, but it is strictly weaker — the whole
+//     boundary is a source-IP match, and it requires a forward-auth
+//     proxy in front to mean anything at all.
+//   - "static": a fixed identity, no authentication (staticauth). The
+//     default, and what `make up` and every test uses — the dev loop
+//     must never need an identity provider.
 type Auth struct {
 	Mode           string
 	TrustedProxies []string
 	Static         StaticIdentity
+	OIDC           OIDC
 }
 
 type StaticIdentity struct {
 	ID          string
 	DisplayName string
+}
+
+// OIDC configures Mode=="oidc" and is inert in the other two modes —
+// validate only looks at it when that mode is actually selected, the
+// same "a feature's config only needs to make sense once the feature is
+// live" rule Summary.Enabled and A2A.Enabled follow.
+type OIDC struct {
+	// IssuerURL is the provider's issuer identifier (Authelia's, here:
+	// https://auth.lan.jackiemclean.net). Must be https outside tests —
+	// the client secret and the ID token both cross it.
+	IssuerURL string
+	// ClientID is the client registered with the provider, and the
+	// audience every accepted ID token must carry.
+	ClientID string
+	// ClientSecret is the plaintext half of the credential whose hash
+	// the provider stores. Never log it, never put it in an error.
+	ClientSecret string
+	// RedirectURL defaults to Server.BaseURL + "/auth/callback" — the
+	// route the adapter actually serves. Overridable only because the
+	// value must match the provider's registration byte for byte, and a
+	// deployment behind a rewriting proxy could need to say so exactly.
+	RedirectURL string
+	// CookieKey signs the session cookie (HMAC-SHA256), 32 bytes
+	// minimum. Rotating it logs everyone out, which is the intended
+	// emergency lever. There is deliberately no default: a generated
+	// one would change on every restart (logging the learner out on
+	// every deploy) and a hardcoded one would be no key at all.
+	CookieKey string
+	// SessionTTL is a session's absolute lifetime; IdleTimeout ends one
+	// that has gone quiet. Both have adapter-side defaults.
+	SessionTTL  time.Duration
+	IdleTimeout time.Duration
+	// LogoutURL is where the browser lands after the local session is
+	// cleared. Needed because Authelia does not advertise an
+	// end_session_endpoint — see the oidc adapter's logoutTarget.
+	LogoutURL string
 }
 
 type AI struct {
@@ -511,6 +563,11 @@ var a2aReservedPathPrefixes = map[string]bool{
 	"lessons":     true,
 	"api":         true,
 	"settings":    true,
+	// "auth" is reserved unconditionally, even though its routes only
+	// exist in oidc mode: A2A's mount path is validated once at boot,
+	// and letting it take /auth in static mode would silently break the
+	// login flow the day the deployment switched modes.
+	"auth": true,
 }
 
 // firstPathSegment returns p's first "/"-delimited segment (no leading
@@ -581,6 +638,9 @@ func Load() (Config, error) {
 	// AutomaticEnv+Unmarshal quirk: bind each key explicitly so env vars land in structs.
 	for _, key := range []string{"server.port", "server.baseurl", "database.url",
 		"auth.mode", "auth.static.id", "auth.static.displayname",
+		"auth.oidc.issuerurl", "auth.oidc.clientid", "auth.oidc.clientsecret",
+		"auth.oidc.redirecturl", "auth.oidc.cookiekey", "auth.oidc.sessionttl",
+		"auth.oidc.idletimeout", "auth.oidc.logouturl",
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
 		"ai.ollama.url", "ai.ollama.model", "ai.ollama.timeout",
 		"ai.gemini.apikey", "ai.gemini.model", "ai.gemini.baseurl", "ai.gemini.timeout",
@@ -617,8 +677,13 @@ func (c Config) validate() error {
 	if c.Database.URL == "" {
 		return fmt.Errorf("config: APP_DATABASE_URL is required")
 	}
-	if !slices.Contains([]string{"static", "authelia"}, c.Auth.Mode) {
-		return fmt.Errorf("config: APP_AUTH_MODE must be static|authelia, got %q", c.Auth.Mode)
+	if !slices.Contains([]string{"static", "authelia", "oidc"}, c.Auth.Mode) {
+		return fmt.Errorf("config: APP_AUTH_MODE must be static|authelia|oidc, got %q", c.Auth.Mode)
+	}
+	if c.Auth.Mode == "oidc" {
+		if err := c.validateOIDC(); err != nil {
+			return err
+		}
 	}
 	// authelia mode authenticates purely by trusting Remote-User/Remote-Name
 	// headers from a peer in this list; an empty list would mean no peer is
@@ -732,6 +797,60 @@ func (c Config) validate() error {
 		return err
 	}
 	return nil
+}
+
+// oidcCookieKeyMinLen mirrors internal/adapters/oidc's own minimum. It
+// is duplicated rather than imported because config must not depend on
+// an adapter (PRD §75 / the depguard rules) — and checking it here as
+// well means a too-short key is a boot error naming the environment
+// variable, not an adapter construction error naming a Go field.
+const oidcCookieKeyMinLen = 32
+
+// validateOIDC checks everything Mode=="oidc" needs before the server
+// starts, so a missing client secret is a refusal to boot rather than a
+// 502 the first time somebody tries to sign in.
+func (c Config) validateOIDC() error {
+	if c.Auth.OIDC.IssuerURL == "" {
+		return fmt.Errorf("config: APP_AUTH_OIDC_ISSUERURL is required when APP_AUTH_MODE=oidc")
+	}
+	if c.Auth.OIDC.ClientID == "" {
+		return fmt.Errorf("config: APP_AUTH_OIDC_CLIENTID is required when APP_AUTH_MODE=oidc")
+	}
+	// The value itself never appears in this (or any) error — see
+	// OIDC.ClientSecret's doc comment.
+	if c.Auth.OIDC.ClientSecret == "" {
+		return fmt.Errorf("config: APP_AUTH_OIDC_CLIENTSECRET is required when APP_AUTH_MODE=oidc")
+	}
+	if len(c.Auth.OIDC.CookieKey) < oidcCookieKeyMinLen {
+		return fmt.Errorf("config: APP_AUTH_OIDC_COOKIEKEY must be at least %d characters when APP_AUTH_MODE=oidc (generate one with `openssl rand -hex 32`)", oidcCookieKeyMinLen)
+	}
+	// The redirect URI is derived from APP_SERVER_BASEURL unless it is
+	// given explicitly, so a baseurl left at its localhost default in a
+	// real deployment would otherwise produce a redirect_uri the
+	// provider rejects, minutes later, with a message about an
+	// unregistered client.
+	if c.Auth.OIDC.RedirectURL == "" && !strings.HasPrefix(c.Server.BaseURL, "https://") {
+		return fmt.Errorf("config: APP_AUTH_MODE=oidc needs APP_SERVER_BASEURL to be the app's real https URL (got %q), or an explicit APP_AUTH_OIDC_REDIRECTURL", c.Server.BaseURL)
+	}
+	if c.Auth.OIDC.SessionTTL < 0 || c.Auth.OIDC.IdleTimeout < 0 {
+		return fmt.Errorf("config: APP_AUTH_OIDC_SESSIONTTL and APP_AUTH_OIDC_IDLETIMEOUT must not be negative")
+	}
+	if c.Auth.OIDC.SessionTTL > 0 && c.Auth.OIDC.IdleTimeout > c.Auth.OIDC.SessionTTL {
+		return fmt.Errorf("config: APP_AUTH_OIDC_IDLETIMEOUT (%s) is longer than APP_AUTH_OIDC_SESSIONTTL (%s), which makes the idle timeout unreachable", c.Auth.OIDC.IdleTimeout, c.Auth.OIDC.SessionTTL)
+	}
+	return nil
+}
+
+// OIDCRedirectURL is the redirect_uri the adapter registers with the
+// provider: the configured override, or the app's own base URL plus the
+// callback route. Exported so cmd/jlp and any operator-facing message
+// use the same one value — a redirect_uri that differs from the
+// provider's registration by a single character fails the whole flow.
+func (c Config) OIDCRedirectURL() string {
+	if c.Auth.OIDC.RedirectURL != "" {
+		return c.Auth.OIDC.RedirectURL
+	}
+	return strings.TrimSuffix(c.Server.BaseURL, "/") + "/auth/callback"
 }
 
 // ParseAllowFrom parses APP_CHANNELS_ALLOWFROM (see Channels.AllowFrom's

@@ -75,7 +75,7 @@ func (s *Server) lessonsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load lessons", http.StatusInternalServerError)
 		return
 	}
-	Render(w, r, "lessons", map[string]any{
+	s.render(w, r, "lessons", map[string]any{
 		"Title":         "レッスン",
 		"Identity":      ident,
 		"Lessons":       toLessonViews(list),
@@ -168,7 +168,7 @@ func (s *Server) lessonsDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "lesson_detail", map[string]any{
+	s.render(w, r, "lesson_detail", map[string]any{
 		"Title":        "レッスンガイド",
 		"Identity":     ident,
 		"Lesson":       toLessonView(lesson),

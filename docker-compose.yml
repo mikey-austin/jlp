@@ -22,6 +22,20 @@ services:
       GOFLAGS: -buildvcs=false
       APP_DATABASE_URL: postgres://jlp:jlp@postgres:5432/jlp?sslmode=disable
       APP_AUTH_MODE: ${APP_AUTH_MODE:-static}
+      # OIDC (APP_AUTH_MODE=oidc). Passed through so a dev run against a
+      # real identity provider is possible without editing this file;
+      # every one of them is empty by default and read only in that
+      # mode, so the dev loop stays static and offline. An empty value
+      # never clobbers a config default — see the APP_AI_ANTHROPIC_MODEL
+      # note above for why.
+      APP_AUTH_OIDC_ISSUERURL: ${APP_AUTH_OIDC_ISSUERURL:-}
+      APP_AUTH_OIDC_CLIENTID: ${APP_AUTH_OIDC_CLIENTID:-}
+      APP_AUTH_OIDC_CLIENTSECRET: ${APP_AUTH_OIDC_CLIENTSECRET:-}
+      APP_AUTH_OIDC_COOKIEKEY: ${APP_AUTH_OIDC_COOKIEKEY:-}
+      APP_AUTH_OIDC_REDIRECTURL: ${APP_AUTH_OIDC_REDIRECTURL:-}
+      APP_AUTH_OIDC_SESSIONTTL: ${APP_AUTH_OIDC_SESSIONTTL:-}
+      APP_AUTH_OIDC_IDLETIMEOUT: ${APP_AUTH_OIDC_IDLETIMEOUT:-}
+      APP_AUTH_OIDC_LOGOUTURL: ${APP_AUTH_OIDC_LOGOUTURL:-}
       # Caddy's fixed address on the pinned subnet below (NOT the bridge
       # gateway 172.28.5.1, which is what direct host->published-port
       # traffic hairpins through — see internal/adapters/authelia). Trusting

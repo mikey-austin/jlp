@@ -69,7 +69,7 @@ func (s *Server) outcomesPage(w http.ResponseWriter, r *http.Request) {
 
 	judged := len(report.Improving) + len(report.Persistent) + len(report.Retired)
 
-	Render(w, r, "outcomes", map[string]any{
+	s.render(w, r, "outcomes", map[string]any{
 		"Title":    "成果",
 		"Identity": ident,
 		"Headline": report.Headline,

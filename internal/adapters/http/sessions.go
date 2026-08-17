@@ -50,7 +50,7 @@ func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not load sessions", http.StatusInternalServerError)
 		return
 	}
-	Render(w, r, "sessions", map[string]any{
+	s.render(w, r, "sessions", map[string]any{
 		"Title":         "セッション",
 		"Identity":      ident,
 		"Sessions":      list,
@@ -137,7 +137,7 @@ func (s *Server) renderSessionsCreateError(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	w.WriteHeader(http.StatusBadRequest)
-	Render(w, r, "sessions", map[string]any{
+	s.render(w, r, "sessions", map[string]any{
 		"Title":      "セッション",
 		"Identity":   ident,
 		"Sessions":   list,
@@ -236,7 +236,7 @@ func (s *Server) sessionsWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "workspace", map[string]any{
+	s.render(w, r, "workspace", map[string]any{
 		"Title":              sess.Title,
 		"Identity":           ident,
 		"Session":            sess,

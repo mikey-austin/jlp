@@ -92,6 +92,52 @@ func testOptions() Options {
 	}
 }
 
+// TestAuthRoutesAreServedWithoutASession is the whole point of
+// mounting Options.AuthRoutes outside the authenticated group: a
+// learner reaches /auth/login precisely because they have no session,
+// so if RequireIdentity guarded it they could never sign in.
+func TestAuthRoutesAreServedWithoutASession(t *testing.T) {
+	opts := testOptions()
+	opts.Auth = failingAuth{}
+	opts.AuthRoutes = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if _, err := w.Write([]byte("login " + r.URL.Path)); err != nil {
+			t.Error(err)
+		}
+	})
+	h := NewServer(opts).HandlerForTest()
+
+	for _, path := range []string{"/auth/login", "/auth/callback", "/auth/logout"} {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "login "+path) {
+			t.Errorf("%s: code=%d body=%q — the login routes must not require a session", path, rec.Code, rec.Body.String())
+		}
+	}
+	// And everything else still does.
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions", nil))
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("/sessions code = %d, want 401", rec.Code)
+	}
+}
+
+// The mirror image: with no authenticator of its own (static and
+// authelia mode), /auth/* must not exist at all rather than 401 or
+// half-answer.
+func TestNoAuthRoutesWhenTheAuthenticatorHasNone(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewServer(testOptions()).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/auth/login", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("/auth/login code = %d, want 404", rec.Code)
+	}
+}
+
+type failingAuth struct{}
+
+func (failingAuth) Authenticate(*http.Request) (learner.Identity, error) {
+	return learner.Identity{}, errors.New("no session")
+}
+
 func TestHealthz(t *testing.T) {
 	srv := NewServer(testOptions())
 	rec := httptest.NewRecorder()

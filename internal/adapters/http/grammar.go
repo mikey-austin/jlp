@@ -63,7 +63,7 @@ func (s *Server) grammarList(w http.ResponseWriter, r *http.Request) {
 		views = append(views, toGrammarConceptStatView(cs))
 	}
 
-	Render(w, r, "grammar", map[string]any{
+	s.render(w, r, "grammar", map[string]any{
 		"Title":    "文法",
 		"Identity": ident,
 		"Concepts": views,
@@ -95,7 +95,7 @@ func (s *Server) grammarDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "grammar_concept", map[string]any{
+	s.render(w, r, "grammar_concept", map[string]any{
 		"Title":       concept.Name,
 		"Identity":    ident,
 		"Concept":     concept,

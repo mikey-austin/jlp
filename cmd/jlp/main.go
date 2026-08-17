@@ -4,8 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"runtime/debug"
+	"strings"
 	"time"
 
 	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
@@ -17,6 +19,7 @@ import (
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	adaptermqtt "github.com/mikeyaustin/jlp/internal/adapters/mqtt"
+	oidcadapter "github.com/mikeyaustin/jlp/internal/adapters/oidc"
 	ollamaadapter "github.com/mikeyaustin/jlp/internal/adapters/ollama"
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	signaladapter "github.com/mikeyaustin/jlp/internal/adapters/signal"
@@ -504,7 +507,14 @@ func main() {
 			os.Exit(1)
 		}
 
+		// Authentication (see config.Auth's doc comment for what the
+		// three modes actually prove). authRoutes and logoutPath stay
+		// zero unless the chosen adapter owns a browser session of its
+		// own — only oidc does — so static and authelia mode build
+		// exactly the server they always did.
 		var authn auth.Authenticator
+		var authRoutes http.Handler
+		var logoutPath string
 		switch cfg.Auth.Mode {
 		case "static":
 			authn = staticauth.New(cfg.Auth.Static.ID, cfg.Auth.Static.DisplayName)
@@ -514,6 +524,34 @@ func main() {
 				slog.Error("auth", "err", err)
 				os.Exit(1)
 			}
+		case "oidc":
+			oidcAuth, oerr := oidcadapter.New(oidcadapter.Config{
+				IssuerURL:    cfg.Auth.OIDC.IssuerURL,
+				ClientID:     cfg.Auth.OIDC.ClientID,
+				ClientSecret: cfg.Auth.OIDC.ClientSecret,
+				RedirectURL:  cfg.OIDCRedirectURL(),
+				CookieKey:    []byte(cfg.Auth.OIDC.CookieKey),
+				// The session cookie is Secure whenever the app is
+				// actually served over TLS. Derived from the base URL
+				// rather than configured separately so the two can
+				// never disagree — and so a plain-http dev run of oidc
+				// mode still works instead of silently dropping every
+				// cookie.
+				CookieSecure: strings.HasPrefix(cfg.Server.BaseURL, "https://"),
+				SessionTTL:   cfg.Auth.OIDC.SessionTTL,
+				IdleTimeout:  cfg.Auth.OIDC.IdleTimeout,
+				LogoutURL:    cfg.Auth.OIDC.LogoutURL,
+			})
+			if oerr != nil {
+				// oidcadapter.New's errors never contain the client
+				// secret — see its own doc comments.
+				slog.Error("auth", "err", oerr)
+				os.Exit(1)
+			}
+			authn = oidcAuth
+			authRoutes = oidcAuth.Routes()
+			logoutPath = oidcadapter.LogoutPath
+			slog.Info("auth", "mode", "oidc", "issuer", cfg.Auth.OIDC.IssuerURL, "redirect_uri", cfg.OIDCRedirectURL())
 		default:
 			slog.Error("auth", "err", fmt.Sprintf("unknown auth mode %q", cfg.Auth.Mode))
 			os.Exit(1)
@@ -556,6 +594,8 @@ func main() {
 			Settings:          settingsSvc,
 			AIProviders:       aiProviders,
 			AIDefaultProvider: aiDefaultProvider,
+			AuthRoutes:        authRoutes,
+			LogoutPath:        logoutPath,
 		})
 		slog.Info("listening", "port", cfg.Server.Port)
 		if err := srv.ListenAndServe(); err != nil {

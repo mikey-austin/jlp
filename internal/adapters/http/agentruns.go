@@ -120,7 +120,7 @@ func (s *Server) agentRunsList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "agent_runs", map[string]any{
+	s.render(w, r, "agent_runs", map[string]any{
 		"Title":    "Agent Runs",
 		"Identity": ident,
 		"Runs":     toAgentRunViews(runs),
@@ -148,7 +148,7 @@ func (s *Server) agentRunsDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "agent_run_detail", map[string]any{
+	s.render(w, r, "agent_run_detail", map[string]any{
 		"Title":       "Agent Run",
 		"Identity":    ident,
 		"Run":         toAgentRunView(run),

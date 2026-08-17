@@ -46,7 +46,7 @@ func (s *Server) ankiPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "anki", map[string]any{
+	s.render(w, r, "anki", map[string]any{
 		"Title":              "Anki",
 		"Identity":           ident,
 		"Drafts":             toAnkiCardViews(drafts),

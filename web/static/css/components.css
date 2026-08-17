@@ -897,6 +897,13 @@ p.hint {
   font-size: var(--text-sm);
   color: var(--fg-muted);
 }
+/* The sign-out control (oidc mode only — see layout.html.tmpl) is a
+   form so it can POST; this keeps it laying out as if it were the
+   bare button beside the theme toggle. */
+.topbar .logout-form {
+  display: inline-flex;
+  margin: 0;
+}
 
 .nav {
   display: flex;

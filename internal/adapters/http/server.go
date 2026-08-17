@@ -193,6 +193,24 @@ type Options struct {
 	// status line. Every other optional integration in this app declines
 	// up front instead.
 	SpeechEnabled bool
+	// AuthRoutes mounts an authenticator's own login endpoints
+	// (/auth/login, /auth/callback, /auth/logout) OUTSIDE the
+	// authenticated group — they are exactly the requests a learner
+	// makes because they have no session yet. nil in static and
+	// authelia mode, where nothing here serves a login: static has no
+	// login to serve, and in authelia mode the forward-auth proxy owns
+	// it. See internal/adapters/oidc.Authenticator.Routes.
+	//
+	// Passed as a plain http.Handler rather than by importing the oidc
+	// adapter here: this package must not learn which authenticator is
+	// configured, which is the same reason Auth above is the port type
+	// and not a concrete one.
+	AuthRoutes http.Handler
+	// LogoutPath renders the header's sign-out control when non-empty.
+	// Empty in static and authelia mode — a sign-out link that cannot
+	// end the session (the proxy would re-authenticate the very next
+	// request) is worse than no link.
+	LogoutPath string
 }
 
 type Server struct {
@@ -244,6 +262,18 @@ func (s *Server) routes() http.Handler {
 		fs.ServeHTTP(w, r)
 	})
 	r.Handle("/static/*", fs)
+	// The login endpoints sit here, with /healthz and /static/*, for
+	// the obvious reason: a learner arriving at /auth/login has no
+	// session, and putting them inside the group below would mean
+	// RequireIdentity bouncing them to a login they can never reach.
+	// They are also outside CSRFProtect, which only guards the
+	// authenticated group — the flow's own state cookie plus the
+	// `state` parameter it must match is what protects the callback,
+	// and it protects it against an attacker who can't read cookies at
+	// all, which an Origin check does not.
+	if s.opts.AuthRoutes != nil {
+		r.Handle("/auth/*", s.opts.AuthRoutes)
+	}
 	r.Group(func(r chi.Router) {
 		r.Use(RequireIdentity(s.opts.Auth, s.opts.Identities))
 		// CSRFProtect (origin verification, not tokens — see csrf.go)
@@ -453,7 +483,7 @@ func (s *Server) HandlerForTest() http.Handler { return s.Handler }
 // topnav, which renders without the "who" span for unauthenticated
 // requests).
 func (s *Server) offline(w http.ResponseWriter, r *http.Request) {
-	Render(w, r, "offline", map[string]any{
+	s.render(w, r, "offline", map[string]any{
 		"Title": "オフライン",
 	})
 }
@@ -501,7 +531,7 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "home", map[string]any{
+	s.render(w, r, "home", map[string]any{
 		"Title":          "JLP",
 		"Identity":       ident,
 		"Stats":          stats,

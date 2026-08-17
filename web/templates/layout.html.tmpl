@@ -32,6 +32,16 @@
     </nav>
     <div class="topbar__right">
       {{with .Identity}}<span class="who">{{.DisplayName}}</span>{{end}}
+      {{/* Sign-out: rendered only when this app owns the session and can
+           actually end it (APP_AUTH_MODE=oidc). A POST rather than a
+           link so it isn't triggered by a prefetch or a crawler; the
+           handler rejects cross-site submissions itself, since /auth/*
+           sits outside the authenticated group CSRFProtect guards. */}}
+      {{with .LogoutPath}}
+      <form method="post" action="{{.}}" class="logout-form">
+        <button type="submit" class="theme-toggle">ログアウト</button>
+      </form>
+      {{end}}
       <button type="button" class="theme-toggle" data-theme-toggle aria-pressed="false">
         <span aria-hidden="true">🌓</span> Toggle theme
       </button>

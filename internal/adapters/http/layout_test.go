@@ -42,3 +42,28 @@ func TestLayoutRendersNavHamburgerToggle(t *testing.T) {
 		}
 	}
 }
+
+// TestLayoutRendersSignOutOnlyWhenTheAppOwnsTheSession pins both
+// halves of Options.LogoutPath: in oidc mode the topbar carries a
+// sign-out form, and in static/authelia mode (LogoutPath empty, the
+// default) it carries nothing — a control that cannot end the session
+// is worse than no control, because the learner would click it and
+// stay signed in.
+func TestLayoutRendersSignOutOnlyWhenTheAppOwnsTheSession(t *testing.T) {
+	opts := testOptionsWithSessions()
+	opts.LogoutPath = "/auth/logout"
+	rec := httptest.NewRecorder()
+	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions", nil))
+	if !strings.Contains(rec.Body.String(), `action="/auth/logout"`) {
+		t.Fatalf("no sign-out form in oidc mode: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), `method="post"`) {
+		t.Fatal("the sign-out control is not a POST")
+	}
+
+	rec = httptest.NewRecorder()
+	NewServer(testOptionsWithSessions()).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions", nil))
+	if strings.Contains(rec.Body.String(), "/auth/logout") {
+		t.Fatal("a sign-out control was rendered in a mode that cannot honour it")
+	}
+}

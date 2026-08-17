@@ -27,6 +27,20 @@ var funcs = template.FuncMap{
 	"days":    func(d time.Duration) int64 { return int64(d / (24 * time.Hour)) },
 }
 
+// render is what every page handler calls: Render below, plus the
+// handful of values the LAYOUT needs and no individual page knows or
+// cares about. Today that is the sign-out control's target (empty in
+// static and authelia mode, where this app has no session of its own
+// to end — see Options.LogoutPath), and the point of funnelling it
+// through here is that adding the next such value doesn't mean editing
+// twenty handlers' data maps again.
+func (s *Server) render(w http.ResponseWriter, r *http.Request, page string, data map[string]any) {
+	if s.opts.LogoutPath != "" {
+		data["LogoutPath"] = s.opts.LogoutPath
+	}
+	Render(w, r, page, data)
+}
+
 // Render executes page against the shared layout. It also loads every
 // partial (web/templates/partials/*.html.tmpl) into the same template
 // set, so a full page — like anki.html.tmpl's draft/approved lists —

@@ -75,17 +75,48 @@ than reaching for `docker compose run` directly.
 
 ## Auth modes
 
-Two `auth.Authenticator` adapters are wired behind `APP_AUTH_MODE`:
+Three `auth.Authenticator` adapters are wired behind `APP_AUTH_MODE`:
 
 - **`static` (default)** — every request is the same dev identity
   (`dev` / `Dev Learner`, configurable via `APP_AUTH_STATIC_ID` /
   `APP_AUTH_STATIC_DISPLAYNAME`). No login flow, no certificates —
-  just `make up` and go straight to `http://localhost:8080`.
-- **`authelia`** — real forward-auth login via Caddy + Authelia. Run
-  `make up-auth` and open **https://jlp.localhost:8443**. The dev TLS
-  cert is self-signed, so the browser will show a certificate warning on
-  first visit — click through it (or add the cert to your trust store)
-  to reach the login page. Dev credentials come from
+  just `make up` and go straight to `http://localhost:8080`. This is
+  what every test and the whole dev loop uses; nothing here depends on
+  an identity provider being reachable.
+- **`oidc`** — JLP runs the login itself: authorization code flow with
+  PKCE against an OpenID Connect provider, an ID token verified against
+  the provider's JWKS (signature, `iss`, `aud`, `exp`/`nbf`/`iat`, and
+  the `nonce` it generated for that one login), and its own signed
+  session cookie afterwards. **This is what the LAN deployment runs.**
+  The learner's identity id is the token's `sub` claim — never the
+  email, which can be reassigned to a different person while every row
+  in the database still points at it.
+
+  | variable | |
+  | --- | --- |
+  | `APP_AUTH_OIDC_ISSUERURL` | e.g. `https://auth.lan.jackiemclean.net` (https, and the `iss` claim must match it exactly) |
+  | `APP_AUTH_OIDC_CLIENTID` | the client registered with the provider; also the audience every ID token must carry |
+  | `APP_AUTH_OIDC_CLIENTSECRET` | plaintext half of the credential whose hash the provider stores |
+  | `APP_AUTH_OIDC_COOKIEKEY` | ≥32 chars, `openssl rand -hex 32`. Rotating it signs everyone out |
+  | `APP_AUTH_OIDC_REDIRECTURL` | optional; defaults to `APP_SERVER_BASEURL` + `/auth/callback`, and must match the provider's registration byte for byte |
+  | `APP_AUTH_OIDC_SESSIONTTL` / `_IDLETIMEOUT` | optional; default 24h / 8h |
+  | `APP_AUTH_OIDC_LOGOUTURL` | where the browser lands after sign-out. Needed for Authelia, which advertises no `end_session_endpoint` |
+
+  The routes are `/auth/login`, `/auth/callback` and `/auth/logout`,
+  mounted outside the authenticated group. Anything in front of JLP must
+  **not** also do forward-auth — that would be two login flows for one
+  app.
+- **`authelia`** — trust `Remote-User`/`Remote-Name` headers from a
+  forward-auth proxy whose address is in `APP_AUTH_TRUSTEDPROXIES`.
+  Kept as the fallback if OIDC misbehaves, but it is strictly weaker:
+  those headers are plain text, not a signed assertion, so the whole
+  security boundary is a source-IP match — it fails open if the proxy's
+  address changes, if the backend port becomes reachable another way, or
+  if anything else runs on the proxy host. For a dev run of it, `make
+  up-auth` and open **https://jlp.localhost:8443**. The dev TLS cert is
+  self-signed, so the browser will show a certificate warning on first
+  visit — click through it (or add the cert to your trust store) to
+  reach the login page. Dev credentials come from
   `AUTHELIA_DEV_PASSWORD` in `.env` (default `devpassword`); `make init`
   generates the corresponding Authelia users file.
 

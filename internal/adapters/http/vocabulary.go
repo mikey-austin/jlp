@@ -97,7 +97,7 @@ func (s *Server) vocabularyPage(w http.ResponseWriter, r *http.Request) {
 		restore += filterQuery(filter)
 	}
 
-	Render(w, r, "vocabulary", map[string]any{
+	s.render(w, r, "vocabulary", map[string]any{
 		"Title":         "語彙",
 		"Identity":      ident,
 		"Items":         views,

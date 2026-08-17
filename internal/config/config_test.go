@@ -967,3 +967,117 @@ func TestSpeechEnvOverridesAreIndependent(t *testing.T) {
 		t.Fatalf("Speech.TTSURL = %q, want empty (unset, independent of STTURL)", cfg.Speech.TTSURL)
 	}
 }
+
+// setOIDCEnv sets a complete, valid APP_AUTH_MODE=oidc environment.
+// Individual tests then break exactly one thing.
+func setOIDCEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_SERVER_BASEURL", "https://jlp.lan.example")
+	t.Setenv("APP_AUTH_MODE", "oidc")
+	t.Setenv("APP_AUTH_OIDC_ISSUERURL", "https://auth.lan.example")
+	t.Setenv("APP_AUTH_OIDC_CLIENTID", "jlp")
+	t.Setenv("APP_AUTH_OIDC_CLIENTSECRET", "a-plaintext-secret")
+	t.Setenv("APP_AUTH_OIDC_COOKIEKEY", strings.Repeat("k", 32))
+}
+
+func TestOIDCModeLoads(t *testing.T) {
+	setOIDCEnv(t)
+	t.Setenv("APP_AUTH_OIDC_SESSIONTTL", "24h")
+	t.Setenv("APP_AUTH_OIDC_IDLETIMEOUT", "2h")
+	t.Setenv("APP_AUTH_OIDC_LOGOUTURL", "https://auth.lan.example/logout")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Auth.Mode != "oidc" || cfg.Auth.OIDC.ClientID != "jlp" {
+		t.Fatalf("Auth = %+v", cfg.Auth)
+	}
+	if cfg.Auth.OIDC.SessionTTL != 24*time.Hour || cfg.Auth.OIDC.IdleTimeout != 2*time.Hour {
+		t.Fatalf("durations = %v / %v", cfg.Auth.OIDC.SessionTTL, cfg.Auth.OIDC.IdleTimeout)
+	}
+	// The redirect_uri must match the provider's registration byte for
+	// byte, so derive it from one place and pin that derivation here.
+	if got := cfg.OIDCRedirectURL(); got != "https://jlp.lan.example/auth/callback" {
+		t.Fatalf("OIDCRedirectURL() = %q", got)
+	}
+}
+
+func TestOIDCRedirectURLOverrideWins(t *testing.T) {
+	setOIDCEnv(t)
+	t.Setenv("APP_AUTH_OIDC_REDIRECTURL", "https://elsewhere.example/cb")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := cfg.OIDCRedirectURL(); got != "https://elsewhere.example/cb" {
+		t.Fatalf("OIDCRedirectURL() = %q", got)
+	}
+}
+
+func TestOIDCModeRejectsIncompleteConfig(t *testing.T) {
+	cases := map[string]map[string]string{
+		"no issuer":            {"APP_AUTH_OIDC_ISSUERURL": ""},
+		"no client id":         {"APP_AUTH_OIDC_CLIENTID": ""},
+		"no client secret":     {"APP_AUTH_OIDC_CLIENTSECRET": ""},
+		"no cookie key":        {"APP_AUTH_OIDC_COOKIEKEY": ""},
+		"short cookie key":     {"APP_AUTH_OIDC_COOKIEKEY": "too-short"},
+		"localhost baseurl":    {"APP_SERVER_BASEURL": "http://localhost:8080"},
+		"idle longer than ttl": {"APP_AUTH_OIDC_SESSIONTTL": "1h", "APP_AUTH_OIDC_IDLETIMEOUT": "8h"},
+	}
+	for name, env := range cases {
+		t.Run(name, func(t *testing.T) {
+			setOIDCEnv(t)
+			for k, v := range env {
+				t.Setenv(k, v)
+			}
+			_, err := Load()
+			if err == nil {
+				t.Fatal("Load accepted an incomplete oidc configuration")
+			}
+			// A config error is the most likely thing to be pasted into
+			// a chat or an issue.
+			if strings.Contains(err.Error(), "a-plaintext-secret") {
+				t.Fatalf("the error leaks the client secret: %v", err)
+			}
+		})
+	}
+}
+
+// Regression guard: oidc's configuration is inert in the other two
+// modes. `make up`, every test, and the whole dev loop run static mode
+// with none of these variables set, and must keep booting.
+func TestOIDCConfigIsIgnoredOutsideOIDCMode(t *testing.T) {
+	for _, mode := range []string{"static", "authelia"} {
+		t.Run(mode, func(t *testing.T) {
+			t.Setenv("APP_DATABASE_URL", "postgres://x")
+			t.Setenv("APP_AUTH_MODE", mode)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("%s mode no longer boots without oidc config: %v", mode, err)
+			}
+			if cfg.Auth.Mode != mode {
+				t.Fatalf("Auth.Mode = %q", cfg.Auth.Mode)
+			}
+		})
+	}
+}
+
+func TestUnknownAuthModeRejected(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_AUTH_MODE", "oauth")
+	if _, err := Load(); err == nil {
+		t.Fatal("expected an unknown auth mode to be rejected")
+	}
+}
+
+// /auth is reserved against the A2A mount path in every mode — see
+// a2aReservedPathPrefixes.
+func TestA2APathCannotTakeTheAuthRoutes(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_A2A_ENABLED", "true")
+	t.Setenv("APP_A2A_PATH", "/auth")
+	if _, err := Load(); err == nil {
+		t.Fatal("APP_A2A_PATH=/auth was accepted, which would shadow the login routes")
+	}
+}

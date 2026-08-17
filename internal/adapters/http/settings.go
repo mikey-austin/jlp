@@ -15,7 +15,7 @@ import (
 // this deliberately isn't a new top-level nav item.
 func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
-	Render(w, r, "settings", map[string]any{
+	s.render(w, r, "settings", map[string]any{
 		"Title":    "設定",
 		"Identity": ident,
 		"Rows":     s.opts.Settings.Rows(r.Context(), s.opts.AIProviders),
@@ -106,7 +106,7 @@ func (s *Server) rejectUnavailableProvider(w http.ResponseWriter, r *http.Reques
 func (s *Server) renderSettingsError(w http.ResponseWriter, r *http.Request, err error) {
 	ident, _ := IdentityFrom(r.Context())
 	w.WriteHeader(http.StatusUnprocessableEntity)
-	Render(w, r, "settings", map[string]any{
+	s.render(w, r, "settings", map[string]any{
 		"Title":    "設定",
 		"Identity": ident,
 		"Rows":     s.opts.Settings.Rows(r.Context(), s.opts.AIProviders),

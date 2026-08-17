@@ -135,7 +135,7 @@ func (s *Server) aiRequests(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "ai", map[string]any{
+	s.render(w, r, "ai", map[string]any{
 		"Title":         "AI Requests",
 		"Identity":      ident,
 		"Requests":      views,

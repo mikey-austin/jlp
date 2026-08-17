@@ -58,7 +58,7 @@ func (s *Server) learnerPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	Render(w, r, "learner", map[string]any{
+	s.render(w, r, "learner", map[string]any{
 		"Title":        "学習",
 		"Identity":     ident,
 		"Priorities":   priorities,
