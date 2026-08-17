@@ -43,6 +43,16 @@ services:
       # config's own defaults rather than blanking them out.
       APP_AI_ANTHROPIC_MODEL: ${APP_AI_ANTHROPIC_MODEL:-}
       APP_AI_ANTHROPIC_BASEURL: ${APP_AI_ANTHROPIC_BASEURL:-}
+      # Gemini (internal/adapters/gemini). Empty APIKEY is the dormant
+      # contract: with no key the provider is never constructed, so a
+      # deployment that doesn't use it boots exactly as before. MODEL and
+      # BASEURL are safe to leave empty for the same viper reason as
+      # Anthropic's above — they fall through to config's defaults
+      # (gemini-3-flash-preview / https://generativelanguage.googleapis.com).
+      APP_AI_GEMINI_APIKEY: ${GEMINI_API_KEY:-}
+      APP_AI_GEMINI_MODEL: ${APP_AI_GEMINI_MODEL:-}
+      APP_AI_GEMINI_BASEURL: ${APP_AI_GEMINI_BASEURL:-}
+      APP_AI_GEMINI_TIMEOUT: ${APP_AI_GEMINI_TIMEOUT:-}
     depends_on:
       postgres: { condition: service_healthy }
 

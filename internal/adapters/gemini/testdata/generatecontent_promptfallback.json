@@ -1,0 +1,32 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "{\n  \"$schema\": \"https://json-schema.org/draft/2020-12/schema\",\n  \"corrections\": [\n    {\n      \"original\": \"面白いでした\",\n      \"replacement\": \"面白かったです\",\n      \"type\": \"conjugation\",\n      \"severity\": \"incorrect\",\n      \"explanation\": {\n        \"ja\": \"い形容詞を過去形にする時は「〜かったです」を使います。「〜いでした」とは言いません。\",\n        \"en\": \"To make the past tense of an i-adjective, you must use \\\"~katta desu\\\". \\\"~i deshita\\\" is incorrect.\"\n      },\n      \"concepts\": [\n        \"i-adjective conjugation\",\n        \"past tense\"\n      ]\n    },\n    {\n      \"original\": \"映画を見ます\",\n      \"replacement\": \"映画を見ることです\",\n      \"type\": \"grammar\",\n      \"severity\": \"incorrect\",\n      \"explanation\": {\n        \"ja\": \"「私の趣味は〜です」と言う時、動詞は「こと」をつけて名詞の形にする必要があります。\",\n        \"en\": \"When saying \\\"My hobby is...\\\", you need to use the dictionary form of the verb plus \\\"koto\\\" to turn it into a noun phrase (nominalization).\"\n      },\n      \"concepts\": [\n        \"nominalization\",\n        \"noun phrases\"\n      ]\n    }\n  ]\n}",
+            "thoughtSignature": "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"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 515,
+    "candidatesTokenCount": 322,
+    "totalTokenCount": 1289,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 515
+      }
+    ],
+    "thoughtsTokenCount": 452,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3-flash-preview",
+  "responseId": "tqyCapz4FLiixN8PtdPEmQ0"
+}

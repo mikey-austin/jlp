@@ -61,6 +61,7 @@ func baseAICfg() config.AI {
 	return config.AI{
 		Ollama:    config.Ollama{Model: "gemma4:12b"},
 		Anthropic: config.Anthropic{Model: "claude-sonnet-5"},
+		Gemini:    config.Gemini{Model: "gemini-3-flash-preview"},
 		ClaudeCLI: config.ClaudeCLI{Model: "opus", Effort: "medium"},
 		CodexCLI:  config.CodexCLI{Model: "gpt-5.5-codex", Effort: "low"},
 	}
@@ -125,6 +126,7 @@ func TestModelReturnsConfigValueWithNoOverride(t *testing.T) {
 	}{
 		{"ollama", cfg.Ollama.Model, ""},
 		{"anthropic", cfg.Anthropic.Model, ""},
+		{"gemini", cfg.Gemini.Model, ""},
 		{"claudecli", cfg.ClaudeCLI.Model, cfg.ClaudeCLI.Effort},
 		{"codexcli", cfg.CodexCLI.Model, cfg.CodexCLI.Effort},
 	} {
@@ -163,6 +165,36 @@ func TestModelReturnsOverrideWhenSet(t *testing.T) {
 	}
 	if model, effort := svc.Model("claudecli"); model != "sonnet" || effort != "xhigh" {
 		t.Errorf("Model(claudecli) after override = (%q, %q), want (sonnet, xhigh)", model, effort)
+	}
+}
+
+// TestGeminiModelIsRuntimeSwitchable is the /settings half of the
+// Gemini provider's "no restart" contract: the adapter re-reads
+// Model("gemini") on every call, so an override saved here is what the
+// very next generateContent request asks for.
+func TestGeminiModelIsRuntimeSwitchable(t *testing.T) {
+	cfg := baseAICfg()
+	svc, _ := newTestService(t, cfg)
+
+	if err := svc.SetModel(context.Background(), "gemini", "gemini-2.5-flash"); err != nil {
+		t.Fatalf("SetModel(gemini): %v", err)
+	}
+	if model, effort := svc.Model("gemini"); model != "gemini-2.5-flash" || effort != "" {
+		t.Errorf("Model(gemini) after override = (%q, %q), want (gemini-2.5-flash, \"\")", model, effort)
+	}
+
+	// Gemini has no effort concept, same as ollama/anthropic — the
+	// /settings page renders no such control, and a hand-made POST must
+	// still be rejected.
+	if err := svc.SetEffort(context.Background(), "gemini", "high"); !errors.Is(err, settings.ErrNoEffort) {
+		t.Errorf("SetEffort(gemini) = %v, want ErrNoEffort", err)
+	}
+
+	if err := svc.Reset(context.Background(), "gemini"); err != nil {
+		t.Fatalf("Reset(gemini): %v", err)
+	}
+	if model, _ := svc.Model("gemini"); model != cfg.Gemini.Model {
+		t.Errorf("Model(gemini) after reset = %q, want the config fallback %q", model, cfg.Gemini.Model)
 	}
 }
 

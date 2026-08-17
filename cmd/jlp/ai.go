@@ -10,6 +10,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/clicmd"
 	"github.com/mikeyaustin/jlp/internal/adapters/fakeai"
+	"github.com/mikeyaustin/jlp/internal/adapters/gemini"
 	"github.com/mikeyaustin/jlp/internal/adapters/ollama"
 	"github.com/mikeyaustin/jlp/internal/config"
 	"github.com/mikeyaustin/jlp/internal/observability"
@@ -53,6 +54,15 @@ func aiPricing() map[string]observability.ModelPricing {
 		"fake-1":          {InPerMTok: 0, OutPerMTok: 0},
 		"qwen3:4b":        {InPerMTok: 0, OutPerMTok: 0},
 		"cli":             {InPerMTok: 0, OutPerMTok: 0},
+		// Google's published paid-tier text rates
+		// (https://ai.google.dev/gemini-api/docs/pricing). The output
+		// figure is the one that matters here: adapters/gemini reports
+		// thinking tokens as output tokens, which is how Google bills
+		// them ("response pricing is the sum of output tokens and
+		// thinking tokens"), and on the measured call those were 649 of
+		// the 842 output tokens.
+		"gemini-3-flash-preview": {InPerMTok: 0.50, OutPerMTok: 3.00},
+		"gemini-2.5-flash":       {InPerMTok: 0.30, OutPerMTok: 2.50},
 	}
 }
 
@@ -259,6 +269,15 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 		raw["anthropic"] = anthropic.New(cfg.AI.Anthropic, resolver)
 		warnIfUnpriced(pricing, "anthropic", cfg.AI.Anthropic.Model)
 	}
+	// gemini is gated exactly like anthropic, and for the same reason:
+	// one field (APIKey) makes it constructible, and constructing an
+	// unused client is free — no network call happens until
+	// GenerateStructured is. No key means the provider is never built at
+	// all, which is what lets every existing deployment boot unchanged.
+	if cfg.AI.Gemini.APIKey != "" {
+		raw["gemini"] = gemini.New(cfg.AI.Gemini, resolver)
+		warnIfUnpriced(pricing, "gemini", cfg.AI.Gemini.Model)
+	}
 	if needed["ollama"] && cfg.AI.Ollama.Model != "" {
 		raw["ollama"] = ollama.New(cfg.AI.Ollama, resolver)
 		warnIfUnpriced(pricing, "ollama", cfg.AI.Ollama.Model)
@@ -337,7 +356,7 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 // it when it's genuinely the configured default (every non-integration
 // test, `jlp eval`), just not as an ordinary option alongside the real
 // providers.
-var aiProviderPriority = []string{"ollama", "anthropic", "claudecli", "codexcli", "agycli"}
+var aiProviderPriority = []string{"ollama", "anthropic", "gemini", "claudecli", "codexcli", "agycli"}
 
 // buildToolCaller turns cfg.AI into the single ai.ToolCaller Phase 4's
 // agentic capabilities call (Task 2 onward) — the ToolCaller
@@ -345,7 +364,8 @@ var aiProviderPriority = []string{"ollama", "anthropic", "claudecli", "codexcli"
 // top of a per-provider-name map of observability.NewToolObserver-
 // wrapped adapters. It shares buildAIGenerator's route parsing and
 // pricing table, but its provider set is narrower: only
-// adapters/fakeai, adapters/anthropic, and adapters/ollama implement
+// adapters/fakeai, adapters/anthropic, adapters/ollama and
+// adapters/gemini implement
 // ai.ToolCaller today — adapters/clicmd's claudecli/codexcli adapters
 // (their non-interactive JSON CLI output has no tool-calling protocol
 // of its own to drive) do not, so APP_AI_PROVIDER naming either for
@@ -378,6 +398,9 @@ func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepositor
 	}
 	if cfg.AI.Anthropic.APIKey != "" {
 		raw["anthropic"] = anthropic.New(cfg.AI.Anthropic, resolver)
+	}
+	if cfg.AI.Gemini.APIKey != "" {
+		raw["gemini"] = gemini.New(cfg.AI.Gemini, resolver)
 	}
 	needed := map[string]bool{cfg.AI.Provider: true}
 	for _, chain := range routes {
@@ -413,7 +436,7 @@ func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepositor
 		for _, name := range chain {
 			gen, ok := providers[name]
 			if !ok {
-				return nil, fmt.Errorf("ai: tool-calling route %q names provider %q, which doesn't implement ai.ToolCaller (only fake, anthropic, and ollama do)", promptName, name)
+				return nil, fmt.Errorf("ai: tool-calling route %q names provider %q, which doesn't implement ai.ToolCaller (only fake, anthropic, ollama, and gemini do)", promptName, name)
 			}
 			resolvedRoutes[promptName] = append(resolvedRoutes[promptName], gen)
 		}
@@ -421,7 +444,7 @@ func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepositor
 
 	defaultGen, ok := providers[cfg.AI.Provider]
 	if !ok {
-		return nil, fmt.Errorf("ai: APP_AI_PROVIDER %q doesn't implement ai.ToolCaller (only fake, anthropic, and ollama do)", cfg.AI.Provider)
+		return nil, fmt.Errorf("ai: APP_AI_PROVIDER %q doesn't implement ai.ToolCaller (only fake, anthropic, ollama, and gemini do)", cfg.AI.Provider)
 	}
 
 	return airouter.NewToolCaller(resolvedRoutes, []ai.ToolCaller{defaultGen}), nil

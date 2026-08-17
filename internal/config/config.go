@@ -50,6 +50,7 @@ type AI struct {
 	Provider  string
 	Anthropic Anthropic
 	Ollama    Ollama
+	Gemini    Gemini
 	ClaudeCLI ClaudeCLI
 	CodexCLI  CodexCLI
 	AgyCLI    AgyCLI
@@ -140,6 +141,24 @@ type AgyCLI struct {
 	Bin     string
 	Model   string
 	Effort  string
+	Timeout time.Duration
+}
+
+// Gemini configures the Google Gemini adapter
+// (internal/adapters/gemini), the hosted-API provider for a deployment
+// with no local model worth using. APIKey is the ONLY gate: with it
+// empty the provider is never constructed and the app boots clean, the
+// same dormant-unless-configured contract as Anthropic above.
+//
+// Model has a default (see Load) because unlike Ollama there is a
+// single obvious answer that is already in production elsewhere on this
+// network. Timeout bounds one generateContent round trip; the adapter
+// backstops a zero value of its own, since the zero value of
+// http.Client has no timeout at all.
+type Gemini struct {
+	APIKey  string
+	Model   string
+	BaseURL string
 	Timeout time.Duration
 }
 
@@ -525,6 +544,14 @@ func Load() (Config, error) {
 	// ai.ollama.model has no default (see the Ollama struct's doc
 	// comment) — it's zero-value "" unless the operator sets it.
 	v.SetDefault("ai.ollama.url", "http://ollama:11434")
+	// gemini-3-flash-preview is the model already in production against
+	// this same key elsewhere on the network (nihongo-daily) and the one
+	// every measurement behind internal/adapters/gemini was taken
+	// against. ai.gemini.apikey has no default — its emptiness IS the
+	// "provider is dormant" contract.
+	v.SetDefault("ai.gemini.model", "gemini-3-flash-preview")
+	v.SetDefault("ai.gemini.baseurl", "https://generativelanguage.googleapis.com")
+	v.SetDefault("ai.gemini.timeout", 2*time.Minute)
 	v.SetDefault("ai.claudecli.bin", "claude")
 	v.SetDefault("ai.codexcli.bin", "codex")
 	v.SetDefault("ai.agycli.bin", "agy")
@@ -556,6 +583,7 @@ func Load() (Config, error) {
 		"auth.mode", "auth.static.id", "auth.static.displayname",
 		"ai.provider", "ai.anthropic.apikey", "ai.anthropic.model", "ai.anthropic.baseurl",
 		"ai.ollama.url", "ai.ollama.model", "ai.ollama.timeout",
+		"ai.gemini.apikey", "ai.gemini.model", "ai.gemini.baseurl", "ai.gemini.timeout",
 		"ai.claudecli.bin", "ai.claudecli.model", "ai.claudecli.effort",
 		"ai.codexcli.bin", "ai.codexcli.model", "ai.codexcli.effort",
 		"ai.agycli.bin", "ai.agycli.model", "ai.agycli.effort", "ai.agycli.timeout",
@@ -601,14 +629,23 @@ func (c Config) validate() error {
 	if c.Auth.Mode == "authelia" && len(c.Auth.TrustedProxies) == 0 {
 		return fmt.Errorf("config: APP_AUTH_TRUSTEDPROXIES must be non-empty when APP_AUTH_MODE=authelia")
 	}
-	if !slices.Contains([]string{"fake", "anthropic", "ollama"}, c.AI.Provider) {
-		return fmt.Errorf("config: APP_AI_PROVIDER must be fake|anthropic|ollama, got %q", c.AI.Provider)
+	// The APP_AI_PROVIDER set is narrower than routeProviders below on
+	// purpose: a DEFAULT provider must implement ai.ToolCaller as well as
+	// ai.StructuredGenerator, because cmd/jlp builds both from this one
+	// value and treats a default it cannot build a ToolCaller for as a
+	// boot error. The three CLI providers are structured-generation only,
+	// so they can be named in a route chain but never as the default.
+	if !slices.Contains([]string{"fake", "anthropic", "ollama", "gemini"}, c.AI.Provider) {
+		return fmt.Errorf("config: APP_AI_PROVIDER must be fake|anthropic|ollama|gemini, got %q", c.AI.Provider)
 	}
 	if c.AI.Provider == "anthropic" && c.AI.Anthropic.APIKey == "" {
 		return fmt.Errorf("config: APP_AI_ANTHROPIC_APIKEY required when provider=anthropic")
 	}
 	if c.AI.Provider == "ollama" && c.AI.Ollama.Model == "" {
 		return fmt.Errorf("config: APP_AI_OLLAMA_MODEL required when provider=ollama")
+	}
+	if c.AI.Provider == "gemini" && c.AI.Gemini.APIKey == "" {
+		return fmt.Errorf("config: APP_AI_GEMINI_APIKEY required when provider=gemini")
 	}
 	if _, err := ParseRoutes(c.AI.Routes); err != nil {
 		return err
@@ -745,13 +782,14 @@ func ParseAllowFrom(s string) (map[string]string, error) {
 }
 
 // routeProviders is the set of provider names ParseRoutes accepts —
-// wider than APP_AI_PROVIDER's own fake|anthropic|ollama enum (see
-// validate above) because a route may name a CLI adapter (claudecli,
-// codexcli) that Task 12 makes constructible. ParseRoutes only checks
-// the NAME is spellable; whether cmd/jlp/main.go can actually build an
-// instance for it is a separate, later check (a boot error there, not
-// a config-parse error here) — see the AI.Routes field comment.
-var routeProviders = []string{"fake", "anthropic", "ollama", "claudecli", "codexcli", "agycli"}
+// wider than APP_AI_PROVIDER's own fake|anthropic|ollama|gemini enum
+// (see validate above) because a route may name a CLI adapter
+// (claudecli, codexcli) that Task 12 makes constructible. ParseRoutes
+// only checks the NAME is spellable; whether cmd/jlp/main.go can
+// actually build an instance for it is a separate, later check (a boot
+// error there, not a config-parse error here) — see the AI.Routes field
+// comment.
+var routeProviders = []string{"fake", "anthropic", "ollama", "gemini", "claudecli", "codexcli", "agycli"}
 
 // ParseRoutes parses APP_AI_ROUTES: semicolon-separated
 // "prompt.name=prov1,prov2" entries, each naming an ordered fallback

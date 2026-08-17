@@ -116,6 +116,61 @@ the `/ai` page).
   APP_AI_ANTHROPIC_BASEURL=
   ```
 
+- **`gemini`** — live calls to Google's Gemini API, the choice for a
+  host with no local model worth using. Set in `.env`:
+
+  ```
+  APP_AI_PROVIDER=gemini
+  GEMINI_API_KEY=...
+  ```
+
+  Optional overrides (leave blank to use the built-in defaults —
+  `gemini-3-flash-preview` / `https://generativelanguage.googleapis.com`):
+
+  ```
+  APP_AI_GEMINI_MODEL=
+  APP_AI_GEMINI_BASEURL=
+  APP_AI_GEMINI_TIMEOUT=      # bounds one generateContent round trip (default 2m)
+  ```
+
+  The model is also switchable at runtime from `/settings`, which lists
+  what the API itself reports as `generateContent`-capable (37 of the 53
+  models the account currently sees; embedding and image models are
+  filtered out).
+
+  **How JLP's schemas reach Gemini.** Gemini's `responseSchema` is an
+  OpenAPI-3.0 subset, not JSON Schema, so — unlike Anthropic and Ollama,
+  which take `req.Schema` byte-for-byte — the adapter has to translate.
+  Measured against the live API:
+
+  | what is sent | result |
+  |---|---|
+  | `correction_result.v1` verbatim | **HTTP 400** — *Unknown name "$schema"*, *Unknown name "additionalProperties"* |
+  | same, minus `$schema`/`additionalProperties`/`title` | works: 4.6 s, 227 in / 193 out |
+  | `exercise.v1`, same treatment | **HTTP 400** — *Unknown name "if"*: `allOf`/`if`/`then` have no equivalent |
+  | `exercise.v1` pasted into the prompt, `responseMimeType` only | works: 3.8 s, **515 in** / 322 out |
+
+  So the adapter strips exactly those three keys (`minLength` is
+  accepted and is deliberately kept) and sends the result as
+  `responseSchema`; a schema still containing `allOf`/`if`/`then`/
+  `else`/`oneOf`/`not`/`$ref`/`patternProperties` afterwards falls back
+  to putting the schema in the prompt instead. The fallback is the
+  branch to avoid: pasting the schema into the prompt cost 2.3x the
+  input tokens on the measured call, which is why the choice is made per
+  schema, by keyword — never for every call, and never from a hardcoded
+  list of schema names.
+
+  Either way, **JLP validates the answer against the real schema
+  itself** (`aiutil.ValidateWithRepairAndRetry`), so
+  `additionalProperties: false` is still enforced even though Gemini
+  cannot express it.
+
+  Thinking tokens are reported as output tokens on `/ai`, because that
+  is how Google bills them ("response pricing is the sum of output
+  tokens and thinking tokens"). On the measured call they were 649 of
+  the 842 — reporting `candidatesTokenCount` alone would have understated
+  the cost by 3.4x.
+
 - **`ollama`** — a local model server, no API key, no per-token cost.
   Set in `.env`:
 
@@ -1128,7 +1183,7 @@ internal/config/             viper -> typed Config, validation
 internal/domain/             learner, session, writing, correction, diff, event
 internal/application/        sessions, writing, feedback, learning, analytics
 internal/ports/               auth, ai, events, storage, notifications interfaces
-internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, clicmd, airouter, smtp
+internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, gemini, clicmd, airouter, smtp
 internal/agent/teacher/      the Teacher AI agent (ReviewWriting)
 internal/observability/      AI request/cost/latency recording decorator
 internal/prompts/            embedded, versioned prompt templates

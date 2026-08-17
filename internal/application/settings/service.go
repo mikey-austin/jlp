@@ -38,13 +38,17 @@ import (
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
-// The six overridable settings keys — see the app_settings migration's
-// own table comment. Exported so a caller (this package's own tests,
-// or a future admin tool) never has to hand-spell one of these
-// strings a second time.
+// Every overridable settings key — see the app_settings migration's own
+// table comment. Exported so a caller (this package's own tests, or a
+// future admin tool) never has to hand-spell one of these strings a
+// second time. Adding a provider means adding its key here, a keysFor
+// case, a configModel case, and a providers entry; miss one and the
+// /settings row silently resolves to the wrong thing, which is why
+// service_test.go walks providers rather than naming them.
 const (
 	KeyOllamaModel     = "ai.ollama.model"
 	KeyAnthropicModel  = "ai.anthropic.model"
+	KeyGeminiModel     = "ai.gemini.model"
 	KeyClaudeCLIModel  = "ai.claudecli.model"
 	KeyClaudeCLIEffort = "ai.claudecli.effort"
 	KeyCodexCLIModel   = "ai.codexcli.model"
@@ -53,12 +57,12 @@ const (
 	KeyAgyCLIEffort    = "ai.agycli.effort"
 )
 
-// ErrUnknownProvider is returned by every mutating method when
-// provider isn't one of "ollama", "anthropic", "claudecli", "codexcli".
+// ErrUnknownProvider is returned by every mutating method when provider
+// isn't one of the names in the providers catalog below.
 var ErrUnknownProvider = errors.New("settings: unknown provider")
 
-// ErrNoEffort is returned by SetEffort when provider is "ollama" or
-// "anthropic" — neither has an effort concept (see ports/ai.ModelResolver's
+// ErrNoEffort is returned by SetEffort for a provider with no effort
+// concept — the three API providers (ollama, anthropic, gemini) (see ports/ai.ModelResolver's
 // doc comment), so the /settings page never renders that control for
 // them, but this guards the same contract if it's ever reached anyway
 // (e.g. a stale form, or a future non-UI caller).
@@ -80,6 +84,7 @@ type providerInfo struct {
 var providers = []providerInfo{
 	{"ollama", "Ollama", false},
 	{"anthropic", "Anthropic", false},
+	{"gemini", "Gemini", false},
 	{"claudecli", "Claude Code CLI", true},
 	{"codexcli", "Codex CLI", true},
 	{"agycli", "Antigravity CLI", true},
@@ -94,6 +99,8 @@ func keysFor(provider string) (modelKey, effortKey string) {
 		return KeyOllamaModel, ""
 	case "anthropic":
 		return KeyAnthropicModel, ""
+	case "gemini":
+		return KeyGeminiModel, ""
 	case "claudecli":
 		return KeyClaudeCLIModel, KeyClaudeCLIEffort
 	case "codexcli":
@@ -275,6 +282,8 @@ func (s *Service) configModel(provider string) string {
 		return s.cfg.Ollama.Model
 	case "anthropic":
 		return s.cfg.Anthropic.Model
+	case "gemini":
+		return s.cfg.Gemini.Model
 	case "claudecli":
 		return s.cfg.ClaudeCLI.Model
 	case "codexcli":

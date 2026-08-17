@@ -13,6 +13,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/ankiconnect"
 	anthropicadapter "github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
+	geminiadapter "github.com/mikeyaustin/jlp/internal/adapters/gemini"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
 	adaptermqtt "github.com/mikeyaustin/jlp/internal/adapters/mqtt"
@@ -132,16 +133,21 @@ func main() {
 		// modelListers backs the /settings model dropdowns (Phase 4 Task
 		// M): one ports/ai.ModelLister per provider that has a genuine,
 		// verifiable source of truth for what it can serve — Ollama's
-		// /api/tags, agy's `agy models`, Anthropic's /v1/models. A
-		// provider absent from this map (claudecli, codexcli — neither can
-		// enumerate at all) falls back to /settings' free-text input, same
-		// as any provider whose lister fails at render time. None of these
-		// three dial out here: constructing a lister never calls its
-		// provider (see each one's own doc comment) — only /settings
-		// rendering does, lazily.
+		// /api/tags, agy's `agy models`, Anthropic's /v1/models, Gemini's
+		// /v1beta/models. A provider absent from this map (claudecli,
+		// codexcli — neither can enumerate at all) falls back to
+		// /settings' free-text input, same as any provider whose lister
+		// fails at render time. None of these dial out here: constructing
+		// a lister never calls its provider (see each one's own doc
+		// comment) — only /settings rendering does, lazily. Gemini's is
+		// built unconditionally like the rest; with no API key it returns
+		// ErrNoAPIKey without a request, and its /settings row is marked
+		// unavailable anyway because buildAIGenerator constructed no
+		// generator for it.
 		modelListers := map[string]ai.ModelLister{
 			"ollama":    ollamaadapter.NewModelLister(cfg.AI.Ollama),
 			"anthropic": anthropicadapter.NewModelLister(cfg.AI.Anthropic),
+			"gemini":    geminiadapter.NewModelLister(cfg.AI.Gemini),
 			"agycli":    agycliadapter.NewModelLister(cfg.AI.AgyCLI),
 		}
 		settingsRepo := postgres.NewSettingsRepository(pool)

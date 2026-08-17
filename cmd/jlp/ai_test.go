@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -187,6 +188,64 @@ func TestBuildAIGeneratorErrorsWhenDefaultProviderNotConstructible(t *testing.T)
 	}
 	if !strings.Contains(err.Error(), "anthropic") {
 		t.Errorf("error = %q, want it to name anthropic", err.Error())
+	}
+}
+
+// TestGeminiIsDormantWithoutAKey: the provider must not exist at all
+// until APP_AI_GEMINI_APIKEY is set, so every deployment that doesn't
+// use it boots exactly as it did before this adapter existed. A route
+// naming it is then a boot error, which is the loud failure an operator
+// who set the route but forgot the key deserves.
+func TestGeminiIsDormantWithoutAKey(t *testing.T) {
+	cfg := baseCfg()
+	cfg.AI.Routes = "teacher.feedback=gemini"
+
+	_, available, _, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	if err == nil {
+		t.Fatal("expected a boot error for a gemini route with no API key")
+	}
+	if slices.Contains(available, "gemini") {
+		t.Error("gemini was offered as an available provider with no API key configured")
+	}
+}
+
+// TestGeminiIsConstructedWithAKeyForBothCapabilities is the one that
+// would have caught a structured-generation-only adapter: cmd/jlp
+// builds a ToolCaller from APP_AI_PROVIDER too and exits(1) when it
+// can't, so APP_AI_PROVIDER=gemini has to satisfy BOTH builders or the
+// deployment this provider exists for never starts.
+func TestGeminiIsConstructedWithAKeyForBothCapabilities(t *testing.T) {
+	cfg := baseCfg()
+	cfg.AI.Provider = "gemini"
+	cfg.AI.Gemini = config.Gemini{APIKey: "test-key", Model: "gemini-3-flash-preview"}
+
+	_, available, defaultProvider, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	if err != nil {
+		t.Fatalf("buildAIGenerator: %v", err)
+	}
+	if !slices.Contains(available, "gemini") {
+		t.Errorf("available = %v, want it to include gemini", available)
+	}
+	if defaultProvider != "gemini" {
+		t.Errorf("defaultProvider = %q, want gemini", defaultProvider)
+	}
+
+	if _, err := buildToolCaller(cfg, &memRepo{}, nil); err != nil {
+		t.Fatalf("buildToolCaller: %v — APP_AI_PROVIDER=gemini would exit(1) at boot", err)
+	}
+}
+
+// TestGeminiModelsArePriced: an unpriced model records every call at $0
+// on /ai. Gemini is the first provider in this table whose cost is
+// neither zero nor negligible, so a missing entry would be a silently
+// wrong bill rather than a cosmetic gap.
+func TestGeminiModelsArePriced(t *testing.T) {
+	p, ok := aiPricing()["gemini-3-flash-preview"]
+	if !ok {
+		t.Fatal("gemini-3-flash-preview has no pricing entry — every call would record $0")
+	}
+	if p.InPerMTok <= 0 || p.OutPerMTok <= 0 {
+		t.Errorf("pricing = %+v, want the published paid-tier rates", p)
 	}
 }
 

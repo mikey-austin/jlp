@@ -1,0 +1,32 @@
+{
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "text": "{\"corrections\":[{\"original\":\"面白いでした\",\"replacement\":\"面白かったです\",\"type\":\"grammar\",\"severity\":\"incorrect\",\"explanation\":{\"ja\":\"い形容詞を過去形にするときは「～かったです」を使います。「～いでした」は間違いです。\",\"en\":\"When putting i-adjectives into the past tense, use \\\"~katta desu\\\". \\\"~i deshita\\\" is grammatically incorrect.\"},\"concepts\":[\"i-adjective conjugation\",\"past tense\"]},{\"original\":\"映画を見ます\",\"replacement\":\"映画を見ることです\",\"type\":\"grammar\",\"severity\":\"incorrect\",\"explanation\":{\"ja\":\"「私の趣味は～」と言うときは、動詞を「～すること」という形にして名詞として使います。\",\"en\":\"When saying \\\"My hobby is...\\\", you must nominalize the verb using \\\"koto\\\" (e.g., \\\"verb + koto desu\\\").\"},\"concepts\":[\"nominalization\",\"hobby description\"]}]}",
+            "thoughtSignature": "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"
+          }
+        ],
+        "role": "model"
+      },
+      "finishReason": "STOP",
+      "index": 0
+    }
+  ],
+  "usageMetadata": {
+    "promptTokenCount": 227,
+    "candidatesTokenCount": 193,
+    "totalTokenCount": 1069,
+    "promptTokensDetails": [
+      {
+        "modality": "TEXT",
+        "tokenCount": 227
+      }
+    ],
+    "thoughtsTokenCount": 649,
+    "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3-flash-preview",
+  "responseId": "sayCavmRLIypvdIP-u6I6QQ"
+}

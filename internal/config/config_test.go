@@ -4,6 +4,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestDefaults(t *testing.T) {
@@ -83,6 +84,62 @@ func TestOllamaAndRoutesEnvOverrides(t *testing.T) {
 	}
 	if cfg.AI.Routes != "teacher.feedback=fake,anthropic" {
 		t.Fatalf("AI.Routes = %q, want override applied", cfg.AI.Routes)
+	}
+}
+
+// TestGeminiDefaultsAndEnvOverrides covers both halves of the
+// provider's config contract: the defaults an operator gets for free
+// (the model already in production against this key elsewhere, and the
+// real API base URL), and that every APP_AI_GEMINI_* var is actually
+// bound — viper's AutomaticEnv only honours keys BindEnv was called
+// for, so a missing entry in that list is a silently ignored setting,
+// not an error.
+func TestGeminiDefaultsAndEnvOverrides(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AI.Gemini.Model != "gemini-3-flash-preview" {
+		t.Errorf("AI.Gemini.Model default = %q, want gemini-3-flash-preview", cfg.AI.Gemini.Model)
+	}
+	if cfg.AI.Gemini.BaseURL != "https://generativelanguage.googleapis.com" {
+		t.Errorf("AI.Gemini.BaseURL default = %q", cfg.AI.Gemini.BaseURL)
+	}
+	if cfg.AI.Gemini.Timeout != 2*time.Minute {
+		t.Errorf("AI.Gemini.Timeout default = %v, want 2m", cfg.AI.Gemini.Timeout)
+	}
+	// No key by default: that emptiness IS the dormant-provider contract
+	// (cmd/jlp's buildAIGenerator never constructs the adapter without one).
+	if cfg.AI.Gemini.APIKey != "" {
+		t.Error("AI.Gemini.APIKey has a default — the provider must be dormant unless configured")
+	}
+
+	t.Setenv("APP_AI_PROVIDER", "gemini")
+	t.Setenv("APP_AI_GEMINI_APIKEY", "test-key")
+	t.Setenv("APP_AI_GEMINI_MODEL", "gemini-2.5-flash")
+	t.Setenv("APP_AI_GEMINI_BASEURL", "http://localhost:9999")
+	t.Setenv("APP_AI_GEMINI_TIMEOUT", "45s")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.AI.Gemini.APIKey != "test-key" || cfg.AI.Gemini.Model != "gemini-2.5-flash" ||
+		cfg.AI.Gemini.BaseURL != "http://localhost:9999" || cfg.AI.Gemini.Timeout != 45*time.Second {
+		t.Fatalf("APP_AI_GEMINI_* overrides not applied: %+v", cfg.AI.Gemini)
+	}
+}
+
+// TestGeminiIsARouteTarget: a route chain may name gemini, same as any
+// other real provider.
+func TestGeminiIsARouteTarget(t *testing.T) {
+	routes, err := ParseRoutes("teacher.feedback=gemini,fake")
+	if err != nil {
+		t.Fatalf("ParseRoutes: %v", err)
+	}
+	got := routes["teacher.feedback"]
+	if len(got) != 2 || got[0] != "gemini" {
+		t.Fatalf("routes = %v, want [gemini fake]", got)
 	}
 }
 
@@ -228,6 +285,7 @@ func TestValidation(t *testing.T) {
 		"anthropic without key":             {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "anthropic"},
 		"unknown ai provider":               {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "hal9000"},
 		"ollama without model":              {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "ollama"},
+		"gemini without key":                {"APP_DATABASE_URL": "postgres://x", "APP_AI_PROVIDER": "gemini"},
 		"malformed ai routes":               {"APP_DATABASE_URL": "postgres://x", "APP_AI_ROUTES": "teacher.feedback"},
 		"ai routes bad provider":            {"APP_DATABASE_URL": "postgres://x", "APP_AI_ROUTES": "teacher.feedback=hal9000"},
 		"summary enabled without recipient": {"APP_DATABASE_URL": "postgres://x", "APP_SUMMARY_ENABLED": "true"},
