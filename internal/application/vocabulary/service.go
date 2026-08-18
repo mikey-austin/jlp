@@ -239,6 +239,18 @@ func (s *Service) List(ctx context.Context, identity learner.IdentityID, filter 
 	return s.repo.List(ctx, identity, filter)
 }
 
+// PageSize is how many words /vocabulary shows at once. Chosen to be a
+// screenful or two rather than a scroll marathon: the page that prompted
+// this held 500 in one list.
+const PageSize = 50
+
+// ListPage returns one page of List's result plus the cursor for the
+// next page (zero when this is the last). See
+// storage.VocabularyRepository.ListPage.
+func (s *Service) ListPage(ctx context.Context, identity learner.IdentityID, filter string, cursor storage.VocabularyCursor) ([]vocabulary.Item, storage.VocabularyCursor, error) {
+	return s.repo.ListPage(ctx, identity, filter, cursor, PageSize)
+}
+
 // GetByExpressions is List's bounded sibling — a thin pass-through to
 // storage.VocabularyRepository.GetByExpressions, for a caller (Phase 4
 // Task 7's application/feedback.Service.dueExpressionItems) that needs

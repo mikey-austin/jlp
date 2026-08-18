@@ -209,3 +209,7 @@ func TestRebuildWithNilPlannerIsSafe(t *testing.T) {
 		t.Fatalf("Rebuild: %v", err)
 	}
 }
+
+func (panicVocabRepo) ListPage(context.Context, learner.IdentityID, string, storage.VocabularyCursor, int) ([]vocabulary.Item, storage.VocabularyCursor, error) {
+	panic("planner must not reach the vocabulary repository here")
+}

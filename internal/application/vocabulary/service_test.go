@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"testing"
 	"time"
 
@@ -138,6 +139,48 @@ func (f *fakeVocabRepo) RecordProduction(_ context.Context, identity learner.Ide
 	}
 	item.LastEvent = at
 	return nil
+}
+
+// ListPage pages over List's own result the way the SQL does — sorted by
+// (LastEvent DESC, ID DESC), strictly after the cursor, and reporting a
+// next cursor only when another row actually follows.
+//
+// Implemented for real rather than stubbed: a fake that returned nothing
+// would make every paging assertion pass against an empty list.
+func (f *fakeVocabRepo) ListPage(ctx context.Context, identity learner.IdentityID, filter string, cursor storage.VocabularyCursor, limit int) ([]vocabulary.Item, storage.VocabularyCursor, error) {
+	all, err := f.List(ctx, identity, filter)
+	if err != nil {
+		return nil, storage.VocabularyCursor{}, err
+	}
+	sort.Slice(all, func(i, j int) bool {
+		if !all[i].LastEvent.Equal(all[j].LastEvent) {
+			return all[i].LastEvent.After(all[j].LastEvent)
+		}
+		return all[i].ID > all[j].ID
+	})
+
+	var page []vocabulary.Item
+	for _, item := range all {
+		if !cursor.Zero() {
+			after := item.LastEvent.Before(cursor.LastEvent) ||
+				(item.LastEvent.Equal(cursor.LastEvent) && item.ID < cursor.ID)
+			if !after {
+				continue
+			}
+		}
+		page = append(page, item)
+		if len(page) > limit {
+			break
+		}
+	}
+
+	var next storage.VocabularyCursor
+	if len(page) > limit {
+		page = page[:limit]
+		last := page[len(page)-1]
+		next = storage.VocabularyCursor{LastEvent: last.LastEvent, ID: last.ID}
+	}
+	return page, next, nil
 }
 
 func (f *fakeVocabRepo) List(_ context.Context, identity learner.IdentityID, filter string) ([]vocabulary.Item, error) {

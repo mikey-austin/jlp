@@ -173,7 +173,7 @@ func TestWeaknessTrendsZeroFillsMissingWeeksAndScopesToIdentity(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		if err := events.Append(ctx, event.LearningEvent{
 			ID: uuid.NewString(), IdentityID: identityA.ID, Type: event.TypeCorrectionPresented,
-			Subject: uuid.NewString(), // the correction ID, NOT the type text.
+			Subject:  uuid.NewString(), // the correction ID, NOT the type text.
 			Evidence: map[string]any{"type": correctionSubject}, OccurredAt: now,
 		}); err != nil {
 			t.Fatal(err)
@@ -358,7 +358,7 @@ func TestConfidenceCalibrationOnlyRatedAttemptsAndEmptyIsExplicit(t *testing.T) 
 }
 
 // TestAgentUsageGroupsByAgentIncludingBlankAndScopesToIdentity covers
-// AgentUsage: grouped per agent (including the '' bucket predating the
+// AgentUsage: grouped per agent (including the ” bucket predating the
 // 00017 migration), raw success count and latency computed correctly,
 // and identity-scoped. The repository leaves SuccessRate at its zero
 // value (see storage.AgentUsage's doc comment) — asserted explicitly

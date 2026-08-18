@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -78,7 +79,8 @@ func (s *Server) vocabularyPage(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	filter := r.URL.Query().Get("filter")
 
-	items, err := s.opts.Vocabulary.List(r.Context(), ident.ID, filter)
+	cursor := decodeCursor(r.URL.Query().Get("cursor"))
+	items, next, err := s.opts.Vocabulary.ListPage(r.Context(), ident.ID, filter, cursor)
 	if err != nil {
 		http.Error(w, "could not load vocabulary", http.StatusInternalServerError)
 		return
@@ -103,6 +105,15 @@ func (s *Server) vocabularyPage(w http.ResponseWriter, r *http.Request) {
 		"Items":         views,
 		"Filter":        filter,
 		"RestoreAction": restore,
+		// Empty on the last page, which is what makes the next-page
+		// control disappear rather than link to nothing.
+		"NextPage": nextPageURL(filter, next),
+		// A keyset cursor only goes forward. Rather than fake a "back"
+		// that would need a second, reversed query, a learner past page
+		// one is offered the way back to the top of the list.
+		"FirstPage":   "/vocabulary" + filterQuery(filter),
+		"OnFirstPage": cursor.Zero(),
+		"PageSize":    appvocabulary.PageSize,
 	})
 }
 
@@ -161,4 +172,18 @@ func filterQuery(filter string) string {
 		return ""
 	}
 	return "?" + url.Values{"filter": {filter}}.Encode()
+}
+
+// nextPageURL builds /vocabulary's next-page link, carrying the current
+// tab along — paging must not quietly drop the learner back to the
+// unfiltered list.
+func nextPageURL(filter string, next storage.VocabularyCursor) string {
+	if next.Zero() {
+		return ""
+	}
+	q := url.Values{"cursor": {encodeCursor(next)}}
+	if filter != "" {
+		q.Set("filter", filter)
+	}
+	return "/vocabulary?" + q.Encode()
 }

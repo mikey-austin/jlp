@@ -82,6 +82,43 @@ UPDATE vocabulary_items SET
     last_event              = sqlc.arg(at)::timestamptz
 WHERE id = sqlc.arg(id) AND identity_id = sqlc.arg(identity_id) AND deleted_at IS NULL;
 
+-- ListVocabularyItemsPage is /vocabulary's list: one keyset page,
+-- newest activity first. See migration 00028 for why this is a cursor
+-- rather than an OFFSET, and why the (last_event, id) tiebreaker is
+-- load-bearing rather than tidy.
+--
+-- The cursor arguments are passed together or not at all: NULL
+-- last_event means "from the beginning". The row comparison
+-- (last_event, id) < (cursor_last_event, cursor_id) is a single tuple
+-- comparison so it can use the matching index directly, rather than the
+-- OR-chain spelling of the same predicate, which cannot.
+-- name: ListVocabularyItemsPage :many
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags, deleted_at
+FROM vocabulary_items
+WHERE identity_id = $1
+  AND deleted_at IS NULL
+  AND (
+        sqlc.arg(filter)::text = ''
+        OR (sqlc.arg(filter)::text = 'looked-up' AND lookups > 0)
+        OR (sqlc.arg(filter)::text = 'produced' AND productions > 0)
+        OR (sqlc.arg(filter)::text = 'activate' AND (
+              (lookups >= 3 AND productions = 0)
+              OR (kind IN ('expression', 'pattern') AND productions = 0)
+            ))
+      )
+  AND (
+        sqlc.narg(cursor_last_event)::timestamptz IS NULL
+        OR (last_event, id) < (sqlc.narg(cursor_last_event)::timestamptz, sqlc.narg(cursor_id)::uuid)
+      )
+ORDER BY last_event DESC, id DESC
+LIMIT sqlc.arg(page_size);
+
+-- ListVocabularyItems returns EVERY matching item, unpaged. Kept for
+-- callers that genuinely need the whole set in one go (the Anki export
+-- and the agent tool registry); page the UI with
+-- ListVocabularyItemsPage above instead.
 -- name: ListVocabularyItems :many
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,

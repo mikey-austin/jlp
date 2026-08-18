@@ -18,6 +18,18 @@ func (s *Server) settingsPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "settings", map[string]any{
 		"Title":    "設定",
 		"Identity": ident,
+	})
+}
+
+// settingsModelsPage handles GET /settings/models — what used to be
+// /settings itself. It moved because /settings had become one
+// configuration area pretending to be all of them: the API tokens page
+// was reachable only through a sentence in the middle of this one.
+func (s *Server) settingsModelsPage(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	s.render(w, r, "models", map[string]any{
+		"Title":    "AIモデル設定",
+		"Identity": ident,
 		"Rows":     s.opts.Settings.Rows(r.Context(), s.opts.AIProviders),
 	})
 }
@@ -40,7 +52,7 @@ func (s *Server) settingsSetModel(w http.ResponseWriter, r *http.Request) {
 		s.renderSettingsError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/models", http.StatusSeeOther)
 }
 
 // settingsSetEffort handles POST /settings/{provider}/effort: form
@@ -63,7 +75,7 @@ func (s *Server) settingsSetEffort(w http.ResponseWriter, r *http.Request) {
 		s.renderSettingsError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/models", http.StatusSeeOther)
 }
 
 // settingsReset handles POST /settings/{provider}/reset: the "reset to
@@ -74,7 +86,7 @@ func (s *Server) settingsReset(w http.ResponseWriter, r *http.Request) {
 		s.renderSettingsError(w, r, err)
 		return
 	}
-	http.Redirect(w, r, "/settings", http.StatusSeeOther)
+	http.Redirect(w, r, "/settings/models", http.StatusSeeOther)
 }
 
 // rejectUnavailableProvider is the write-side half of whole-branch
@@ -106,8 +118,12 @@ func (s *Server) rejectUnavailableProvider(w http.ResponseWriter, r *http.Reques
 func (s *Server) renderSettingsError(w http.ResponseWriter, r *http.Request, err error) {
 	ident, _ := IdentityFrom(r.Context())
 	w.WriteHeader(http.StatusUnprocessableEntity)
-	s.render(w, r, "settings", map[string]any{
-		"Title":    "設定",
+	// "models", not "settings": every caller of this is a form on the AI
+	// model page, and re-rendering the settings INDEX would answer a
+	// rejected save with a page that has neither the form nor the value
+	// that was rejected.
+	s.render(w, r, "models", map[string]any{
+		"Title":    "AIモデル設定",
 		"Identity": ident,
 		"Rows":     s.opts.Settings.Rows(r.Context(), s.opts.AIProviders),
 		"Error":    err.Error(),

@@ -801,7 +801,6 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
-
 // TestTranslateInfersStringTypeForUntypedEnum pins the fix for a
 // production 500.
 //

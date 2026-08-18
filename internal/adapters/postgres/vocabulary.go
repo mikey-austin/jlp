@@ -153,6 +153,58 @@ func (r *VocabularyRepository) List(ctx context.Context, identity learner.Identi
 	return out, nil
 }
 
+// ListPage is List's paged form — see
+// storage.VocabularyRepository.ListPage and migration 00028.
+//
+// It asks the database for limit+1 rows and returns at most limit. That
+// extra row is how "is there a next page" is answered without a second
+// COUNT query, and it is why the last page correctly reports no cursor
+// rather than offering a link to an empty page.
+func (r *VocabularyRepository) ListPage(ctx context.Context, identity learner.IdentityID, filter string, cursor storage.VocabularyCursor, limit int) ([]vocabulary.Item, storage.VocabularyCursor, error) {
+	if limit <= 0 {
+		return nil, storage.VocabularyCursor{}, nil
+	}
+	params := sqlcgen.ListVocabularyItemsPageParams{
+		IdentityID: string(identity),
+		Filter:     filter,
+		PageSize:   int32(limit + 1),
+	}
+	if !cursor.Zero() {
+		id, err := parseUUID(cursor.ID)
+		if err != nil {
+			// A cursor this process did not mint. Start from the
+			// beginning rather than erroring: the worst case is the
+			// learner seeing page one, not a broken page.
+			return r.ListPage(ctx, identity, filter, storage.VocabularyCursor{}, limit)
+		}
+		params.CursorLastEvent = pgtype.Timestamptz{Time: cursor.LastEvent, Valid: true}
+		params.CursorID = id
+	}
+
+	rows, err := r.q.ListVocabularyItemsPage(ctx, params)
+	if err != nil {
+		return nil, storage.VocabularyCursor{}, err
+	}
+
+	var next storage.VocabularyCursor
+	if len(rows) > limit {
+		// The probe row is not part of this page; it only proves another
+		// page exists. The cursor is the LAST row of the page itself.
+		rows = rows[:limit]
+		last := rows[len(rows)-1]
+		next = storage.VocabularyCursor{
+			LastEvent: last.LastEvent.Time,
+			ID:        uuid.UUID(last.ID.Bytes).String(),
+		}
+	}
+
+	out := make([]vocabulary.Item, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, fromVocabularyItemRow(row))
+	}
+	return out, next, nil
+}
+
 // ListActivationCandidates returns identity's "activate"-filter items,
 // ranked by Lookups DESC and capped at limit — see
 // storage.VocabularyRepository.ListActivationCandidates' doc comment

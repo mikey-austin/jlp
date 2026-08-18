@@ -48,6 +48,16 @@ type VocabularyRepository interface {
 	// NOT this method — is the intended caller for a ranked/limited
 	// view of the same condition.
 	List(ctx context.Context, identity learner.IdentityID, filter string) ([]vocabulary.Item, error)
+	// ListPage returns ONE page of the same list, newest activity
+	// first, starting strictly after cursor (a zero Cursor starts at the
+	// beginning). It returns at most limit items plus the cursor for the
+	// next page, which is zero when this page is the last one.
+	//
+	// Keyset, not offset: vocabulary rows move — every lookup rewrites
+	// last_event, the sort key — so an offset page boundary silently
+	// skips and repeats rows while the learner is paging through it.
+	// See migration 00028.
+	ListPage(ctx context.Context, identity learner.IdentityID, filter string, cursor VocabularyCursor, limit int) (items []vocabulary.Item, next VocabularyCursor, err error)
 	// ListActivationCandidates returns identity's "activate"-filter
 	// items (same condition as List's "activate" branch — see that
 	// method's doc comment), ordered by Lookups DESC and capped at
@@ -163,3 +173,18 @@ type WordInput struct {
 	Tags       []string
 	Source     string
 }
+
+// VocabularyCursor names one exact position in the /vocabulary list:
+// the (last_event, id) of the last row already shown.
+//
+// Both halves are required. last_event alone is not unique — a bulk
+// import gives hundreds of rows the same timestamp — so a cursor
+// carrying only the timestamp would step over every row sharing it.
+// A zero Cursor means "start at the beginning".
+type VocabularyCursor struct {
+	LastEvent time.Time
+	ID        string
+}
+
+// Zero reports whether c names no position, i.e. the first page.
+func (c VocabularyCursor) Zero() bool { return c.ID == "" || c.LastEvent.IsZero() }

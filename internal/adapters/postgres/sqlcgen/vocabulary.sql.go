@@ -322,8 +322,97 @@ type ListVocabularyItemsParams struct {
 	Filter     string
 }
 
+// ListVocabularyItems returns EVERY matching item, unpaged. Kept for
+// callers that genuinely need the whole set in one go (the Anki export
+// and the agent tool registry); page the UI with
+// ListVocabularyItemsPage above instead.
 func (q *Queries) ListVocabularyItems(ctx context.Context, arg ListVocabularyItemsParams) ([]VocabularyItem, error) {
 	rows, err := q.db.Query(ctx, listVocabularyItems, arg.IdentityID, arg.Filter)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VocabularyItem
+	for rows.Next() {
+		var i VocabularyItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdentityID,
+			&i.Expression,
+			&i.Reading,
+			&i.Meaning,
+			&i.Kind,
+			&i.JlptLevel,
+			&i.Source,
+			&i.Lookups,
+			&i.Productions,
+			&i.SuccessfulProductions,
+			&i.FirstSeen,
+			&i.LastEvent,
+			&i.MeaningEn,
+			&i.Tags,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listVocabularyItemsPage = `-- name: ListVocabularyItemsPage :many
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags, deleted_at
+FROM vocabulary_items
+WHERE identity_id = $1
+  AND deleted_at IS NULL
+  AND (
+        $2::text = ''
+        OR ($2::text = 'looked-up' AND lookups > 0)
+        OR ($2::text = 'produced' AND productions > 0)
+        OR ($2::text = 'activate' AND (
+              (lookups >= 3 AND productions = 0)
+              OR (kind IN ('expression', 'pattern') AND productions = 0)
+            ))
+      )
+  AND (
+        $3::timestamptz IS NULL
+        OR (last_event, id) < ($3::timestamptz, $4::uuid)
+      )
+ORDER BY last_event DESC, id DESC
+LIMIT $5
+`
+
+type ListVocabularyItemsPageParams struct {
+	IdentityID      string
+	Filter          string
+	CursorLastEvent pgtype.Timestamptz
+	CursorID        pgtype.UUID
+	PageSize        int32
+}
+
+// ListVocabularyItemsPage is /vocabulary's list: one keyset page,
+// newest activity first. See migration 00028 for why this is a cursor
+// rather than an OFFSET, and why the (last_event, id) tiebreaker is
+// load-bearing rather than tidy.
+//
+// The cursor arguments are passed together or not at all: NULL
+// last_event means "from the beginning". The row comparison
+// (last_event, id) < (cursor_last_event, cursor_id) is a single tuple
+// comparison so it can use the matching index directly, rather than the
+// OR-chain spelling of the same predicate, which cannot.
+func (q *Queries) ListVocabularyItemsPage(ctx context.Context, arg ListVocabularyItemsPageParams) ([]VocabularyItem, error) {
+	rows, err := q.db.Query(ctx, listVocabularyItemsPage,
+		arg.IdentityID,
+		arg.Filter,
+		arg.CursorLastEvent,
+		arg.CursorID,
+		arg.PageSize,
+	)
 	if err != nil {
 		return nil, err
 	}

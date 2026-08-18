@@ -1,0 +1,80 @@
+{{define "content"}}<section class="settings">
+  <p class="breadcrumb"><a href="/settings">設定</a></p>
+  <h1>AIモデル設定</h1>
+  <p class="description">変更は<strong>次回のAIリクエスト</strong>から適用されます。すでに実行中のリクエストは、開始時点の設定のまま完了します。再起動は不要です。</p>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+
+  <div class="cards">
+    {{range .Rows}}{{$row := .}}<section class="card settings-row">
+      <div class="settings-row__header">
+        <h2>{{$row.Label}}</h2>
+        {{if or (eq $row.ModelSource "override") (and $row.HasEffort (eq $row.EffortSource "override"))}}
+        <form method="post" action="/settings/models/{{$row.Provider}}/reset">
+          <button type="submit" class="btn btn--secondary btn--sm">設定に戻す</button>
+        </form>
+        {{end}}
+      </div>
+
+      {{if not $row.Available}}
+      {{/* Whole-branch review I-2: this process built no generator for
+           this provider, so every control below would write an override
+           that no request could ever reach — a success-shaped no-op
+           behind a 303 and an "override" badge. The row is kept (an
+           operator who set APP_AI_OLLAMA_MODEL and still doesn't see
+           Ollama deserves to know why it isn't offered) but carries no
+           controls except 設定に戻す above, which stays reachable so a
+           stale override from an earlier deployment can still be
+           cleared. See settings.Row.Available. */}}
+      <p class="hint">この配備では構成されていないため変更できません。現在の設定値は{{if $row.Model}}「{{$row.Model}}」{{else}}未設定{{end}}です。有効にするには起動時の環境変数（APP_AI_*）を設定して再起動してください。</p>
+      {{else}}
+
+      {{if $row.ModelOptions}}
+      <form method="post" action="/settings/models/{{$row.Provider}}/model" class="settings-form">
+        <label class="field">モデル
+          <select class="select" name="model">
+            {{range $row.ModelOptions}}<option value="{{.}}" {{if eq . $row.Model}}selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
+        <span class="badge">{{if eq $row.ModelSource "override"}}override{{else}}config{{end}}</span>
+        <button type="submit" class="btn btn--sm">保存</button>
+      </form>
+      {{end}}
+
+      {{if $row.ModelAliases}}
+      <form method="post" action="/settings/models/{{$row.Provider}}/model" class="settings-form">
+        <label class="field">モデル（エイリアス）<span class="hint">既知の別名。完全な一覧ではありません</span>
+          <select class="select" name="model">
+            <option value="">選択...</option>
+            {{range $row.ModelAliases}}<option value="{{.}}">{{.}}</option>{{end}}
+          </select>
+        </label>
+        <button type="submit" class="btn btn--sm btn--secondary">保存</button>
+      </form>
+      {{end}}
+
+      {{if $row.ModelNote}}<p class="hint">{{$row.ModelNote}}</p>{{end}}
+      <form method="post" action="/settings/models/{{$row.Provider}}/model" class="settings-form">
+        <label class="field">{{if $row.ModelOptions}}モデル（自由入力）{{else}}モデル{{end}}
+          <input class="input" type="text" name="model" value="{{$row.Model}}" required>
+        </label>
+        {{if not $row.ModelOptions}}<span class="badge">{{if eq $row.ModelSource "override"}}override{{else}}config{{end}}</span>{{end}}
+        <button type="submit" class="btn btn--sm{{if $row.ModelOptions}} btn--secondary{{end}}">保存</button>
+      </form>
+
+      {{if $row.HasEffort}}
+      <form method="post" action="/settings/models/{{$row.Provider}}/effort" class="settings-form">
+        <label class="field">エフォート
+          <select class="select" name="effort">
+            <option value="">（未指定）</option>
+            {{range $row.EffortOptions}}<option value="{{.}}" {{if eq . $row.Effort}}selected{{end}}>{{.}}</option>{{end}}
+          </select>
+        </label>
+        <span class="badge">{{if eq $row.EffortSource "override"}}override{{else}}config{{end}}</span>
+        <button type="submit" class="btn btn--sm">保存</button>
+      </form>
+      {{end}}
+
+      {{end}}{{/* not $row.Available */}}
+    </section>{{end}}
+  </div>
+</section>{{end}}

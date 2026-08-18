@@ -7,24 +7,34 @@
     <a href="/vocabulary?filter=activate"{{if eq .Filter "activate"}} class="is-active"{{end}}>活性化候補</a>
   </nav>
   {{template "undo_delete" .}}
-  <div class="table-card table-card--stack">
+  <div class="table-card table-card--stack table-card--words">
     <table>
       <thead><tr><th>表現</th><th>読み方</th><th>意味</th><th>English</th><th>タグ</th><th>種類</th><th>検索回数</th><th>使用</th><th></th></tr></thead>
       <tbody>
         {{range .Items}}<tr>
-          <td data-label="表現">{{.Expression}}</td>
-          <td data-label="読み方">{{.Reading}}</td>
-          <td data-label="意味">{{.Meaning}}</td>
-          <td data-label="English">{{if .MeaningEN}}{{.MeaningEN}}{{end}}</td>
-          <td data-label="タグ">{{if .TagsJoined}}{{.TagsJoined}}{{end}}</td>
-          <td data-label="種類"><span class="badge badge--type">{{.KindLabel}}</span></td>
-          <td data-label="検索回数">{{.Lookups}}</td>
-          <td data-label="使用">✓{{.SuccessfulProductions}} ✗{{.FailedProductions}}</td>
-          <td data-label="操作"><button type="button" class="btn btn--danger btn--sm no-print" data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Expression}}" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td>
+          <td class="w-expression" data-label="表現">{{.Expression}}</td>
+          <td class="w-reading" data-label="読み方">{{.Reading}}</td>
+          <td class="w-meaning" data-label="意味">{{.Meaning}}</td>
+          <td class="w-en" data-label="English">{{if .MeaningEN}}{{.MeaningEN}}{{end}}</td>
+          <td class="w-tags" data-label="タグ">{{if .TagsJoined}}{{.TagsJoined}}{{end}}</td>
+          <td class="w-kind" data-label="種類"><span class="badge badge--type">{{.KindLabel}}</span></td>
+          <td class="w-lookups" data-label="検索回数">{{.Lookups}}</td>
+          <td class="w-use" data-label="使用">✓{{.SuccessfulProductions}} ✗{{.FailedProductions}}</td>
+          <td class="w-actions" data-label="操作"><button type="button" class="btn btn--danger btn--sm no-print" data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Expression}}" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td>
         </tr>{{else}}<tr><td colspan="9" class="empty">語彙がありません</td></tr>{{end}}
       </tbody>
     </table>
   </div>
+
+  {{/* Forward-only, because the cursor is a keyset: see migration
+       00028. "最初に戻る" appears only past page one, so page one shows a
+       single control rather than two, one of which points at itself. */}}
+  {{if or .NextPage (not .OnFirstPage)}}
+  <nav class="pagination" aria-label="ページ送り">
+    {{if not .OnFirstPage}}<a class="btn btn--secondary btn--sm" href="{{.FirstPage}}">最初に戻る</a>{{end}}
+    {{if .NextPage}}<a class="btn btn--secondary btn--sm" href="{{.NextPage}}" rel="next">次の{{.PageSize}}件 →</a>{{end}}
+  </nav>
+  {{end}}
 
   {{template "confirm_delete" .}}
 </section>{{end}}

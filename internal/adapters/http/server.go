@@ -346,10 +346,16 @@ func (s *Server) routes() http.Handler {
 		// provider uses at runtime, no restart. Linked from /ai (see
 		// ai.html.tmpl), deliberately NOT a tenth top-level nav item —
 		// the topbar already wraps to its own row on phones (layout.html.tmpl).
+		// /settings is an index of configuration areas; each area owns
+		// its own page below. Adding a settings page means adding a card
+		// to the index, not hiding a link inside whichever page happened
+		// to exist first — which is how the API tokens page ended up
+		// buried in the AI model settings.
 		r.Get("/settings", s.settingsPage)
-		r.Post("/settings/{provider}/model", s.settingsSetModel)
-		r.Post("/settings/{provider}/effort", s.settingsSetEffort)
-		r.Post("/settings/{provider}/reset", s.settingsReset)
+		r.Get("/settings/models", s.settingsModelsPage)
+		r.Post("/settings/models/{provider}/model", s.settingsSetModel)
+		r.Post("/settings/models/{provider}/effort", s.settingsSetEffort)
+		r.Post("/settings/models/{provider}/reset", s.settingsReset)
 		// API tokens for non-browser clients. These are the credentials
 		// APIAuth checks on /api/v1 and /a2a; minting them is a browser
 		// action by the learner, so it lives in this session-authenticated

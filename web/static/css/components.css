@@ -17,6 +17,48 @@
  * rather than a "make it not look broken" sweep.
  */
 
+/* ================================ Links ============================== */
+
+/* The design system had no base <a> rule at all — only four contextual
+ * ones (.nav a, .table-card td a, .filter-tabs a, .recent-sessions a).
+ * Every other link on the site therefore rendered in the browser's
+ * default blue-then-purple, which matches nothing in the palette and
+ * changes colour once visited.
+ *
+ * So: style the ELEMENT once, here, and let components override it —
+ * the same rule the rest of this file follows, and the reason a link
+ * dropped into any page's prose now looks like it belongs.
+ *
+ * Underlined at rest rather than on hover: an underline is what marks a
+ * link as a link when it sits inside a paragraph, and colour alone
+ * fails anyone who cannot distinguish it. The offset keeps it clear of
+ * the descenders in 日本語 glyphs.
+ *
+ * Excluded: anchors that are not prose links. .btn and .chip are
+ * controls that happen to be anchors, .brand is the wordmark, and .nav
+ * a / .filter-tabs a own their own presentation entirely. */
+a {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+  text-decoration-thickness: 1px;
+}
+a:hover {
+  color: var(--primary-hover);
+  text-decoration-thickness: 2px;
+}
+/* :visited deliberately unstyled: this is a personal learning tool, not
+ * a document you browse — "have I clicked this" carries no meaning on
+ * /sessions, and the default purple actively fights the palette. */
+
+.btn,
+.chip,
+.brand,
+.nav a,
+.filter-tabs a {
+  text-decoration: none;
+}
+
 /* ===== Focus visibility (PRD-mandated: every interactive element) === */
 
 a:focus-visible,
@@ -1215,4 +1257,196 @@ p.hint {
   display: flex;
   gap: var(--space-2);
   align-items: center;
+}
+
+/* Settings index (/settings): one card per configuration area.
+ *
+ * The cards are anchors, so they inherit the base link colour and
+ * underline — which reads as a broken card rather than a clickable one.
+ * They opt out and take a hover/focus affordance of their own instead. */
+.settings-index {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 22rem), 1fr));
+  gap: var(--space-4);
+}
+.settings-index__item {
+  display: block;
+  color: inherit;
+  text-decoration: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+.settings-index__item h2 {
+  margin: 0 0 var(--space-2);
+  color: var(--primary);
+}
+.settings-index__item p {
+  margin: 0;
+  color: var(--fg-muted);
+}
+.settings-index__item:hover {
+  border-color: var(--primary);
+  box-shadow: var(--shadow-md);
+}
+
+/* Back-link above a settings sub-page's heading. */
+.breadcrumb {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+}
+
+/* --- The vocabulary list on a phone (.table-card--words) --------------
+ *
+ * .table-card--stack's one-labelled-row-per-cell is the right default
+ * for a four-column table. This one has nine, so stacking made a single
+ * word fill a 390px screen: 表現/読み方/意味/English/タグ/種類/検索回数/
+ * 使用/操作, each on its own line, reading like a form rather than a
+ * word list. Importing 500 words made that obvious.
+ *
+ * So the same cells are placed as a card instead: the word and its
+ * reading on one line, the meaning under it, and everything that is
+ * bookkeeping on a quiet last line. No markup fork — the table is still
+ * a table, and the desktop layout is untouched. */
+@media (max-width: 900px) {
+  /* The structural half, repeated here rather than borrowed from
+   * .table-card--stack: that block stops at 640px, and this layout runs
+   * to 900px because nine columns do not fit a tablet either — it
+   * clipped 種類 and asked for a sideways swipe. Without these, the
+   * 641-900px band would render a card grid under a column header row
+   * that no longer lines up with anything. */
+  .table-card--words {
+    overflow-x: hidden;
+  }
+  .table-card--words table {
+    display: block;
+    width: 100%;
+    min-width: 0;
+  }
+  .table-card--words thead {
+    display: none;
+  }
+  .table-card--words tbody {
+    display: block;
+  }
+  .table-card--words tbody tr {
+    padding: var(--space-4) var(--space-5);
+    border-bottom: 1px solid var(--border);
+  }
+  .table-card--words tbody tr:last-child {
+    border-bottom: none;
+  }
+
+  .table-card--words tbody tr {
+    display: grid;
+    grid-template-columns: auto auto 1fr auto;
+    grid-template-areas:
+      "expr    expr    expr  reading"
+      "meaning meaning meaning meaning"
+      "en      en      en    en"
+      "tags    tags    tags  tags"
+      "kind    lookups use   action";
+    align-items: baseline;
+    gap: var(--space-1) var(--space-3);
+  }
+
+  /* These cells are self-evident in context, so the label that the
+   * generic stack prepends is noise — the word IS the word. */
+  .table-card--words .w-expression::before,
+  .table-card--words .w-reading::before,
+  .table-card--words .w-meaning::before,
+  .table-card--words .w-en::before,
+  .table-card--words .w-tags::before,
+  .table-card--words .w-kind::before,
+  .table-card--words .w-actions::before {
+    content: none;
+  }
+
+  .table-card--words td {
+    display: block;
+    padding: 0;
+    text-align: left;
+    /* .table-card td's bottom border is declared after the stacking
+     * media query, so it wins there and drew a rule under every line —
+     * which in a card layout slices one word into five strips. A card is
+     * one object; the border between WORDS is the tr's. */
+    border: none;
+  }
+
+  .table-card--words .w-expression {
+    grid-area: expr;
+    font-size: var(--text-lg);
+    font-weight: 600;
+    line-height: var(--leading-snug);
+  }
+  .table-card--words .w-reading {
+    grid-area: reading;
+    justify-self: end;
+    text-align: right;
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
+  }
+  .table-card--words .w-meaning {
+    grid-area: meaning;
+  }
+  .table-card--words .w-en {
+    grid-area: en;
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
+  }
+  .table-card--words .w-tags {
+    grid-area: tags;
+    color: var(--fg-subtle);
+    font-size: var(--text-sm);
+  }
+  .table-card--words .w-kind {
+    grid-area: kind;
+  }
+  /* A bare "3" and "✓0 ✗0" mean nothing without a word for them, so
+   * these two keep a label — just a much shorter one than the column
+   * heading, sitting inline rather than on its own row. */
+  .table-card--words .w-lookups {
+    grid-area: lookups;
+    display: flex;
+    gap: var(--space-1);
+    align-items: baseline;
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
+  }
+  .table-card--words .w-lookups::before {
+    content: "検索";
+    color: var(--fg-subtle);
+  }
+  /* Explicit, not attr(data-label): the generic stack's ::before rule
+   * stops at 640px, so between there and 900px this label simply
+   * vanished and "✓0 ✗0" stood alone with nothing to say what it
+   * counted. Every label in this layout is stated here for that reason. */
+  .table-card--words .w-use::before {
+    content: "使用";
+    color: var(--fg-subtle);
+  }
+  .table-card--words .w-use {
+    grid-area: use;
+    display: flex;
+    gap: var(--space-1);
+    align-items: baseline;
+    color: var(--fg-muted);
+    font-size: var(--text-sm);
+  }
+  .table-card--words .w-actions {
+    grid-area: action;
+    justify-self: end;
+  }
+
+  /* An empty English/tags cell must not leave a gap where a line would
+   * have been. :empty only matches with NO whitespace either, which is
+   * why the template emits nothing at all for these when unset. */
+  .table-card--words td:empty {
+    display: none;
+  }
+
+  /* The empty-state row spans the card and owns the whole grid. */
+  .table-card--words td[colspan] {
+    grid-area: expr / expr / action / action;
+    font-size: var(--text-base);
+    font-weight: 400;
+  }
 }

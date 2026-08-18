@@ -110,7 +110,7 @@ func TestSettingsPageRendersEffectiveValuesAndSource(t *testing.T) {
 	opts, _ := settingsTestOptions(t)
 	srv := NewServer(opts)
 	rec := httptest.NewRecorder()
-	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings/models", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /settings status = %d, want 200, body=%s", rec.Code, rec.Body.String())
@@ -118,14 +118,14 @@ func TestSettingsPageRendersEffectiveValuesAndSource(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{"gemma4:12b", "claude-sonnet-5", "opus", "gpt-5.5-codex", "config"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("GET /settings body missing %q: %s", want, body)
+			t.Errorf("GET /settings/models body missing %q: %s", want, body)
 		}
 	}
 	// Effort selects populated from config's own vocabulary (not a
 	// hand-copied list) — "max" and "xhigh" must appear (claudecli's
 	// vocabulary includes them).
 	if !strings.Contains(body, "max") {
-		t.Errorf("GET /settings body missing the claudecli effort option \"max\": %s", body)
+		t.Errorf("GET /settings/models body missing the claudecli effort option \"max\": %s", body)
 	}
 }
 
@@ -139,12 +139,12 @@ func TestSettingsSetModelSavesOverrideAndRedirects(t *testing.T) {
 
 	form := url.Values{}
 	form.Set("model", "gemma4:latest")
-	rec := postForm(t, srv.HandlerForTest(), "/settings/ollama/model", form)
+	rec := postForm(t, srv.HandlerForTest(), "/settings/models/ollama/model", form)
 
 	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /settings/ollama/model status = %d, want 303, body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("POST /settings/models/ollama/model status = %d, want 303, body=%s", rec.Code, rec.Body.String())
 	}
-	if got := rec.Header().Get("Location"); got != "/settings" {
+	if got := rec.Header().Get("Location"); got != "/settings/models" {
 		t.Errorf("Location = %q, want /settings", got)
 	}
 
@@ -181,10 +181,10 @@ func TestSettingsSetEffortRejectsInvalidValueAndWritesNothing(t *testing.T) {
 
 	form := url.Values{}
 	form.Set("effort", "max") // valid for claudecli, NOT for codexcli
-	rec := postForm(t, srv.HandlerForTest(), "/settings/codexcli/effort", form)
+	rec := postForm(t, srv.HandlerForTest(), "/settings/models/codexcli/effort", form)
 
 	if rec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("POST /settings/codexcli/effort (invalid) status = %d, want 422, body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("POST /settings/models/codexcli/effort (invalid) status = %d, want 422, body=%s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, "effort must be") {
@@ -200,7 +200,7 @@ func TestSettingsSetEffortRejectsInvalidValueAndWritesNothing(t *testing.T) {
 	}
 }
 
-// TestSettingsResetDeletesOverride covers POST /settings/{provider}/reset:
+// TestSettingsResetDeletesOverride covers POST /settings/models/{provider}/reset:
 // after overriding a value, reset must remove it and Model must report
 // the config fallback again.
 func TestSettingsResetDeletesOverride(t *testing.T) {
@@ -209,13 +209,13 @@ func TestSettingsResetDeletesOverride(t *testing.T) {
 
 	form := url.Values{}
 	form.Set("model", "gemma4:latest")
-	if rec := postForm(t, srv.HandlerForTest(), "/settings/ollama/model", form); rec.Code != http.StatusSeeOther {
+	if rec := postForm(t, srv.HandlerForTest(), "/settings/models/ollama/model", form); rec.Code != http.StatusSeeOther {
 		t.Fatalf("seed save status = %d", rec.Code)
 	}
 
-	rec := postForm(t, srv.HandlerForTest(), "/settings/ollama/reset", url.Values{})
+	rec := postForm(t, srv.HandlerForTest(), "/settings/models/ollama/reset", url.Values{})
 	if rec.Code != http.StatusSeeOther {
-		t.Fatalf("POST /settings/ollama/reset status = %d, want 303, body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("POST /settings/models/ollama/reset status = %d, want 303, body=%s", rec.Code, rec.Body.String())
 	}
 
 	rows, err := repo.List(context.Background())
@@ -241,25 +241,25 @@ func TestSettingsPageRendersSelectWhenEnumerationWorks(t *testing.T) {
 	opts, _ := settingsTestOptionsWithListers(t, listers)
 	srv := NewServer(opts)
 	rec := httptest.NewRecorder()
-	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings/models", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /settings status = %d, want 200, body=%s", rec.Code, rec.Body.String())
 	}
 	body := rec.Body.String()
 	if !strings.Contains(body, `<select class="select" name="model">`) {
-		t.Errorf("GET /settings body has no model <select>, want one for ollama: %s", body)
+		t.Errorf("GET /settings/models body has no model <select>, want one for ollama: %s", body)
 	}
 	for _, want := range []string{"gemma4:12b", "gemma4:latest", "qwen3.6:latest"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("GET /settings body missing enumerated model %q: %s", want, body)
+			t.Errorf("GET /settings/models body missing enumerated model %q: %s", want, body)
 		}
 	}
 	// Embedding-style filtering happens in the adapter, not here, but the
 	// free-text escape hatch must still be present even when a select is
 	// rendered — a value not offered by the list must stay settable.
 	if strings.Count(body, `type="text" name="model"`) == 0 {
-		t.Error("GET /settings body has no free-text model input alongside the select")
+		t.Error("GET /settings/models body has no free-text model input alongside the select")
 	}
 }
 
@@ -274,7 +274,7 @@ func TestSettingsPageDegradesToFreeTextOnListerError(t *testing.T) {
 	opts, _ := settingsTestOptionsWithListers(t, listers)
 	srv := NewServer(opts)
 	rec := httptest.NewRecorder()
-	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings/models", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /settings status = %d, want 200 (degrade, never 500), body=%s", rec.Code, rec.Body.String())
@@ -308,7 +308,7 @@ func TestSettingsPageOffersClaudeCLIAliasesAndFreeText(t *testing.T) {
 	opts, _ := settingsTestOptions(t)
 	srv := NewServer(opts)
 	rec := httptest.NewRecorder()
-	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings/models", nil))
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /settings status = %d, want 200, body=%s", rec.Code, rec.Body.String())
@@ -316,11 +316,11 @@ func TestSettingsPageOffersClaudeCLIAliasesAndFreeText(t *testing.T) {
 	body := rec.Body.String()
 	for _, want := range []string{"sonnet", "opus", "haiku"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("GET /settings body missing claudecli alias %q: %s", want, body)
+			t.Errorf("GET /settings/models body missing claudecli alias %q: %s", want, body)
 		}
 	}
 	if !strings.Contains(body, "not enumerated") {
-		t.Errorf("GET /settings body missing the claudecli \"not enumerated\" note: %s", body)
+		t.Errorf("GET /settings/models body missing the claudecli \"not enumerated\" note: %s", body)
 	}
 }
 
@@ -339,16 +339,16 @@ func TestSettingsPageOffersNoControlsForProvidersThisProcessNeverBuilt(t *testin
 	srv := NewServer(opts)
 
 	rec := httptest.NewRecorder()
-	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings", nil))
+	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/settings/models", nil))
 	if rec.Code != http.StatusOK {
 		t.Fatalf("GET /settings status = %d, want 200", rec.Code)
 	}
 	body := rec.Body.String()
 
-	if strings.Contains(body, `action="/settings/ollama/model"`) {
+	if strings.Contains(body, `action="/settings/models/ollama/model"`) {
 		t.Errorf("GET /settings still renders a save form for a provider this process never built: %s", body)
 	}
-	if !strings.Contains(body, `action="/settings/claudecli/model"`) {
+	if !strings.Contains(body, `action="/settings/models/claudecli/model"`) {
 		t.Errorf("GET /settings dropped the form for claudecli, which IS constructed: %s", body)
 	}
 	if !strings.Contains(body, "この配備では構成されていない") {
@@ -358,15 +358,15 @@ func TestSettingsPageOffersNoControlsForProvidersThisProcessNeverBuilt(t *testin
 	// The route stays reachable (stale tab, curl), so it must reject
 	// rather than write-and-303 — a 303 here is the silent no-op.
 	form := url.Values{"model": {"qwen3.6:latest"}}
-	post := httptest.NewRequest(http.MethodPost, "/settings/ollama/model", strings.NewReader(form.Encode()))
+	post := httptest.NewRequest(http.MethodPost, "/settings/models/ollama/model", strings.NewReader(form.Encode()))
 	post.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	postRec := httptest.NewRecorder()
 	srv.HandlerForTest().ServeHTTP(postRec, post)
 	if postRec.Code == http.StatusSeeOther {
-		t.Fatalf("POST /settings/ollama/model = 303 — the override was accepted for a provider that can never serve it")
+		t.Fatalf("POST /settings/models/ollama/model = 303 — the override was accepted for a provider that can never serve it")
 	}
 	if postRec.Code != http.StatusUnprocessableEntity {
-		t.Fatalf("POST /settings/ollama/model status = %d, want 422", postRec.Code)
+		t.Fatalf("POST /settings/models/ollama/model status = %d, want 422", postRec.Code)
 	}
 	if model, _ := opts.Settings.Model("ollama"); model != "gemma4:12b" {
 		t.Errorf("rejected override was still persisted: Model(ollama) = %q, want the config value", model)

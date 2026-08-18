@@ -2127,3 +2127,16 @@ func TestRecordConfidenceCrossIdentityReturnsErrNotFound(t *testing.T) {
 		t.Fatalf("err = %v, want storage.ErrNotFound", err)
 	}
 }
+
+// ListPage delegates to List and truncates. This package does not page;
+// implemented rather than stubbed so it returns real rows if it ever
+// starts. See storage.VocabularyRepository.ListPage.
+func (f *fakeVocabRepo) ListPage(ctx context.Context, identity learner.IdentityID, filter string, cursor storage.VocabularyCursor, limit int) ([]vocabulary.Item, storage.VocabularyCursor, error) {
+	all, err := f.List(ctx, identity, filter)
+	if err != nil || len(all) <= limit {
+		return all, storage.VocabularyCursor{}, err
+	}
+	page := all[:limit]
+	last := page[len(page)-1]
+	return page, storage.VocabularyCursor{LastEvent: last.LastEvent, ID: last.ID}, nil
+}
