@@ -1450,3 +1450,44 @@ p.hint {
     font-weight: 400;
   }
 }
+
+/* .visually-hidden removes an element from sight while leaving it in the
+ * accessibility tree — for labels that would be redundant to a sighted
+ * reader (the /settings/agents dropdowns sit in a row whose first cell
+ * already names the prompt) but that a screen reader needs, since it
+ * reaches the control without that context.
+ *
+ * It was being used in markup before it existed here, so the label
+ * simply rendered as body text next to each control. Same shape of bug
+ * as the missing base <a> rule above: a class named in a template but
+ * never defined does not fail loudly, it just looks wrong.
+ *
+ * The clip-path/1px technique rather than display:none or
+ * visibility:hidden, both of which remove it from the accessibility tree
+ * too and would defeat the point. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Pagination controls (/vocabulary's 次の50件 / 最初に戻る).
+ *
+ * Caught by an audit of classes used in templates but never defined in
+ * CSS: the control was markup with no styling at all, so it inherited
+ * whatever the surrounding flow gave it. Right-aligned because it
+ * follows the list it advances, and wrapping so two buttons never push a
+ * phone sideways. */
+.pagination {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  margin-top: var(--space-5);
+}

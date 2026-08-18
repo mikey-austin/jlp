@@ -155,6 +155,11 @@ type Options struct {
 	// A2AChatURL is where clients/a2a-chat is deployed. Empty renders no
 	// nav link — see config.A2A.ChatURL for why that is the default.
 	A2AChatURL string
+	// PromptNames is every prompt name this process routes, from the
+	// composition root — the only place that knows both the structured
+	// and tool-calling lists. It drives /settings/agents and bounds what
+	// a pin may name.
+	PromptNames []string
 	// Conversation drives the workspace's conversation pane (Phase 4
 	// Task 6, PRD §17.4): free-form dialogue turns and the
 	// end-of-conversation digest, governed by the session's
@@ -361,6 +366,8 @@ func (s *Server) routes() http.Handler {
 		// action by the learner, so it lives in this session-authenticated
 		// group and NOT in the token-authenticated one — a token must
 		// never be able to mint another token.
+		r.Get("/settings/agents", s.agentsPage)
+		r.Post("/settings/agents/{prompt}", s.agentsSet)
 		r.Get("/settings/tokens", s.apiTokensPage)
 		r.Post("/settings/tokens", s.apiTokensCreate)
 		r.Post("/settings/tokens/{id}/revoke", s.apiTokensRevoke)

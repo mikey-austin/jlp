@@ -28,7 +28,7 @@ func (s *stubToolCaller) CallWithTools(_ context.Context, _ ai.ToolRequest) (ai.
 func TestToolRouterUsesRoutedChainOnExactPromptNameMatch(t *testing.T) {
 	routed := &stubToolCaller{name: "routed"}
 	fallback := &stubToolCaller{name: "fallback"}
-	router := NewToolCaller(map[string][]ai.ToolCaller{"teacher.agentic": {routed}}, []ai.ToolCaller{fallback})
+	router := NewToolCaller(map[string][]ai.ToolCaller{"teacher.agentic": {routed}}, []ai.ToolCaller{fallback}, nil)
 
 	resp, err := router.CallWithTools(context.Background(), ai.ToolRequest{PromptName: "teacher.agentic"})
 	if err != nil {
@@ -47,7 +47,7 @@ func TestToolRouterUsesRoutedChainOnExactPromptNameMatch(t *testing.T) {
 
 func TestToolRouterFallsBackWhenNoRouteMatches(t *testing.T) {
 	fallback := &stubToolCaller{name: "fallback"}
-	router := NewToolCaller(map[string][]ai.ToolCaller{"other.prompt": {&stubToolCaller{name: "unused"}}}, []ai.ToolCaller{fallback})
+	router := NewToolCaller(map[string][]ai.ToolCaller{"other.prompt": {&stubToolCaller{name: "unused"}}}, []ai.ToolCaller{fallback}, nil)
 
 	resp, err := router.CallWithTools(context.Background(), ai.ToolRequest{PromptName: "teacher.agentic"})
 	if err != nil {
@@ -61,7 +61,7 @@ func TestToolRouterFallsBackWhenNoRouteMatches(t *testing.T) {
 func TestToolRouterFallsThroughToSecondProviderOnFirstError(t *testing.T) {
 	first := &stubToolCaller{name: "first", err: errors.New("boom")}
 	second := &stubToolCaller{name: "second"}
-	router := NewToolCaller(map[string][]ai.ToolCaller{"teacher.agentic": {first, second}}, nil)
+	router := NewToolCaller(map[string][]ai.ToolCaller{"teacher.agentic": {first, second}}, nil, nil)
 
 	resp, err := router.CallWithTools(context.Background(), ai.ToolRequest{PromptName: "teacher.agentic"})
 	if err != nil {
@@ -78,7 +78,7 @@ func TestToolRouterFallsThroughToSecondProviderOnFirstError(t *testing.T) {
 func TestToolRouterAllProvidersFailReturnsJoinedError(t *testing.T) {
 	first := &stubToolCaller{name: "first", err: errors.New("boom1")}
 	second := &stubToolCaller{name: "second", err: errors.New("boom2")}
-	router := NewToolCaller(map[string][]ai.ToolCaller{"teacher.agentic": {first, second}}, nil)
+	router := NewToolCaller(map[string][]ai.ToolCaller{"teacher.agentic": {first, second}}, nil, nil)
 
 	_, err := router.CallWithTools(context.Background(), ai.ToolRequest{PromptName: "teacher.agentic"})
 	if err == nil {
@@ -87,7 +87,7 @@ func TestToolRouterAllProvidersFailReturnsJoinedError(t *testing.T) {
 }
 
 func TestToolRouterEmptyChainReturnsClearError(t *testing.T) {
-	router := NewToolCaller(nil, nil)
+	router := NewToolCaller(nil, nil, nil)
 	_, err := router.CallWithTools(context.Background(), ai.ToolRequest{PromptName: "teacher.agentic"})
 	if err == nil {
 		t.Fatal("CallWithTools() err = nil, want an error for an empty chain")

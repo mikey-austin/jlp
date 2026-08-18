@@ -64,15 +64,20 @@ func getVocabularyHistoryTool(svc *appvocabulary.Service) Tool {
 	return Tool{
 		Def: ai.ToolDef{
 			Name:        "get_vocabulary_history",
-			Description: `Returns the learner's personal vocabulary, most recently active first. Optional filter: "" (all, default), "looked-up", "produced", or "activate" (items ready for encouragement). Optional limit (default 20, max 50).`,
-			Schema:      json.RawMessage(`{"type":"object","properties":{"filter":{"type":"string","enum":["","looked-up","produced","activate"]},"limit":{"type":"integer"}},"additionalProperties":false}`),
+			Description: `Returns the learner's personal vocabulary, most recently active first. Optional filter: "all" (default), "looked-up", "produced", or "activate" (items ready for encouragement). Optional limit (default 20, max 50).`,
+			// "all" rather than "": Gemini rejects a request outright when
+			// any enum member is empty ("enum[0]: cannot be empty"), which
+			// took down every agentic call routed to it. Naming the default
+			// is better prompting anyway — a model should not have to infer
+			// that the empty string means everything.
+			Schema: json.RawMessage(`{"type":"object","properties":{"filter":{"type":"string","enum":["all","looked-up","produced","activate"]},"limit":{"type":"integer"}},"additionalProperties":false}`),
 		},
 		Handler: func(ctx context.Context, identity learner.IdentityID, _ *domsession.ID, args json.RawMessage) (string, error) {
 			a, err := decodeArgs[vocabHistoryArgs](args)
 			if err != nil {
 				return "", fmt.Errorf("get_vocabulary_history: %w", err)
 			}
-			items, err := svc.List(ctx, identity, a.Filter)
+			items, err := svc.List(ctx, identity, vocabFilterFromTool(a.Filter))
 			if err != nil {
 				return "", fmt.Errorf("get_vocabulary_history: %w", err)
 			}
@@ -141,4 +146,19 @@ func matchesVocabQuery(it vocabulary.Item, query string) bool {
 	return strings.Contains(strings.ToLower(it.Expression), q) ||
 		strings.Contains(strings.ToLower(it.Reading), q) ||
 		strings.Contains(strings.ToLower(it.Meaning), q)
+}
+
+// vocabFilterFromTool maps the tool's filter vocabulary onto the
+// application layer's, where "everything" is spelled "".
+//
+// An unset filter and "all" both mean everything, so a model that omits
+// the argument and one that names the default get the same answer.
+// Anything else passes through untouched: an unknown value must reach
+// the application layer and be handled there, not be silently rewritten
+// into "everything" here.
+func vocabFilterFromTool(filter string) string {
+	if filter == "all" {
+		return ""
+	}
+	return filter
 }

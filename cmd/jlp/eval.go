@@ -614,7 +614,7 @@ func runEvalCommand(ctx context.Context, cfg config.Config) error {
 	// buildAIGenerator's own doc comment on why nil is a legitimate,
 	// intentional value here) — it always scores against cfg's own
 	// APP_AI_* values, exactly like before Phase 4 Task S.
-	aiGen, _, _, err := buildAIGenerator(cfg, noopAIRequestRepo{}, nil)
+	aiGen, _, _, err := buildAIGenerator(cfg, noopAIRequestRepo{}, nil, nil /* no pins: this one-shot CLI path runs without the settings store, so it uses the configured routes */)
 	if err != nil {
 		return fmt.Errorf("eval: build ai generator: %w", err)
 	}

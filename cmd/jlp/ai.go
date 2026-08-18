@@ -218,7 +218,7 @@ func warnForUnknownPromptNames(routes map[string][]string) {
 // in which case it's included in available too despite the exclusion
 // above, so the dropdown's own preselected default is never an option
 // missing from its own list.
-func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestRepository, resolver ai.ModelResolver) (ai.StructuredGenerator, []string, string, error) {
+func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestRepository, resolver ai.ModelResolver, pinned airouter.PinnedProvider) (ai.StructuredGenerator, []string, string, error) {
 	routes, err := config.ParseRoutes(cfg.AI.Routes)
 	if err != nil {
 		return nil, nil, "", err
@@ -338,7 +338,8 @@ func buildAIGenerator(cfg config.Config, aiRequestRepo storage.AIRequestReposito
 		}
 	}
 
-	return airouter.New(resolvedRoutes, []ai.StructuredGenerator{defaultGen}, providers), available, defaultProvider, nil
+	return airouter.New(resolvedRoutes, []ai.StructuredGenerator{defaultGen}, providers,
+		airouter.WithPinnedProvider(pinned)), available, defaultProvider, nil
 }
 
 // aiProviderPriority is the fixed display order for the workspace's
@@ -386,7 +387,7 @@ var aiProviderPriority = []string{"ollama", "anthropic", "gemini", "claudecli", 
 // (APP_AI_AGENTICTEACHER), but the ToolCaller itself is built once at
 // boot regardless, so turning the flag on later never needs a restart
 // bug hunt.
-func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepository, resolver ai.ModelResolver) (ai.ToolCaller, error) {
+func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepository, resolver ai.ModelResolver, pinned airouter.PinnedProvider) (ai.ToolCaller, error) {
 	routes, err := config.ParseRoutes(cfg.AI.Routes)
 	if err != nil {
 		return nil, err
@@ -447,7 +448,8 @@ func buildToolCaller(cfg config.Config, aiRequestRepo storage.AIRequestRepositor
 		return nil, fmt.Errorf("ai: APP_AI_PROVIDER %q doesn't implement ai.ToolCaller (only fake, anthropic, ollama, and gemini do)", cfg.AI.Provider)
 	}
 
-	return airouter.NewToolCaller(resolvedRoutes, []ai.ToolCaller{defaultGen}), nil
+	return airouter.NewToolCaller(resolvedRoutes, []ai.ToolCaller{defaultGen}, providers,
+		airouter.WithPinnedProvider(pinned)), nil
 }
 
 // warnIfUnpriced logs a startup warning when provider's model has no
@@ -463,4 +465,27 @@ func warnIfUnpriced(pricing map[string]observability.ModelPricing, provider, mod
 	if _, ok := pricing[model]; !ok {
 		slog.Warn("ai: model has no pricing entry, cost will be recorded as $0", "provider", provider, "model", model)
 	}
+}
+
+// allRoutablePromptNames is every prompt name this process can route:
+// the structured-generation list and the tool-calling one, deduplicated
+// (teacher.agentic appears in both, for the reason knownPromptNames'
+// own comment gives).
+//
+// It exists so /settings/agents offers a pin for exactly the prompts
+// routing actually understands — deriving from the same two lists the
+// router is built from, rather than a third list that could drift.
+func allRoutablePromptNames() []string {
+	seen := make(map[string]bool, len(knownPromptNames)+len(knownToolPromptNames))
+	var out []string
+	for _, list := range [][]string{knownPromptNames, knownToolPromptNames} {
+		for _, name := range list {
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			out = append(out, name)
+		}
+	}
+	return out
 }

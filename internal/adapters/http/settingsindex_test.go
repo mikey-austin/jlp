@@ -13,7 +13,7 @@ import (
 // sentence in the middle of the AI model settings, which is not
 // somewhere anyone looks for it — this list is what stops the next one
 // being hidden the same way.
-var settingsPages = []string{"/settings/models", "/settings/tokens"}
+var settingsPages = []string{"/settings/models", "/settings/agents", "/settings/tokens"}
 
 func TestSettingsIndexLinksEverySettingsPage(t *testing.T) {
 	h := NewServer(testOptions()).HandlerForTest()

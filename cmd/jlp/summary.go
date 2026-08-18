@@ -147,7 +147,7 @@ func runSendSummary(ctx context.Context, cfg config.Config) error {
 	// A live /settings override still applies to `jlp serve`'s own
 	// long-running aiGen (see main.go), which is what every actual AI
 	// request in the app goes through.
-	aiGen, _, _, err := buildAIGenerator(cfg, aiRequestRepo, nil)
+	aiGen, _, _, err := buildAIGenerator(cfg, aiRequestRepo, nil, nil /* no pins: this one-shot CLI path runs without the settings store, so it uses the configured routes */)
 	if err != nil {
 		return fmt.Errorf("send-summary: ai: %w", err)
 	}

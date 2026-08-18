@@ -62,7 +62,7 @@ func newOllamaTestServer(t *testing.T) *httptest.Server {
 
 func TestBuildAIGeneratorDefaultFakeProviderAnswers(t *testing.T) {
 	cfg := baseCfg()
-	gen, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	gen, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildAIGenerator: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestBuildAIGeneratorRoutesNamedPromptToOllamaFallsThroughOthers(t *testing.
 	cfg.AI.Routes = "teacher.feedback=ollama"
 	cfg.AI.Ollama = config.Ollama{URL: srv.URL, Model: "test-ollama-model"}
 
-	gen, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	gen, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildAIGenerator: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestBuildAIGeneratorErrorsWhenRouteNamesOllamaWithoutModel(t *testing.T) {
 	cfg.AI.Routes = "teacher.feedback=ollama"
 	// cfg.AI.Ollama.Model left "" deliberately.
 
-	_, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	_, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil, nil)
 	if err == nil {
 		t.Fatal("expected a boot error, got nil")
 	}
@@ -157,7 +157,7 @@ func TestBuildAIGeneratorRoutesNamedPromptToCLIProvidersConstructWithoutError(t 
 	cfg := baseCfg()
 	cfg.AI.Routes = "teacher.feedback=claudecli;drill.exercise=codexcli"
 
-	gen, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	gen, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildAIGenerator: %v (claudecli/codexcli must be constructible without a binary configured, Task 12)", err)
 	}
@@ -182,7 +182,7 @@ func TestBuildAIGeneratorErrorsWhenDefaultProviderNotConstructible(t *testing.T)
 	cfg := baseCfg()
 	cfg.AI.Provider = "anthropic" // no APIKey set
 
-	_, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	_, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil, nil)
 	if err == nil {
 		t.Fatal("expected a boot error, got nil")
 	}
@@ -200,7 +200,7 @@ func TestGeminiIsDormantWithoutAKey(t *testing.T) {
 	cfg := baseCfg()
 	cfg.AI.Routes = "teacher.feedback=gemini"
 
-	_, available, _, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	_, available, _, err := buildAIGenerator(cfg, &memRepo{}, nil, nil)
 	if err == nil {
 		t.Fatal("expected a boot error for a gemini route with no API key")
 	}
@@ -219,7 +219,7 @@ func TestGeminiIsConstructedWithAKeyForBothCapabilities(t *testing.T) {
 	cfg.AI.Provider = "gemini"
 	cfg.AI.Gemini = config.Gemini{APIKey: "test-key", Model: "gemini-3-flash-preview"}
 
-	_, available, defaultProvider, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	_, available, defaultProvider, err := buildAIGenerator(cfg, &memRepo{}, nil, nil)
 	if err != nil {
 		t.Fatalf("buildAIGenerator: %v", err)
 	}
@@ -230,7 +230,7 @@ func TestGeminiIsConstructedWithAKeyForBothCapabilities(t *testing.T) {
 		t.Errorf("defaultProvider = %q, want gemini", defaultProvider)
 	}
 
-	if _, err := buildToolCaller(cfg, &memRepo{}, nil); err != nil {
+	if _, err := buildToolCaller(cfg, &memRepo{}, nil, nil); err != nil {
 		t.Fatalf("buildToolCaller: %v — APP_AI_PROVIDER=gemini would exit(1) at boot", err)
 	}
 }
@@ -253,7 +253,7 @@ func TestBuildAIGeneratorErrorsOnMalformedRoutes(t *testing.T) {
 	cfg := baseCfg()
 	cfg.AI.Routes = "not-a-valid-route-entry-no-equals"
 
-	_, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil)
+	_, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil, nil)
 	if err == nil {
 		t.Fatal("expected an error for a malformed APP_AI_ROUTES value, got nil")
 	}
@@ -354,7 +354,7 @@ func TestA2APromptNamesAreNeitherWarnedAboutNorSilentlyDropped(t *testing.T) {
 		// resolved (→ error) or skipped (→ nil). Nil means the route was
 		// dropped.
 		cfg.AI.Routes = name + "=claudecli"
-		if _, err := buildToolCaller(cfg, &memRepo{}, nil); err == nil {
+		if _, err := buildToolCaller(cfg, &memRepo{}, nil, nil); err == nil {
 			t.Errorf("buildToolCaller(%s=claudecli) = nil error — the route was silently ignored instead of resolved", name)
 		}
 	}
@@ -371,7 +371,7 @@ func TestBuildAIGeneratorSucceedsDespiteUnknownRoutedPromptName(t *testing.T) {
 	cfg := baseCfg()
 	cfg.AI.Routes = "nonexistent.prompt=fake"
 
-	if _, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil); err != nil {
+	if _, _, _, err := buildAIGenerator(cfg, &memRepo{}, nil, nil); err != nil {
 		t.Fatalf("buildAIGenerator: %v, want success (unknown prompt name is a warning, not a boot error)", err)
 	}
 }

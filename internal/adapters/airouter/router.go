@@ -28,9 +28,60 @@ import (
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 )
 
+// PinnedProvider reports the provider a prompt has been pinned to at
+// runtime, or "" when it has not been. Supplied by
+// application/settings; nil means "nothing is pinned", which is what
+// every caller predating pins gets.
+type PinnedProvider func(promptName string) string
+
+// WithPinnedProvider supplies the runtime pin lookup. See
+// PinnedProvider.
+func WithPinnedProvider(f PinnedProvider) Option {
+	return func(o *options) { o.pinned = f }
+}
+
+// Option configures a router. Functional rather than more constructor
+// parameters so that adding the next one does not touch every caller.
+type Option func(*options)
+
+type options struct{ pinned PinnedProvider }
+
+func newOptions(opts []Option) options {
+	var o options
+	for _, apply := range opts {
+		apply(&o)
+	}
+	return o
+}
+
+// pin resolves the pinned provider for promptName, if any, and only if
+// it is a provider this router can actually dispatch to. An unknown or
+// unconstructed name is IGNORED rather than fatal: a pin is a stored
+// preference, and a deployment that later drops that provider from its
+// configuration must keep working — it falls through to the configured
+// route, which is what the learner had before pinning.
+func pin[T any](f PinnedProvider, byName map[string]T, promptName string) (T, bool) {
+	var zero T
+	if f == nil {
+		return zero, false
+	}
+	name := f(promptName)
+	if name == "" {
+		return zero, false
+	}
+	got, ok := byName[name]
+	if !ok {
+		slog.Warn("airouter: prompt is pinned to a provider this process did not build; using the configured route instead",
+			"prompt_name", promptName, "pinned", name)
+		return zero, false
+	}
+	return got, true
+}
+
 type router struct {
 	routes   map[string][]ai.StructuredGenerator
 	fallback []ai.StructuredGenerator
+	pinned   PinnedProvider
 	// byName is every provider New was given, keyed by its provider
 	// name (e.g. "ollama", "agycli") — how GenerateStructured resolves
 	// an explicit req.ProviderOverride (Phase 4 Task W item 5) without
@@ -66,8 +117,8 @@ var ErrUnknownProvider = errors.New("airouter: unknown or unconfigured provider"
 // item 5) — normally the SAME map buildAIGenerator already built
 // before assembling routes/fallback from it, keyed by provider name.
 // It plays no part in ordinary (non-overridden) routing.
-func New(routes map[string][]ai.StructuredGenerator, fallback []ai.StructuredGenerator, byName map[string]ai.StructuredGenerator) ai.StructuredGenerator {
-	return &router{routes: routes, fallback: fallback, byName: byName}
+func New(routes map[string][]ai.StructuredGenerator, fallback []ai.StructuredGenerator, byName map[string]ai.StructuredGenerator, opts ...Option) ai.StructuredGenerator {
+	return &router{routes: routes, fallback: fallback, byName: byName, pinned: newOptions(opts).pinned}
 }
 
 func (r *router) GenerateStructured(ctx context.Context, req ai.StructuredRequest) (ai.StructuredResponse, error) {
@@ -86,6 +137,17 @@ func (r *router) GenerateStructured(ctx context.Context, req ai.StructuredReques
 		resp, err := gen.GenerateStructured(ctx, req)
 		if err != nil {
 			return ai.StructuredResponse{}, fmt.Errorf("%s: %w", req.ProviderOverride, err)
+		}
+		return resp, nil
+	}
+
+	// A runtime pin is the same decision as the override above, made
+	// once in settings instead of per request — so it dispatches the
+	// same way: that provider, once, no fallback.
+	if gen, ok := pin(r.pinned, r.byName, req.PromptName); ok {
+		resp, err := gen.GenerateStructured(ctx, req)
+		if err != nil {
+			return ai.StructuredResponse{}, fmt.Errorf("%s (pinned): %w", resp.Provider, err)
 		}
 		return resp, nil
 	}
@@ -118,16 +180,26 @@ func (r *router) GenerateStructured(ctx context.Context, req ai.StructuredReques
 type toolRouter struct {
 	routes   map[string][]ai.ToolCaller
 	fallback []ai.ToolCaller
+	byName   map[string]ai.ToolCaller
+	pinned   PinnedProvider
 }
 
 // NewToolCaller returns an ai.ToolCaller that selects a chain by
 // req.PromptName exactly as New does for ai.StructuredGenerator —
 // same routing, fallback, and per-attempt-error-logging semantics.
-func NewToolCaller(routes map[string][]ai.ToolCaller, fallback []ai.ToolCaller) ai.ToolCaller {
-	return &toolRouter{routes: routes, fallback: fallback}
+func NewToolCaller(routes map[string][]ai.ToolCaller, fallback []ai.ToolCaller, byName map[string]ai.ToolCaller, opts ...Option) ai.ToolCaller {
+	return &toolRouter{routes: routes, fallback: fallback, byName: byName, pinned: newOptions(opts).pinned}
 }
 
 func (r *toolRouter) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.ToolResponse, error) {
+	if caller, ok := pin(r.pinned, r.byName, req.PromptName); ok {
+		resp, err := caller.CallWithTools(ctx, req)
+		if err != nil {
+			return ai.ToolResponse{}, fmt.Errorf("%s (pinned): %w", resp.Provider, err)
+		}
+		return resp, nil
+	}
+
 	chain, routed := r.routes[req.PromptName]
 	if !routed {
 		chain = r.fallback

@@ -180,7 +180,7 @@ func main() {
 		// through so every one of those adapters can resolve a /settings
 		// override at call time (Phase 4 Task S).
 		aiRequestRepo := postgres.NewAIRequestRepository(pool)
-		aiGen, aiProviders, aiDefaultProvider, err := buildAIGenerator(cfg, aiRequestRepo, settingsSvc)
+		aiGen, aiProviders, aiDefaultProvider, err := buildAIGenerator(cfg, aiRequestRepo, settingsSvc, settingsSvc.PinnedProvider)
 		if err != nil {
 			slog.Error("ai", "err", err)
 			os.Exit(1)
@@ -195,7 +195,7 @@ func main() {
 		// is set: it's cheap (no network call at construction) and the
 		// agent-run loop below needs it regardless of which teacher path
 		// ends up calling it.
-		toolCaller, err := buildToolCaller(cfg, aiRequestRepo, settingsSvc)
+		toolCaller, err := buildToolCaller(cfg, aiRequestRepo, settingsSvc, settingsSvc.PinnedProvider)
 		if err != nil {
 			slog.Error("ai", "err", err)
 			os.Exit(1)
@@ -562,11 +562,14 @@ func main() {
 			os.Exit(1)
 		}
 		srv := httpx.NewServer(httpx.Options{
-			Addr:               fmt.Sprintf(":%d", cfg.Server.Port),
-			Auth:               authn,
-			Identities:         identities,
-			APITokens:          apiTokens,
-			A2AChatURL:         cfg.A2A.ChatURL,
+			Addr:       fmt.Sprintf(":%d", cfg.Server.Port),
+			Auth:       authn,
+			Identities: identities,
+			APITokens:  apiTokens,
+			A2AChatURL: cfg.A2A.ChatURL,
+			// Both routing lists, so /settings/agents can offer a pin for
+			// every prompt this process actually routes.
+			PromptNames:        allRoutablePromptNames(),
 			Sessions:           sessionsSvc,
 			Writing:            writingSvc,
 			Events:             eventRepo,

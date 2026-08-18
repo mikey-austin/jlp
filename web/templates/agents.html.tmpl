@@ -1,0 +1,32 @@
+{{define "content"}}<section class="settings">
+  <p class="breadcrumb"><a href="/settings">設定</a></p>
+  <h1>エージェントのプロバイダー</h1>
+  <p class="description">プロンプトごとに、どのAIアダプターが応答するかを選べます。変更は<strong>次のリクエスト</strong>から有効です（再起動は不要）。</p>
+  <p class="hint">「設定のまま」はデプロイの <code>APP_AI_ROUTES</code> に従います。プロバイダーを選ぶと、そのプロンプトは<strong>そのアダプターだけ</strong>を使い、失敗しても他へは切り替わりません（選んだ意味がなくなるため）。</p>
+  {{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
+
+  <div class="table-card table-card--stack">
+    <table>
+      <thead><tr><th>プロンプト</th><th>設定（APP_AI_ROUTES）</th><th>使用中</th><th>プロバイダー</th></tr></thead>
+      <tbody>
+        {{range .Rows}}{{$row := .}}<tr>
+          <td data-label="プロンプト"><code>{{$row.PromptName}}</code></td>
+          <td data-label="設定">{{if $row.Configured}}{{range $i, $p := $row.Configured}}{{if $i}} → {{end}}{{$p}}{{end}}{{else}}<span class="empty">既定</span>{{end}}</td>
+          <td data-label="使用中">{{if $row.Pinned}}<span class="badge">固定</span> {{$row.Pinned}}{{else}}<span class="badge">設定</span>{{end}}</td>
+          <td data-label="プロバイダー">
+            <form method="post" action="/settings/agents/{{$row.PromptName}}" class="settings-form">
+              <label class="field">
+                <span class="visually-hidden">{{$row.PromptName}} のプロバイダー</span>
+                <select class="select" name="provider">
+                  <option value="">設定のまま</option>
+                  {{range $row.Options}}<option value="{{.}}" {{if eq . $row.Pinned}}selected{{end}}>{{.}}</option>{{end}}
+                </select>
+              </label>
+              <button type="submit" class="btn btn--sm">保存</button>
+            </form>
+          </td>
+        </tr>{{else}}<tr><td colspan="4" class="empty">プロンプトがありません</td></tr>{{end}}
+      </tbody>
+    </table>
+  </div>
+</section>{{end}}
