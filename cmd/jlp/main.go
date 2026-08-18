@@ -298,6 +298,17 @@ func main() {
 		var a2aServer *a2a.Server
 		if cfg.A2A.Enabled {
 			a2aServer = a2a.New(runner, toolRegistry, cfg.A2A)
+			// Registered AFTER the server exists, because the tool
+			// delegates through it: the coordinator asks a2a to run
+			// another skill, and a2a resolves that skill to an agent and
+			// its allowlist. Registering into the same registry after the
+			// runner is built is safe — DefsFor/Invoke only ever run at
+			// request time (see the registration block above).
+			//
+			// So delegation exists only when the A2A adapter does. That
+			// is not a limitation to work around: the adapter IS the
+			// permission boundary a delegated run passes through.
+			registerTools(toolRegistry, tools.ConsultTools(a2aServer))
 		}
 
 		feedbackSvc := feedback.NewService(
@@ -706,6 +717,12 @@ func registerTools(reg *tools.Registry, ts []tools.Tool) {
 // assert against the same grants main actually applies. A test that
 // restated this list would pass while the real wiring drifted, which is
 // precisely the failure it would exist to catch.
+// coordinatorAgentName must match internal/adapters/a2a's
+// coordinatorAgent — the skill table maps the "coordinate" skill onto
+// this agent, and the allowlist below is what that skill may do.
+// TestCoordinatorAgentNameMatchesTheSkillTable pins them together.
+const coordinatorAgentName = "coordinator"
+
 func allowA2AAgents(reg *tools.Registry) {
 	// "teacher" (agentName in internal/agent/teacher/teacher.go) may
 	// only READ the learner's context to decide what to emphasize —
@@ -742,6 +759,19 @@ func allowA2AAgents(reg *tools.Registry) {
 		"get_learner_profile", "get_recent_errors", "get_correction_history",
 		"get_grammar_history", "get_learning_priorities",
 		"get_vocabulary_history", "get_recent_writing",
+	)
+	// "coordinator" backs the A2A "coordinate" skill. It reads what the
+	// teacher reads, and is the ONLY agent granted consult_specialist —
+	// which is what bounds delegation depth to one without a counter: a
+	// consulted specialist cannot consult, because it was never allowed
+	// to. Widening this grant is the thing to think twice about.
+	reg.Allow(coordinatorAgentName,
+		"get_active_session", "get_session_context",
+		"get_learner_profile", "get_recent_errors", "get_correction_history",
+		"get_recent_writing",
+		"get_vocabulary_history", "search_vocabulary",
+		"get_learning_priorities", "get_grammar_history",
+		"consult_specialist",
 	)
 	reg.Allow("lesson",
 		"get_learner_profile", "get_recent_errors", "get_correction_history",

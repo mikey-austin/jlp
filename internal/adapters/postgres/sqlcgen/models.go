@@ -23,6 +23,7 @@ type AgentRun struct {
 	System        string
 	Input         string
 	Output        string
+	ParentRunID   pgtype.UUID
 }
 
 type AgentTurn struct {

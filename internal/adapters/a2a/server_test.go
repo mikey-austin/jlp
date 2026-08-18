@@ -364,7 +364,9 @@ func TestAgentCardSkillsAreSpecShaped(t *testing.T) {
 		t.Fatalf("unmarshal skills: %v", err)
 	}
 
-	wantIDs := []string{"chat", "review_writing", "analyse_learner", "plan_lesson"}
+	// Order matches skillOrder: the default lands first, then the
+	// coordinator, then the specialists it can consult.
+	wantIDs := []string{"chat", "coordinate", "review_writing", "analyse_learner", "plan_lesson"}
 	if len(skills) != len(wantIDs) {
 		t.Fatalf("len(skills) = %d, want %d", len(skills), len(wantIDs))
 	}

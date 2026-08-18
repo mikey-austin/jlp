@@ -65,9 +65,14 @@ import (
 // future change could wire a repository into without it being an
 // obviously out-of-place addition to this struct.
 type Server struct {
-	runner *agentrun.Runner
-	reg    *tools.Registry
-	cfg    config.A2A
+	runner agentRunner
+	// consulted records which specialists each in-flight run has already
+	// asked, so a coordinator cannot ask the same one twice. Guarded by
+	// mu, and cleared by handleSendMessage when the run it belongs to
+	// ends — see forgetConsultations.
+	consulted map[string]map[string]bool
+	reg       *tools.Registry
+	cfg       config.A2A
 
 	// mu/tasks/order back the GetTask method: since task execution is
 	// synchronous (see task.go's handleSendMessage doc comment), this is
@@ -103,8 +108,27 @@ const maxCachedTasks = 512
 // other optional feature in this codebase (Anki, MQTT, Summary), main
 // only calls New at all when cfg.Enabled is true; internal/adapters/http
 // only mounts Routes() when it was given a non-nil Server.
-func New(runner *agentrun.Runner, reg *tools.Registry, cfg config.A2A) *Server {
-	return &Server{runner: runner, reg: reg, cfg: cfg, tasks: make(map[string]taskRecord)}
+// agentRunner is the runner seam.
+//
+// An interface rather than *agentrun.Runner so a test can observe WHAT
+// this adapter asks to run — which agent, whose identity, what turn
+// budget. Those are the properties delegation is about: a delegated run
+// executing as the specialist rather than the caller is not something to
+// verify by reading the code twice.
+//
+// cmd/jlp passes the real *agentrun.Runner, which satisfies it.
+type agentRunner interface {
+	Run(ctx context.Context, in agentrun.RunInput) (agentrun.RunOutput, error)
+}
+
+func New(runner agentRunner, reg *tools.Registry, cfg config.A2A) *Server {
+	return &Server{
+		runner:    runner,
+		reg:       reg,
+		cfg:       cfg,
+		tasks:     make(map[string]taskRecord),
+		consulted: make(map[string]map[string]bool),
+	}
 }
 
 // remember caches task under id as identity's, evicting the oldest

@@ -50,7 +50,23 @@ func (r *AgentRunRepository) Start(ctx context.Context, run storage.AgentRun) er
 		StartedAt:     pgtype.Timestamptz{Time: run.StartedAt, Valid: true},
 		System:        run.System,
 		Input:         run.Input,
+		// Absent for a top-level run, which is almost all of them. A
+		// malformed parent id is stored as absent rather than failing the
+		// insert: losing the link between two runs is a worse trace, but
+		// failing here would lose the run itself.
+		ParentRunID: optionalUUIDParam(run.ParentRunID),
 	})
+}
+
+func optionalUUIDParam(s string) pgtype.UUID {
+	if s == "" {
+		return pgtype.UUID{}
+	}
+	id, err := parseUUID(s)
+	if err != nil {
+		return pgtype.UUID{}
+	}
+	return id
 }
 
 func (r *AgentRunRepository) Finish(ctx context.Context, identity learner.IdentityID, runID, status, errMsg, output string, turns int, endedAt time.Time) error {
@@ -180,6 +196,16 @@ func (r *AgentRunRepository) Get(ctx context.Context, identity learner.IdentityI
 	return fromAgentRunRow(row), toolCalls, turns, nil
 }
 
+// optionalUUIDText renders a nullable uuid column, empty when absent —
+// which for parent_run_id means "this run was not delegated", the case
+// for almost every row.
+func optionalUUIDText(id pgtype.UUID) string {
+	if !id.Valid {
+		return ""
+	}
+	return uuid.UUID(id.Bytes).String()
+}
+
 func fromAgentRunRow(row sqlcgen.AgentRun) storage.AgentRun {
 	run := storage.AgentRun{
 		ID:            uuid.UUID(row.ID.Bytes).String(),
@@ -187,6 +213,7 @@ func fromAgentRunRow(row sqlcgen.AgentRun) storage.AgentRun {
 		Agent:         row.Agent,
 		PromptName:    row.PromptName,
 		PromptVersion: row.PromptVersion,
+		ParentRunID:   optionalUUIDText(row.ParentRunID),
 		Status:        row.Status,
 		Turns:         int(row.Turns),
 		StartedAt:     row.StartedAt.Time,

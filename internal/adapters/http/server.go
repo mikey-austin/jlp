@@ -470,7 +470,7 @@ func (s *Server) routes() http.Handler {
 		// why a2a.Server needs its own bridge rather than importing
 		// IdentityFrom itself.
 		if s.opts.A2A != nil {
-			mountA2A(r, s.opts.A2APath, withA2AIdentity(s.opts.A2A.Routes()))
+			mountA2A(r, s.opts.A2APath, withLongWriteDeadline(withA2AIdentity(s.opts.A2A.Routes())))
 		}
 	})
 	return r
@@ -585,5 +585,32 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		"Funnel":         funnel,
 		"WeaknessTrends": weaknessTrendVMs(trends),
 		"Calibration":    calibration,
+	})
+}
+
+// a2aWriteDeadline bounds one blocking A2A request.
+//
+// An agent run is minutes, not seconds: a coordinate request that
+// consults a specialist is two full agent runs, each up to ten turns of
+// model calls. The server's 60s WriteTimeout closed the connection while
+// the run continued, so the caller lost an answer it had already paid
+// for.
+const a2aWriteDeadline = 10 * time.Minute
+
+// withLongWriteDeadline extends the write deadline for the routes it
+// wraps, leaving the server's own 60s in place everywhere else — that
+// timeout is a real protection for the HTML app, and it should not be
+// relaxed globally to accommodate one long-running surface.
+func withLongWriteDeadline(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		rc := http.NewResponseController(w)
+		if err := rc.SetWriteDeadline(time.Now().Add(a2aWriteDeadline)); err != nil {
+			// Not fatal: a ResponseWriter that cannot carry a deadline
+			// (a wrapper that does not implement it) still serves the
+			// request — it just keeps the server default, which is the
+			// behaviour this replaced.
+			slog.Warn("a2a: could not extend the write deadline; a long run may be cut off", "err", err)
+		}
+		next.ServeHTTP(w, r)
 	})
 }

@@ -45,7 +45,8 @@ func (q *Queries) FinishAgentRun(ctx context.Context, arg FinishAgentRunParams) 
 
 const getAgentRun = `-- name: GetAgentRun :one
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
-       status, turns, started_at, ended_at, error, system, input, output
+       status, turns, started_at, ended_at, error, system, input, output,
+       parent_run_id
 FROM agent_runs
 WHERE agent_runs.id = $1 AND agent_runs.identity_id = $2
   AND (agent_runs.session_id IS NULL
@@ -79,6 +80,7 @@ func (q *Queries) GetAgentRun(ctx context.Context, arg GetAgentRunParams) (Agent
 		&i.System,
 		&i.Input,
 		&i.Output,
+		&i.ParentRunID,
 	)
 	return i, err
 }
@@ -86,9 +88,9 @@ func (q *Queries) GetAgentRun(ctx context.Context, arg GetAgentRunParams) (Agent
 const insertAgentRun = `-- name: InsertAgentRun :exec
 INSERT INTO agent_runs (
     id, identity_id, session_id, agent, prompt_name, prompt_version,
-    status, turns, started_at, system, input
+    status, turns, started_at, system, input, parent_run_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 
 type InsertAgentRunParams struct {
@@ -103,6 +105,7 @@ type InsertAgentRunParams struct {
 	StartedAt     pgtype.Timestamptz
 	System        string
 	Input         string
+	ParentRunID   pgtype.UUID
 }
 
 func (q *Queries) InsertAgentRun(ctx context.Context, arg InsertAgentRunParams) error {
@@ -118,6 +121,7 @@ func (q *Queries) InsertAgentRun(ctx context.Context, arg InsertAgentRunParams) 
 		arg.StartedAt,
 		arg.System,
 		arg.Input,
+		arg.ParentRunID,
 	)
 	return err
 }
@@ -198,7 +202,8 @@ func (q *Queries) InsertToolCall(ctx context.Context, arg InsertToolCallParams) 
 
 const listAgentRuns = `-- name: ListAgentRuns :many
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
-       status, turns, started_at, ended_at, error, system, input, output
+       status, turns, started_at, ended_at, error, system, input, output,
+       parent_run_id
 FROM agent_runs
 WHERE agent_runs.identity_id = $1
   AND (agent_runs.session_id IS NULL
@@ -253,6 +258,7 @@ func (q *Queries) ListAgentRuns(ctx context.Context, arg ListAgentRunsParams) ([
 			&i.System,
 			&i.Input,
 			&i.Output,
+			&i.ParentRunID,
 		); err != nil {
 			return nil, err
 		}

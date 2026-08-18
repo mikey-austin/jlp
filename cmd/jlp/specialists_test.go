@@ -3,6 +3,7 @@ package main
 import (
 	"testing"
 
+	"github.com/mikeyaustin/jlp/internal/adapters/a2a"
 	"github.com/mikeyaustin/jlp/internal/tools"
 )
 
@@ -65,6 +66,7 @@ func buildRegistryForTest(t *testing.T) *tools.Registry {
 		tools.VocabularyTools(nil),
 		tools.AnalyticsTools(nil, nil),
 		tools.LearningTools(nil, nil, nil, nil),
+		tools.ConsultTools(nil),
 	} {
 		for _, tool := range set {
 			reg.Register(tool)
@@ -72,4 +74,33 @@ func buildRegistryForTest(t *testing.T) *tools.Registry {
 	}
 	allowA2AAgents(reg)
 	return reg
+}
+
+// The coordinator's allowlist here and the skill table in
+// internal/adapters/a2a name the same agent as two separate string
+// constants. If they drift, the "coordinate" skill runs as an agent with
+// no grants — it would still answer, from the message alone, exactly the
+// way analyse_learner and plan_lesson used to.
+func TestCoordinatorAgentNameMatchesTheSkillTable(t *testing.T) {
+	if coordinatorAgentName != a2a.CoordinatorAgent() {
+		t.Fatalf("cmd/jlp says %q, internal/adapters/a2a says %q", coordinatorAgentName, a2a.CoordinatorAgent())
+	}
+}
+
+// Delegation must be reachable from exactly one agent. Granting the tool
+// more widely is what turns a one-level consultation into a recursive
+// fan-out of model calls — the allowlist IS the depth limit.
+func TestOnlyTheCoordinatorMayDelegate(t *testing.T) {
+	reg := buildRegistryForTest(t)
+	for _, agent := range append(a2aAgents, coordinatorAgentName) {
+		var canDelegate bool
+		for _, def := range reg.DefsFor(agent) {
+			if def.Name == "consult_specialist" {
+				canDelegate = true
+			}
+		}
+		if want := agent == coordinatorAgentName; canDelegate != want {
+			t.Errorf("agent %q may delegate = %v, want %v", agent, canDelegate, want)
+		}
+	}
 }

@@ -18,10 +18,14 @@ type AgentRun struct {
 	IdentityID                       learner.IdentityID
 	SessionID                        *session.ID
 	Agent, PromptName, PromptVersion string
-	Status                           string // "running" | "completed" | "failed"
-	Turns                            int
-	StartedAt, EndedAt               time.Time
-	Error                            string
+	// ParentRunID is the run that consulted this one, empty for a
+	// top-level run. It is what lets /ai/agents explain a second run
+	// appearing beside the one the learner actually asked for.
+	ParentRunID        string
+	Status             string // "running" | "completed" | "failed"
+	Turns              int
+	StartedAt, EndedAt time.Time
+	Error              string
 	// System/Input are the conversation's starting point, written once
 	// at Start (System is the rendered prompt's system text; Input is
 	// its opening user turn) — the /ai/agents trace viewer's "input

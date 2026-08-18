@@ -40,12 +40,32 @@ const defaultMaxTurns = 10
 // prompt's user turn); MaxTurns caps how many
 // ai.ToolCaller.CallWithTools calls this run may make — zero means
 // defaultMaxTurns, never zero calls.
+// runIDKey carries the current run's id to the tools it invokes.
+type runIDKey struct{}
+
+// RunIDFrom returns the agent run that invoked the current tool, empty
+// outside a run.
+//
+// It exists for delegation: a consulted run records the consulting one
+// as its parent, and without that link /ai/agents shows a second run
+// appearing beside the one the learner asked for with nothing to explain
+// it. Tools that do not delegate never look.
+func RunIDFrom(ctx context.Context) string {
+	v, _ := ctx.Value(runIDKey{}).(string)
+	return v
+}
+
 type RunInput struct {
 	Agent, PromptName, PromptVersion, System string
 	Messages                                 []ai.ToolMessage
 	Identity                                 learner.IdentityID
 	SessionID                                *session.ID
 	MaxTurns                                 int
+	// ParentRun names the run that consulted this one, empty for a
+	// top-level run. Recorded so the trace can explain a second run
+	// appearing beside the one the learner actually asked for — see
+	// storage.AgentRun.ParentRunID.
+	ParentRun string
 }
 
 // RunOutput is what Run returns. RunID identifies the agent_runs row
@@ -131,6 +151,7 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		Agent:         in.Agent,
 		PromptName:    in.PromptName,
 		PromptVersion: in.PromptVersion,
+		ParentRunID:   in.ParentRun,
 		Status:        "running",
 		StartedAt:     r.clock(),
 		System:        in.System,
@@ -218,9 +239,11 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		}
 
 		results := make([]ai.ToolResult, 0, len(resp.Turn.Invocations))
+		// Tools run with the run's own id on the context — see RunIDFrom.
+		toolCtx := context.WithValue(ctx, runIDKey{}, runID)
 		for _, inv := range resp.Turn.Invocations {
 			callStart := r.clock()
-			result := r.reg.Invoke(ctx, in.Agent, in.Identity, in.SessionID, inv)
+			result := r.reg.Invoke(toolCtx, in.Agent, in.Identity, in.SessionID, inv)
 			duration := r.clock().Sub(callStart)
 
 			if err := r.runs.RecordToolCall(ctx, in.Identity, storage.ToolCall{
@@ -281,4 +304,11 @@ func firstUserText(messages []ai.ToolMessage) string {
 		}
 	}
 	return ""
+}
+
+// WithRunIDForTest puts a run id on ctx so a test can exercise the tools
+// that read one — delegation records the consulting run — without
+// standing up a whole Runner. Exported for that reason alone.
+func WithRunIDForTest(ctx context.Context, runID string) context.Context {
+	return context.WithValue(ctx, runIDKey{}, runID)
 }

@@ -1,9 +1,9 @@
 -- name: InsertAgentRun :exec
 INSERT INTO agent_runs (
     id, identity_id, session_id, agent, prompt_name, prompt_version,
-    status, turns, started_at, system, input
+    status, turns, started_at, system, input, parent_run_id
 )
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11);
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg(parent_run_id));
 
 -- name: FinishAgentRun :execrows
 UPDATE agent_runs
@@ -39,7 +39,8 @@ WHERE ar.id = $8 AND ar.identity_id = $9;
 -- agent_runs: AgentUsageStats is over ai_requests, so nothing on
 -- /learner moves.
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
-       status, turns, started_at, ended_at, error, system, input, output
+       status, turns, started_at, ended_at, error, system, input, output,
+       parent_run_id
 FROM agent_runs
 WHERE agent_runs.identity_id = $1
   AND (agent_runs.session_id IS NULL
@@ -53,7 +54,8 @@ LIMIT $2;
 -- run through this query first, so a deleted session's trace 404s
 -- before its tool calls or turns are ever fetched.
 SELECT id, identity_id, session_id, agent, prompt_name, prompt_version,
-       status, turns, started_at, ended_at, error, system, input, output
+       status, turns, started_at, ended_at, error, system, input, output,
+       parent_run_id
 FROM agent_runs
 WHERE agent_runs.id = $1 AND agent_runs.identity_id = $2
   AND (agent_runs.session_id IS NULL

@@ -92,7 +92,14 @@ const defaultSkill = "chat"
 // map has none, and the agent card should list skills the same way on
 // every call. defaultSkill leads, because it is what an unqualified
 // message gets.
-var skillOrder = []string{"chat", "review_writing", "analyse_learner", "plan_lesson"}
+var skillOrder = []string{"chat", "coordinate", "review_writing", "analyse_learner", "plan_lesson"}
+
+// coordinatorAgent is the tools.Registry agent behind the "coordinate"
+// skill: the teacher's read tools PLUS consult_specialist. It is the
+// only agent granted that tool, which is what bounds delegation depth to
+// one — a consulted specialist cannot consult, because it was never
+// allowed to. See cmd/jlp's allowA2AAgents.
+const coordinatorAgent = "coordinator"
 
 // skillDefs maps every skill ID this adapter accepts onto its
 // definition: the three from PRD §30's example (Writing Coach/Learner
@@ -115,6 +122,21 @@ var skillDefs = map[string]skillDef{
 		PromptVersion:      "v1",
 		SystemWithTools:    "You are JLP's Japanese tutor, talking to your learner. Answer their message directly and conversationally. Where their own history would make the answer more useful, investigate it first using your available tools.",
 		SystemWithoutTools: "You are JLP's Japanese tutor, talking to your learner. You have no tools available for this task right now, so answer their message directly and conversationally from the message alone.",
+	},
+	"coordinate": {
+		Name:                    "Coordinating Tutor",
+		Description:             "Answers a question that spans more than one speciality by consulting the other skills on this card — the writing reviewer, the learner analyst, the lesson planner — and synthesising what they report. Use it when one question needs more than one of them; the plain chat skill is cheaper when it does not.",
+		DescriptionWithoutTools: "Answers a question as a tutor, from the message alone. This skill currently has NO tool access, so it cannot consult the other skills and behaves as ordinary chat.",
+		Tags:                    []string{"japanese", "tutor", "delegation", "multi-agent"},
+		Examples: []string{
+			"この文章を添削して、次に何を勉強すべきか教えてください。",
+			"Review my writing and plan my next lesson around what it shows.",
+		},
+		Agent:              coordinatorAgent,
+		PromptName:         "a2a.coordinate",
+		PromptVersion:      "v1",
+		SystemWithTools:    "You are JLP's coordinating tutor. Some questions span more than one speciality; you have a consult_specialist tool that runs another skill on this agent and returns its answer. Consult a specialist when the question genuinely needs its speciality, at most once each, then answer the learner yourself — synthesising what came back rather than pasting it. Each consultation is a full second agent run, so do not consult for something you can answer directly.",
+		SystemWithoutTools: "You are JLP's coordinating tutor. You have no tools available right now, so answer the learner's message directly and conversationally from the message alone.",
 	},
 	"review_writing": {
 		Name:                    "Writing Reviewer",
@@ -351,6 +373,9 @@ func (s *Server) handleSendMessage(ctx context.Context, identity learner.Identit
 		Identity:      identity,
 		SessionID:     sessionFrom(p),
 	})
+
+	// The run is over, so its consultation record is dead weight.
+	s.forgetConsultations(out.RunID)
 
 	taskID := out.RunID
 	if taskID == "" {
