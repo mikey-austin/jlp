@@ -534,3 +534,106 @@ body {
     max-width: 40%;
   }
 }
+
+/* --- Rich content widgets (widgets.js) -------------------------------
+ *
+ * Rendered UNDER the prose in an agent bubble, never instead of it.
+ * Colours are this client's own — it deliberately does not import JLP's
+ * stylesheet, since it must keep working pointed at any A2A agent. */
+.widget {
+  margin-top: 0.75rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border, #d8d8d8);
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.02);
+}
+.widget__title {
+  margin: 0 0 0.5rem;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  opacity: 0.65;
+}
+.widget__subtitle {
+  margin: 0.5rem 0 0.25rem;
+  font-size: 0.8rem;
+  opacity: 0.75;
+}
+
+/* Diff colouring, matching JLP's own d-ins/d-del vocabulary so the same
+ * correction reads the same way in both places. */
+.d-ins {
+  background: #d8f5dd;
+  color: #14532d;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.d-del {
+  background: #ffd9d9;
+  color: #7f1d1d;
+  text-decoration: line-through;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+
+.correction-card {
+  padding: 0.5rem 0;
+  border-bottom: 1px solid rgba(0, 0, 0, 0.06);
+}
+.correction-card:last-child { border-bottom: none; }
+.correction-card__body { line-height: 1.9; }
+.correction-card__meta {
+  display: flex;
+  gap: 0.4rem;
+  align-items: center;
+  margin-top: 0.35rem;
+  font-size: 0.75rem;
+  opacity: 0.7;
+}
+.correction-card__why { margin: 0.35rem 0 0; font-size: 0.85rem; }
+/* The gated state must not look like a finished correction: the answer
+ * is deliberately absent, not missing. */
+.correction-card--gated .correction-card__body {
+  text-decoration: underline wavy #c2872b;
+  text-underline-offset: 0.3em;
+}
+.correction-card__pending {
+  margin: 0.35rem 0 0;
+  font-size: 0.85rem;
+  opacity: 0.75;
+  font-style: italic;
+}
+
+.word-card { padding: 0.4rem 0; border-bottom: 1px solid rgba(0,0,0,0.06); }
+.word-card:last-child { border-bottom: none; }
+.word-card__head { display: flex; gap: 0.5rem; align-items: baseline; }
+.word-card__expression { font-size: 1.05rem; font-weight: 600; }
+.word-card__reading { font-size: 0.8rem; opacity: 0.6; }
+.word-card__meaning { font-size: 0.9rem; }
+.word-card__meta { display: flex; gap: 0.6rem; margin-top: 0.2rem; font-size: 0.75rem; opacity: 0.65; }
+
+.priority-row {
+  display: grid;
+  grid-template-columns: minmax(6rem, 12rem) 1fr;
+  gap: 0.5rem;
+  align-items: center;
+  padding: 0.25rem 0;
+}
+.priority-row__subject { font-weight: 600; font-size: 0.9rem; }
+.priority-row__track {
+  display: block;
+  height: 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.08);
+  overflow: hidden;
+}
+.priority-row__fill { display: block; height: 100%; background: #2f7d4f; }
+.priority-row__reason { grid-column: 1 / -1; font-size: 0.78rem; opacity: 0.7; }
+
+.badge {
+  display: inline-block;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.07);
+  font-size: 0.72rem;
+}

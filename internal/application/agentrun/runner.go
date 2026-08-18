@@ -52,6 +52,26 @@ type RunOutput struct {
 	RunID string
 	Text  string
 	Turns int
+	// ToolCalls is every tool this run invoked, in call order, with the
+	// result each returned. It carries no information the run did not
+	// already have — the runner builds its tool messages from exactly
+	// these and writes a tool_calls row for each.
+	//
+	// It exists for internal/adapters/a2a, which turns renderable
+	// results into A2A data parts (docs/superpowers/specs/
+	// 2026-08-18-a2a-rich-content-design.md). Results arrive already
+	// redacted by the tool layer, which is what keeps a gated
+	// correction's answer out of anything built from them.
+	ToolCalls []ToolCall
+}
+
+// ToolCall pairs one invocation with what it returned. The name is not
+// decoration: a result is uninterpretable without knowing which tool
+// produced it, and that is precisely what a consumer keys off.
+type ToolCall struct {
+	Name    string
+	Result  string
+	IsError bool
 }
 
 // Runner drives one ai.ToolCaller conversation to convergence,
@@ -116,6 +136,10 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 
 	messages := append([]ai.ToolMessage(nil), in.Messages...)
 	defs := r.reg.DefsFor(in.Agent)
+	// Accumulated across turns, not per turn: a caller wants everything
+	// the run looked at, and an agent routinely gathers over several
+	// turns before answering.
+	var toolCalls []ToolCall
 
 	for turn := 1; turn <= maxTurns; turn++ {
 		resp, err := r.caller.CallWithTools(ctx, ai.ToolRequest{
@@ -173,7 +197,7 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 
 		if len(resp.Turn.Invocations) == 0 {
 			r.finish(ctx, in.Identity, runID, "completed", "", resp.Turn.Text, turn)
-			return RunOutput{RunID: runID, Text: resp.Turn.Text, Turns: turn}, nil
+			return RunOutput{RunID: runID, Text: resp.Turn.Text, Turns: turn, ToolCalls: toolCalls}, nil
 		}
 
 		results := make([]ai.ToolResult, 0, len(resp.Turn.Invocations))
@@ -198,6 +222,7 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 			}
 
 			results = append(results, result)
+			toolCalls = append(toolCalls, ToolCall{Name: inv.Name, Result: result.Content, IsError: result.IsError})
 		}
 		messages = append(messages, ai.ToolMessage{Role: "tool", Results: results})
 

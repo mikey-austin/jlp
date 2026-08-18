@@ -1,3 +1,5 @@
+import { render as renderWidget, canRender } from '/widgets.js';
+
 // Vanilla JS — no framework, no build step. This is a small sidecar UI;
 // see server.js for the API this talks to and README.md for the
 // architecture rationale (SDK stays server-side).
@@ -225,10 +227,15 @@ function partsToText(parts) {
   return parts
     .map((p) => {
       if (p.kind === 'text') return p.text;
-      if (p.kind === 'data') return `[structured data]\n${p.text}`;
+      // A data part this client can render contributes nothing to the
+      // prose — it becomes a widget below. One it cannot render still
+      // falls back to its JSON, so an unknown payload is visible rather
+      // than silently missing.
+      if (p.kind === 'data') return renderableMedia(p) ? '' : `[structured data]\n${p.text}`;
       if (p.kind === 'url') return `[file] ${p.text}`;
       return '[unsupported content]';
     })
+    .filter((s) => s !== '')
     .join('\n\n');
 }
 
@@ -259,7 +266,13 @@ function renderTaskResult(progressRow, task) {
       (task.status.message && partsToText(task.status.message.parts)) || 'The agent reported a failure with no message.';
     bubble.textContent = `Task failed.\n\n${reason}`;
   } else if (task.artifacts && task.artifacts.length > 0) {
+    // Prose first and unconditionally; widgets append under it. A client
+    // may ignore parts it does not understand, so the text has to carry
+    // the whole answer on its own — see widgets.js.
     bubble.textContent = task.artifacts.map((a) => partsToText(a.parts)).join('\n\n---\n\n');
+    for (const artifact of task.artifacts) {
+      appendWidgets(bubble, artifact.parts);
+    }
   } else if (task.status.message) {
     bubble.textContent = partsToText(task.status.message.parts);
   } else {
@@ -407,3 +420,30 @@ els.composerInput.addEventListener('keydown', (ev) => {
 
 renderEmptyState();
 refreshState().catch((err) => showConnectError(String(err)));
+
+// renderableMedia reports whether this client has a widget for a part.
+// It asks the registry rather than attempting a render, so testing does
+// not build a DOM tree that is then thrown away.
+function renderableMedia(part) {
+  return Boolean(part && part.mediaType && canRender(part.mediaType));
+}
+
+// appendWidgets renders every data part it recognises, under the prose.
+//
+// A widget that fails to render is skipped, never fatal: the answer is
+// already in the bubble above it, and losing a nicer presentation is a
+// far better outcome than losing the reply.
+function appendWidgets(bubble, parts) {
+  if (!Array.isArray(parts)) return;
+  for (const part of parts) {
+    if (!part || part.kind !== 'data' || !part.mediaType) continue;
+    let node = null;
+    try {
+      node = renderWidget(part.mediaType, part.data);
+    } catch (err) {
+      console.warn('[a2a-chat] widget threw while rendering', part.mediaType, err);
+      continue;
+    }
+    if (node) bubble.appendChild(node);
+  }
+}

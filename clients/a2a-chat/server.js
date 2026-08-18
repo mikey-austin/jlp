@@ -159,7 +159,17 @@ function serializePart(part) {
     case 'text':
       return { kind: 'text', text: part.content.value };
     case 'data':
-      return { kind: 'data', text: JSON.stringify(part.content.value, null, 2) };
+      // The VALUE travels, not a pretty-printed copy of it. Stringifying
+      // here was the reason a structured payload could only ever be
+      // displayed as a JSON blob: by the time the browser saw it, the
+      // structure was gone. `text` is kept alongside so a client that
+      // understands no media type still has something to show.
+      return {
+        kind: 'data',
+        mediaType: part.mediaType || part.content.mediaType || '',
+        data: part.content.value,
+        text: JSON.stringify(part.content.value, null, 2),
+      };
     case 'url':
       return { kind: 'url', text: part.content.value };
     case 'raw':

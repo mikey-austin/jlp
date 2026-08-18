@@ -156,6 +156,24 @@ type a2aMsg struct {
 type a2aPart struct {
 	Text *string `json:"text"`
 	Kind *string `json:"kind"`
+	// The other three oneof members, so a test can assert that exactly
+	// one is set rather than that text specifically is.
+	Data      any     `json:"data"`
+	URL       *string `json:"url"`
+	Raw       []byte  `json:"raw"`
+	MediaType string  `json:"mediaType"`
+}
+
+// oneofMembers counts how many of the mutually exclusive content members
+// this part carries. A well-formed v1.0 part carries exactly one.
+func (p a2aPart) oneofMembers() int {
+	n := 0
+	for _, set := range []bool{p.Text != nil, p.Data != nil, p.URL != nil, p.Raw != nil} {
+		if set {
+			n++
+		}
+	}
+	return n
 }
 
 func (p a2aPart) text() string {
@@ -479,8 +497,15 @@ func TestSendMessageReturnsSpecShapedTask(t *testing.T) {
 	} else if _, err := time.Parse(time.RFC3339, task.Status.Timestamp); err != nil {
 		t.Errorf("status.timestamp %q is not RFC 3339: %v", task.Status.Timestamp, err)
 	}
-	if len(task.Artifacts) != 1 || len(task.Artifacts[0].Parts) != 1 {
-		t.Fatalf("want exactly one artifact with one part, got %+v", task.Artifacts)
+	// One artifact, whose FIRST part is the prose answer. Widgets may
+	// follow it (see widgets.go); what is pinned here is that the prose
+	// leads and is complete on its own, because any client may ignore
+	// the parts after it.
+	if len(task.Artifacts) != 1 || len(task.Artifacts[0].Parts) == 0 {
+		t.Fatalf("want exactly one artifact with at least one part, got %+v", task.Artifacts)
+	}
+	if task.Artifacts[0].Parts[0].Text == nil {
+		t.Fatalf("the artifact's first part is not the prose answer: %+v", task.Artifacts[0].Parts[0])
 	}
 	if task.Artifacts[0].ArtifactID == "" {
 		t.Error("artifact.artifactId is empty; it must be unique within the task")
@@ -529,8 +554,12 @@ func TestPartsUseProtobufOneofShapeNotKindDiscriminator(t *testing.T) {
 		if p.Kind != nil {
 			t.Errorf("part[%d] carries a v0.3 \"kind\" discriminator (%q); v1.0 parts are a protobuf oneof identified by field name alone", i, *p.Kind)
 		}
-		if p.Text == nil {
-			t.Errorf("part[%d] has no \"text\" member", i)
+		// Exactly one oneof member, not "text specifically": a data part
+		// carrying a widget legitimately has no text, and that IS the
+		// protobuf oneof shape. What must never happen is a part with
+		// two members set, or none.
+		if n := p.oneofMembers(); n != 1 {
+			t.Errorf("part[%d] sets %d oneof members, want exactly 1: %+v", i, n, p)
 		}
 	}
 }

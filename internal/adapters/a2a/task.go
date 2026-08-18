@@ -380,11 +380,20 @@ func (s *Server) handleSendMessage(ctx context.Context, identity learner.Identit
 	} else {
 		task.Status.State = taskStateCompleted
 		agentMsg.Parts = []Part{textPart(out.Text)}
+		// The prose part comes FIRST and always. Widgets are enrichment
+		// on top of a complete answer: any A2A client may ignore parts it
+		// does not understand, and other clients will — so nothing a
+		// reader needs may exist only inside a data part. See widgets.go.
+		//
+		// The status message deliberately keeps prose alone: it is the
+		// short "here is what happened" summary, while the artifact is
+		// the result being handed over.
+		artifactParts := append([]Part{textPart(out.Text)}, widgetParts(out.ToolCalls)...)
 		task.Artifacts = []Artifact{{
 			ArtifactID:  uuid.NewString(),
 			Name:        skillID,
 			Description: def.Name + " result",
-			Parts:       []Part{textPart(out.Text)},
+			Parts:       artifactParts,
 		}}
 	}
 	task.History = append(task.History, agentMsg)
