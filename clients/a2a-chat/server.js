@@ -17,6 +17,10 @@ import {
 } from '@a2a-js/sdk/client';
 import { Role, roleToJSON, taskStateToJSON } from '@a2a-js/sdk';
 import { isJsonRpcError, isRestError } from '@a2a-js/sdk/errors';
+// The widget registry's media types. widgets.js touches the DOM only
+// inside its render functions, so importing it here for the constants
+// costs nothing and keeps one source of truth.
+import { MEDIA_TYPES } from './public/widgets.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PUBLIC_DIR = path.join(__dirname, 'public');
@@ -376,7 +380,17 @@ const server = createServer(async (req, res) => {
             tenant: '',
             message,
             configuration: {
-              acceptedOutputModes: ['text/plain'],
+              // Declare what this client can actually render. The agent
+              // sends a data part only for a type listed here, and only
+              // then tells its model the data is being displayed — so
+              // this list is what stops the reply repeating, in prose,
+              // the very cards drawn beneath it.
+              //
+              // Imported rather than restated: the renderer's registry
+              // is the one place that knows what has a renderer, and a
+              // list that drifts from it either asks for content nothing
+              // can draw or misses content that could have been.
+              acceptedOutputModes: ['text/plain', ...Object.values(MEDIA_TYPES)],
               taskPushNotificationConfig: undefined,
               historyLength: undefined,
               returnImmediately: false,

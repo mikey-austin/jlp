@@ -57,7 +57,7 @@ var renderableTools = map[string]string{
 // to recover, say, the explanation a gated correction is missing — would
 // make this the ninth surface that gate has leaked through. See
 // TestGatedCorrectionNeverReachesADataPart.
-func widgetParts(calls []agentrun.ToolCall) []Part {
+func widgetParts(calls []agentrun.ToolCall, cfg *sendMessageConfiguration) []Part {
 	type pending struct {
 		media string
 		value any
@@ -67,6 +67,14 @@ func widgetParts(calls []agentrun.ToolCall) []Part {
 
 	for _, call := range calls {
 		media, renderable := renderableTools[call.Name]
+		if renderable && !cfg.accepted(media) {
+			// The client did not say it can render this. Sending it
+			// anyway would hand a stranger a payload it can only display
+			// as a JSON blob — and would break the promise the system
+			// prompt makes below, since the prose may have deferred to a
+			// card that never appeared.
+			continue
+		}
 		if !renderable || call.IsError {
 			// A failed tool has an error string where its data should be;
 			// rendering that as a widget would present a failure as
@@ -202,4 +210,35 @@ func opName(op diff.Op) string {
 	default:
 		return "equal"
 	}
+}
+
+// renderedMediaLabels names, in the agent's own terms, the structured
+// output the client has said it will display.
+//
+// It exists to stop the duplication that made widgets annoying rather
+// than useful: without it the model writes a numbered list of the very
+// priorities being drawn as bars beneath it, because it has no idea the
+// data is also being shown. Telling it turns the prose into what a
+// person would actually write — "grammar is the urgent one" above the
+// chart, not the chart in words.
+//
+// Deliberately keyed on what the CLIENT accepted, not on what the agent
+// happened to call: the instruction is only safe when we know something
+// will be rendered.
+func renderedMediaLabels(cfg *sendMessageConfiguration) []string {
+	labels := map[string]string{
+		mediaCorrection: "corrections (with the diff highlighted)",
+		mediaVocabulary: "vocabulary entries",
+		mediaPriorities: "learning priorities (as a ranked chart)",
+		mediaLesson:     "the lesson plan",
+	}
+	// Stable order so the same request produces the same prompt, which
+	// keeps prompt caching effective and traces comparable.
+	var out []string
+	for _, media := range []string{mediaCorrection, mediaVocabulary, mediaPriorities, mediaLesson} {
+		if cfg.accepted(media) {
+			out = append(out, labels[media])
+		}
+	}
+	return out
 }

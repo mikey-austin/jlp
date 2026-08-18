@@ -211,6 +211,31 @@ func (s *Server) systemFor(def skillDef) string {
 	return def.SystemWithoutTools
 }
 
+// withRenderingNote appends, to the system prompt, a note naming the
+// structured output this client will display as cards.
+//
+// Without it the model has no idea its data is also being drawn, so it
+// writes out the very list being rendered beneath it — the duplication
+// that made the first version of widgets tiring to read rather than
+// useful. With it, the prose does the job prose is good at: which of
+// those three matters most, and what to do about it.
+//
+// Appended only when the client actually accepted something renderable.
+// A client that cannot display cards must keep getting prose that stands
+// on its own, and telling that agent to "refer to the cards" would
+// produce an answer referring to something the reader cannot see.
+func withRenderingNote(system string, cfg *sendMessageConfiguration) string {
+	labels := renderedMediaLabels(cfg)
+	if len(labels) == 0 {
+		return system
+	}
+	note := "\n\nDISPLAY: this client renders structured results as cards below your reply — " +
+		strings.Join(labels, ", ") + ". Do not repeat their contents as lists or tables. " +
+		"Refer to them and say what they mean: which item matters most, what changed, what to do next. " +
+		"Write as if the reader is looking at them."
+	return system + note
+}
+
 // taskRecord is what Server.tasks caches per task id — see that field's
 // own doc comment on why this is a response cache, not a second source
 // of truth. Identity is the identity that CREATED the task (never one
@@ -321,7 +346,7 @@ func (s *Server) handleSendMessage(ctx context.Context, identity learner.Identit
 		Agent:         def.Agent,
 		PromptName:    def.PromptName,
 		PromptVersion: def.PromptVersion,
-		System:        s.systemFor(def),
+		System:        withRenderingNote(s.systemFor(def), p.Configuration),
 		Messages:      []ai.ToolMessage{{Role: "user", Text: input}},
 		Identity:      identity,
 		SessionID:     sessionFrom(p),
@@ -388,7 +413,7 @@ func (s *Server) handleSendMessage(ctx context.Context, identity learner.Identit
 		// The status message deliberately keeps prose alone: it is the
 		// short "here is what happened" summary, while the artifact is
 		// the result being handed over.
-		artifactParts := append([]Part{textPart(out.Text)}, widgetParts(out.ToolCalls)...)
+		artifactParts := append([]Part{textPart(out.Text)}, widgetParts(out.ToolCalls, p.Configuration)...)
 		task.Artifacts = []Artifact{{
 			ArtifactID:  uuid.NewString(),
 			Name:        skillID,

@@ -2,6 +2,7 @@ package a2a
 
 import (
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/mikeyaustin/jlp/internal/tools"
@@ -45,7 +46,7 @@ func (s *Server) handleAgentCard(w http.ResponseWriter, r *http.Request) {
 			Tags:        append(append([]string(nil), def.Tags...), toolTags(s.reg, def.Agent)...),
 			Examples:    def.Examples,
 			InputModes:  []string{textMode},
-			OutputModes: []string{textMode},
+			OutputModes: outputModesFor(s.reg, def.Agent),
 		})
 	}
 	writeJSON(w, http.StatusOK, AgentCard{
@@ -126,4 +127,31 @@ func toolTags(reg *tools.Registry, agent string) []string {
 		tags = append(tags, "tool:"+d.Name)
 	}
 	return tags
+}
+
+// outputModesFor is every media type this skill can actually emit:
+// text/plain always, plus one entry per renderable tool its agent is
+// currently permitted.
+//
+// Derived from the live registry rather than declared as a literal, for
+// the same reason descriptionFor is: an agent with no tools Allow()ed
+// produces prose and nothing else, and the card must say so. A client
+// reads this to decide what to put in acceptedOutputModes, so an
+// over-claim here means asking for content that never arrives.
+func outputModesFor(reg *tools.Registry, agent string) []string {
+	modes := []string{textMode}
+	seen := map[string]bool{textMode: true}
+	// Iterated in the registry's own definition order, then sorted, so
+	// the card is byte-identical across calls — it is cached and
+	// compared by clients.
+	for _, def := range reg.DefsFor(agent) {
+		media, renderable := renderableTools[def.Name]
+		if !renderable || seen[media] {
+			continue
+		}
+		seen[media] = true
+		modes = append(modes, media)
+	}
+	sort.Strings(modes[1:])
+	return modes
 }

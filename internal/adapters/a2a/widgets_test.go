@@ -25,7 +25,7 @@ func TestGatedCorrectionNeverReachesADataPart(t *testing.T) {
 	// answer-bearing fields are already blank.
 	gated := `[{"id":"c1","original":"昨日、映画を見行った","type":"particle","severity":"minor","status":"presented","attempts":2}]`
 
-	parts := widgetParts([]agentrun.ToolCall{{Name: "get_recent_errors", Result: gated}})
+	parts := widgetParts([]agentrun.ToolCall{{Name: "get_recent_errors", Result: gated}}, acceptsEverything)
 	if len(parts) != 1 {
 		t.Fatalf("got %d parts, want 1", len(parts))
 	}
@@ -57,7 +57,7 @@ func TestGatedCorrectionNeverReachesADataPart(t *testing.T) {
 func TestUngatedCorrectionCarriesSpans(t *testing.T) {
 	ungated := `[{"id":"c1","original":"映画を見行った","replacement":"映画を見に行った","type":"particle","severity":"minor","explanation_en":"needs に","status":"accepted"}]`
 
-	parts := widgetParts([]agentrun.ToolCall{{Name: "get_correction_history", Result: ungated}})
+	parts := widgetParts([]agentrun.ToolCall{{Name: "get_correction_history", Result: ungated}}, acceptsEverything)
 	if len(parts) != 1 {
 		t.Fatalf("got %d parts, want 1", len(parts))
 	}
@@ -93,7 +93,7 @@ func TestRepeatedToolCallsCollapseToTheLastOne(t *testing.T) {
 		{Name: "get_vocabulary_history", Result: `[{"expression":"second"}]`},
 		{Name: "get_vocabulary_history", Result: `[{"expression":"third"}]`},
 	}
-	parts := widgetParts(calls)
+	parts := widgetParts(calls, acceptsEverything)
 	if len(parts) != 1 {
 		t.Fatalf("got %d parts, want 1", len(parts))
 	}
@@ -115,7 +115,7 @@ func TestNonRenderableAndFailedToolsProduceNoWidget(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if parts := widgetParts([]agentrun.ToolCall{c.call}); len(parts) != 0 {
+			if parts := widgetParts([]agentrun.ToolCall{c.call}, acceptsEverything); len(parts) != 0 {
 				t.Errorf("got %d parts, want none: %+v", len(parts), parts)
 			}
 		})
@@ -129,7 +129,7 @@ func TestWidgetsKeepFirstAppearanceOrder(t *testing.T) {
 		{Name: "get_learning_priorities", Result: `[{"subject":"は/が"}]`},
 		{Name: "get_vocabulary_history", Result: `[{"expression":"読書"}]`},
 		{Name: "get_learning_priorities", Result: `[{"subject":"は/が"}]`},
-	})
+	}, acceptsEverything)
 	if len(parts) != 2 {
 		t.Fatalf("got %d parts, want 2", len(parts))
 	}
@@ -137,3 +137,11 @@ func TestWidgetsKeepFirstAppearanceOrder(t *testing.T) {
 		t.Errorf("order = %q, %q; want priorities then vocabulary", parts[0].MediaType, parts[1].MediaType)
 	}
 }
+
+// acceptsEverything is the configuration a client sends when it can
+// render all four widget types — the case these tests are about. What
+// happens when it accepts less is TestClientOnlyGetsWhatItAccepts'
+// business.
+var acceptsEverything = &sendMessageConfiguration{AcceptedOutputModes: []string{
+	textMode, mediaCorrection, mediaVocabulary, mediaPriorities, mediaLesson,
+}}

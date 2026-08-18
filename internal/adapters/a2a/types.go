@@ -265,14 +265,44 @@ type AgentCard struct {
 type sendMessageParams struct {
 	Message  Message        `json:"message"`
 	Metadata map[string]any `json:"metadata,omitempty"`
-	// Configuration is accepted and ignored: its fields
-	// (acceptedOutputModes, historyLength, returnImmediately,
-	// taskPushNotificationConfig) all describe behaviours this adapter
-	// doesn't vary — it is always blocking, always returns the full
-	// (two-message) history, always answers text/plain, and pushes
-	// nothing. Declaring the field keeps a client that sends one from
-	// looking like it was misunderstood.
-	Configuration json.RawMessage `json:"configuration,omitempty"`
+	// Configuration carries the client's own preferences. Only
+	// acceptedOutputModes is honoured; historyLength,
+	// returnImmediately and taskPushNotificationConfig describe
+	// behaviours this adapter does not vary (always blocking, always the
+	// full two-message history, pushes nothing), and are accepted so a
+	// client that sends them does not look misunderstood.
+	Configuration *sendMessageConfiguration `json:"configuration,omitempty"`
+}
+
+// sendMessageConfiguration is the subset of the spec's
+// SendMessageConfiguration this adapter reads.
+//
+// AcceptedOutputModes is what stops a client being handed content it
+// cannot render — and, just as importantly, what lets the agent be told
+// its structured output WILL be displayed, so its prose can interpret
+// the data instead of restating it. See outputModes below.
+type sendMessageConfiguration struct {
+	AcceptedOutputModes []string `json:"acceptedOutputModes,omitempty"`
+}
+
+// accepted reports whether the client will render mediaType.
+//
+// A client that sends no configuration, or an empty list, gets text
+// only: silence means "the default", and the card's
+// defaultOutputModes says that is text/plain. Guessing otherwise would
+// send JLP-shaped payloads to strangers who can only display them as a
+// blob — and would make it unsafe for the prose to ever defer to a
+// widget, since we would not know one had been rendered.
+func (c *sendMessageConfiguration) accepted(mediaType string) bool {
+	if c == nil || len(c.AcceptedOutputModes) == 0 {
+		return mediaType == textMode
+	}
+	for _, m := range c.AcceptedOutputModes {
+		if m == mediaType {
+			return true
+		}
+	}
+	return false
 }
 
 // taskIDParams is the `params` of GetTask and CancelTask: the spec
