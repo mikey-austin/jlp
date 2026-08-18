@@ -23,12 +23,17 @@ import (
 	"github.com/mikeyaustin/jlp/internal/tools"
 )
 
-// defaultMaxTurns is RunInput.MaxTurns' default when left at zero —
-// the task brief's "hard cap, default 8": enough turns for a real
-// investigate-then-answer conversation, low enough that a model stuck
-// looping tool calls fails fast and visibly rather than burning cost
+// defaultMaxTurns is RunInput.MaxTurns' default when left at zero — a
+// hard cap that keeps a model stuck looping tool calls from burning cost
 // silently.
-const defaultMaxTurns = 8
+//
+// Raised from 8 to 10 when the A2A specialist agents were granted tools:
+// analyse_learner genuinely needs 5-8 turns to read the learner's
+// corrections, grammar history, priorities and vocabulary before it can
+// say anything useful, so 8 left almost no headroom. The last of these
+// turns is spent answering rather than investigating (see Run), so this
+// is 9 turns of gathering plus a forced wrap-up.
+const defaultMaxTurns = 10
 
 // RunInput is everything Run needs to drive one agent-run loop.
 // Messages is the conversation so far (typically just the rendered
@@ -142,12 +147,24 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 	var toolCalls []ToolCall
 
 	for turn := 1; turn <= maxTurns; turn++ {
+		// The final turn is offered NO tools, so the model must answer
+		// from what it has already gathered.
+		//
+		// Before this, running out of turns failed the whole run: the
+		// caller got nothing, after paying for every tool call along the
+		// way. An agent that has read the learner's corrections, grammar
+		// history and priorities has plenty to say — it just had not been
+		// asked to say it yet.
+		turnTools := defs
+		if turn == maxTurns {
+			turnTools = nil
+		}
 		resp, err := r.caller.CallWithTools(ctx, ai.ToolRequest{
 			PromptName:    in.PromptName,
 			PromptVersion: in.PromptVersion,
 			System:        in.System,
 			Messages:      messages,
-			Tools:         defs,
+			Tools:         turnTools,
 			IdentityID:    in.Identity,
 			SessionID:     in.SessionID,
 			Agent:         in.Agent,
@@ -227,7 +244,10 @@ func (r *Runner) Run(ctx context.Context, in RunInput) (RunOutput, error) {
 		messages = append(messages, ai.ToolMessage{Role: "tool", Results: results})
 
 		if turn == maxTurns {
-			errMsg := fmt.Sprintf("agent run exceeded max turns (%d) while the model still requested tool calls", maxTurns)
+			// Only reachable when a provider returned tool calls for a
+			// request that offered it none — a broken provider rather
+			// than a busy agent, and worth failing loudly.
+			errMsg := fmt.Sprintf("agent run exceeded max turns (%d): the model requested tool calls on a turn that offered none", maxTurns)
 			r.finish(ctx, in.Identity, runID, "failed", errMsg, "", turn)
 			return RunOutput{RunID: runID}, fmt.Errorf("agentrun: %s", errMsg)
 		}

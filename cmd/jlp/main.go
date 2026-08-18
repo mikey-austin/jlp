@@ -277,18 +277,7 @@ func main() {
 		registerTools(toolRegistry, tools.WritingTools(writingSvc))
 		registerTools(toolRegistry, tools.VocabularyTools(vocabSvc))
 		registerTools(toolRegistry, tools.AnalyticsTools(prioRepo, grammarRepo))
-		// "teacher" (agentName in internal/agent/teacher/teacher.go) may
-		// only READ the learner's context to decide what to emphasize —
-		// never mutate it (that's what the single-shot path's own
-		// RequestFeedback/vocab.DetectProduction calls already do, on
-		// the application layer's own authority, not the model's).
-		toolRegistry.Allow("teacher",
-			"get_active_session", "get_session_context",
-			"get_learner_profile", "get_recent_errors", "get_correction_history",
-			"get_recent_writing",
-			"get_vocabulary_history", "search_vocabulary",
-			"get_learning_priorities", "get_grammar_history",
-		)
+		allowA2AAgents(toolRegistry)
 
 		// agentRunRepo/runner back the Task 2 agent-run loop: every
 		// tool-calling conversation any agent drives (today: the
@@ -708,4 +697,55 @@ func registerTools(reg *tools.Registry, ts []tools.Tool) {
 	for _, t := range ts {
 		reg.Register(t)
 	}
+}
+
+// allowA2AAgents grants every agent behind an A2A skill its tool
+// allowlist — the ONE definition of who may call what.
+//
+// A function rather than inline statements so that cmd/jlp's own tests
+// assert against the same grants main actually applies. A test that
+// restated this list would pass while the real wiring drifted, which is
+// precisely the failure it would exist to catch.
+func allowA2AAgents(reg *tools.Registry) {
+	// "teacher" (agentName in internal/agent/teacher/teacher.go) may
+	// only READ the learner's context to decide what to emphasize —
+	// never mutate it (that's what the single-shot path's own
+	// RequestFeedback/vocab.DetectProduction calls already do, on
+	// the application layer's own authority, not the model's).
+	reg.Allow("teacher",
+		"get_active_session", "get_session_context",
+		"get_learner_profile", "get_recent_errors", "get_correction_history",
+		"get_recent_writing",
+		"get_vocabulary_history", "search_vocabulary",
+		"get_learning_priorities", "get_grammar_history",
+	)
+	// "summary" and "lesson" are the agents behind A2A's
+	// analyse_learner and plan_lesson skills (internal/adapters/a2a's
+	// skillDefs). Until now neither was Allow()ed anything, so both
+	// answered from the caller's message alone — specialists that
+	// could not consult the thing they specialise in. The agent card
+	// disclosed that honestly (text/plain only, no widget types), but
+	// the honest disclosure of a useless capability is still a
+	// useless capability.
+	//
+	// No session tools for either: a remote A2A caller has no session
+	// of ours, and both skills are about the learner over time rather
+	// than about one sitting.
+	//
+	// Read-only, exactly as above. The mutating tools stay allowed to
+	// nobody — see where LearningTools is registered below. That
+	// means plan_lesson produces a plan in prose and cannot persist
+	// one, so A2A never emits the lesson widget; granting a mutation
+	// to make a card appear would reverse a deliberate boundary for a
+	// cosmetic reason.
+	reg.Allow("summary",
+		"get_learner_profile", "get_recent_errors", "get_correction_history",
+		"get_grammar_history", "get_learning_priorities",
+		"get_vocabulary_history", "get_recent_writing",
+	)
+	reg.Allow("lesson",
+		"get_learner_profile", "get_recent_errors", "get_correction_history",
+		"get_grammar_history", "get_learning_priorities",
+		"get_vocabulary_history", "search_vocabulary",
+	)
 }

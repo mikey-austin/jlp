@@ -48,7 +48,7 @@ function renderCard(card) {
     els.cardDetails.hidden = true;
     els.cardSkills.hidden = true;
     setConnected(false);
-    els.skillSelect.innerHTML = '<option value="">(default)</option>';
+    els.skillSelect.innerHTML = '<option value="">(no skill — the agent\'s default)</option>';
     return;
   }
   setConnected(true);
@@ -64,7 +64,13 @@ function renderCard(card) {
   els.cardDetails.hidden = false;
 
   els.skillsList.innerHTML = '';
-  els.skillSelect.innerHTML = '<option value="">(default — agent picks)</option>';
+  // NOT "agent picks": sending no skill means the request carries no
+  // skill metadata at all, and the agent falls back to whatever it has
+  // hardcoded as its default (JLP: the chat skill, every time). Nothing
+  // examines the message and chooses. Saying otherwise made it look like
+  // specialists were being consulted when only the default ever ran —
+  // which is exactly how a JLP user concluded hand-off was broken.
+  els.skillSelect.innerHTML = '<option value="">(no skill — the agent\'s default)</option>';
   for (const skill of card.skills || []) {
     const li = document.createElement('li');
     li.className = 'skill-item';
