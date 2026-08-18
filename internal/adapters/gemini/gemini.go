@@ -164,6 +164,12 @@ type part struct {
 	Text             string            `json:"text,omitempty"`
 	FunctionCall     *functionCall     `json:"functionCall,omitempty"`
 	FunctionResponse *functionResponse `json:"functionResponse,omitempty"`
+	// ThoughtSignature is Gemini 3's signature over a functionCall part.
+	// It must be echoed back verbatim when that call reappears in a
+	// later turn's history, or the request is rejected with "Function
+	// call is missing a thought_signature in functionCall parts". It
+	// travels through the port as ai.ToolInvocation.ProviderState.
+	ThoughtSignature string `json:"thoughtSignature,omitempty"`
 }
 
 type functionCall struct {
@@ -610,6 +616,9 @@ func (g *generator) CallWithTools(ctx context.Context, req ai.ToolRequest) (ai.T
 					ID:        fmt.Sprintf("call_%d", i),
 					Name:      p.FunctionCall.Name,
 					Arguments: p.FunctionCall.Args,
+					// Kept so the next request can hand it back; see
+					// part.ThoughtSignature.
+					ProviderState: p.ThoughtSignature,
 				})
 			}
 		}
@@ -659,7 +668,11 @@ func toGeminiContents(msgs []ai.ToolMessage) []content {
 			}
 			for _, inv := range m.Invocations {
 				nameByID[inv.ID] = inv.Name
-				parts = append(parts, part{FunctionCall: &functionCall{Name: inv.Name, Args: inv.Arguments}})
+				parts = append(parts, part{
+					FunctionCall: &functionCall{Name: inv.Name, Args: inv.Arguments},
+					// Verbatim, or Gemini rejects the whole request.
+					ThoughtSignature: inv.ProviderState,
+				})
 			}
 			if len(parts) > 0 {
 				out = append(out, content{Role: "model", Parts: parts})

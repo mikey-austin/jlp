@@ -37,6 +37,16 @@ type ToolInvocation struct {
 	ID        string
 	Name      string
 	Arguments json.RawMessage
+	// ProviderState is opaque data the provider attached to THIS call
+	// and requires back verbatim when the call is replayed in a later
+	// turn's history. It is never inspected, logged as meaningful, or
+	// constructed by anything but the adapter that produced it.
+	//
+	// Gemini 3 is why it exists: it signs every functionCall part with a
+	// thoughtSignature and rejects the next request outright if the
+	// signature does not come back ("Function call is missing a
+	// thought_signature"). Providers with no such notion leave it empty.
+	ProviderState string
 }
 
 // ToolResult is the outcome of running one ToolInvocation: ID echoes
