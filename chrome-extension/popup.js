@@ -11,12 +11,51 @@ const DEFAULT_BASE_URL = "http://localhost:8080";
 
 // --- config -----------------------------------------------------------
 
+// jlpFetch is the ONE place this extension decides how it authenticates.
+//
+// Bearer token, not cookies: under APP_AUTH_MODE=oidc the session cookie
+// is SameSite=Lax and never travels from an extension origin, so
+// credentials: "include" silently produced a 401 on every call. Mint a
+// token in JLP under 設定 → APIトークン and paste it into the options
+// page.
+//
+// A missing token is reported as such rather than being sent as an empty
+// Authorization header, which the server would (correctly) refuse with a
+// 401 that says nothing about what is actually wrong.
+async function jlpFetch(cfg, path, init = {}) {
+  if (!cfg.apiToken) {
+    throw new Error("APIトークンが設定されていません。オプションページで設定してください。");
+  }
+  const res = await fetch(`${cfg.baseUrl}${path}`, {
+    ...init,
+    headers: {
+      ...(init.headers || {}),
+      Authorization: `Bearer ${cfg.apiToken}`,
+    },
+  });
+  if (res.status === 401) {
+    throw new Error("APIトークンが無効か、取り消されています。");
+  }
+  if (res.status === 403) {
+    throw new Error("このトークンにはこの操作の権限がありません（スコープ不足）。");
+  }
+  return res;
+}
+
 // loadConfig reads the options page's saved {baseUrl, sessionId} from
 // chrome.storage.sync (or the shim's in-memory stand-in — see
 // shim/chrome-shim.js). sessionId is optional: empty means "use the
 // caller's first session", resolved below.
 async function loadConfig() {
-  return chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL, sessionId: "" });
+  const [synced, local] = await Promise.all([
+    chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL, sessionId: "", chatUrl: "" }),
+    // The token lives in storage.local, NOT sync: a credential that
+    // replicates to every device signed into this Chrome profile is a
+    // different security posture than a base URL, and keeping them in
+    // one store would make that difference invisible.
+    chrome.storage.local.get({ apiToken: "" }),
+  ]);
+  return { ...synced, ...local };
 }
 
 // --- session / document resolution -------------------------------------
@@ -26,9 +65,9 @@ async function loadConfig() {
 // /api/v1/sessions, which returns them newest-first — the most recently
 // created/used session is the reasonable default for a "right-click and
 // correct" flow.
-async function resolveSessionId(baseUrl, configuredSessionId) {
+async function resolveSessionId(cfg, configuredSessionId) {
   if (configuredSessionId) return configuredSessionId;
-  const res = await fetch(`${baseUrl}/api/v1/sessions`, { credentials: "include" });
+  const res = await jlpFetch(cfg, `/api/v1/sessions`);
   if (!res.ok) throw new Error(`sessions request failed: ${res.status}`);
   const sessions = await res.json();
   if (!sessions.length) throw new Error("no JLP sessions exist yet — create one in the app first");
@@ -47,8 +86,8 @@ const docIdPattern = /<textarea[^>]*\bid="editor"[^>]*\bdata-doc-id="([^"]+)"/;
 // creates the document on first view, so this is safe to call before
 // any editing has happened) and regex-extracts data-doc-id from the
 // editor textarea it renders.
-async function resolveDocumentId(baseUrl, sessionId) {
-  const res = await fetch(`${baseUrl}/sessions/${encodeURIComponent(sessionId)}`, { credentials: "include" });
+async function resolveDocumentId(cfg, sessionId) {
+  const res = await jlpFetch(cfg, `/sessions/${encodeURIComponent(sessionId)}`);
   if (!res.ok) throw new Error(`workspace page request failed: ${res.status}`);
   const html = await res.text();
   const match = html.match(docIdPattern);
@@ -77,13 +116,12 @@ async function requestFeedback(text) {
   statusEl.textContent = "読み込み中…";
   statusEl.classList.remove("error-banner");
   try {
-    const { baseUrl, sessionId: configuredSessionId } = await loadConfig();
-    const sessionId = await resolveSessionId(baseUrl, configuredSessionId);
-    const documentId = await resolveDocumentId(baseUrl, sessionId);
+    const cfg = await loadConfig();
+    const sessionId = await resolveSessionId(cfg, cfg.sessionId);
+    const documentId = await resolveDocumentId(cfg, sessionId);
     const body = { document_id: documentId, start: 0, end: runeLength(text), text };
-    const res = await fetch(`${baseUrl}/api/v1/sessions/${encodeURIComponent(sessionId)}/feedback`, {
+    const res = await jlpFetch(cfg, `/api/v1/sessions/${encodeURIComponent(sessionId)}/feedback`, {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -206,7 +244,7 @@ async function saveVocabulary(expression, sourceTitle) {
   statusEl.textContent = "保存中…";
   statusEl.classList.remove("error-banner");
   try {
-    const { baseUrl } = await loadConfig();
+    const cfg = await loadConfig();
     const body = {
       type: "vocabulary.lookup",
       expression,
@@ -216,9 +254,8 @@ async function saveVocabulary(expression, sourceTitle) {
       source: { type: "web", title: sourceTitle || "" },
       client_event_id: crypto.randomUUID(),
     };
-    const res = await fetch(`${baseUrl}/api/v1/vocabulary/events`, {
+    const res = await jlpFetch(cfg, `/api/v1/vocabulary/events`, {
       method: "POST",
-      credentials: "include",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -269,6 +306,63 @@ function wireVocabForm() {
 // (or already-consumed) storage.session state can only ever produce the
 // neutral idle view ("empty-state" below), never a second automatic
 // action.
+// createSession parks the selection in a NEW session and does nothing
+// else — no AI call, no cost, nothing to wait for. It is the "I want to
+// work on this later" action, distinct from 添削, which spends money on
+// corrections right now.
+//
+// The page title becomes the session title because it is the only
+// meaningful name available at right-click time, and an untitled session
+// is unfindable a week later. Purpose is "reading": this text came from
+// something the learner was reading, which is exactly the distinction
+// /sessions shows.
+async function createSession(text, sourceTitle) {
+  const statusEl = document.getElementById("session-status");
+  showView("session-view");
+  statusEl.textContent = "セッションを作成しています…";
+  try {
+    const cfg = await loadConfig();
+    const res = await jlpFetch(cfg, `/api/v1/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: (sourceTitle || "").slice(0, 200) || "ウェブから",
+        purpose: "reading",
+        text,
+      }),
+    });
+    if (!res.ok) throw new Error(`session create failed: ${res.status}`);
+    const sess = await res.json();
+    statusEl.textContent = "";
+    renderCreatedSession(cfg, sess, text);
+    return sess;
+  } catch (err) {
+    statusEl.textContent = String(err.message || err);
+    return null;
+  }
+}
+
+// renderCreatedSession confirms what was made and links straight into
+// it: a "done" with no way through to the thing it made would leave the
+// learner hunting for it in /sessions.
+function renderCreatedSession(cfg, sess, text) {
+  document.getElementById("session-status").textContent =
+    `セッションを作成しました: ${sess.title || ""}`;
+
+  // Shows what was actually parked. A selection routinely picks up
+  // navigation chrome, and finding that out a week later in the editor
+  // is worse than seeing it now.
+  const preview = document.getElementById("session-preview");
+  preview.textContent = text.length > 200 ? `${text.slice(0, 200)}…` : text;
+  preview.hidden = false;
+
+  // A "done" with no way through to the thing it made leaves the learner
+  // hunting for it in /sessions.
+  const link = document.getElementById("session-link");
+  link.href = `${cfg.baseUrl}/sessions/${encodeURIComponent(sess.id)}`;
+  link.hidden = false;
+}
+
 async function init() {
   wireVocabForm();
   const stored = await chrome.storage.session.get({ selection: "", title: "", mode: "" });
@@ -280,6 +374,8 @@ async function init() {
 
   if (mode === "vocab" && text) {
     await saveVocabulary(text, title);
+  } else if (mode === "session" && text) {
+    await createSession(text, title);
   } else if (text) {
     await requestFeedback(text);
   } else {
@@ -302,4 +398,5 @@ window.jlpPopup = {
   requestFeedback,
   renderFeedback,
   saveVocabulary,
+  createSession,
 };

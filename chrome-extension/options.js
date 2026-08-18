@@ -7,9 +7,23 @@
 const DEFAULT_BASE_URL = "http://localhost:8080";
 
 async function loadOptions() {
-  const cfg = await chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL, sessionId: "" });
+  const cfg = await chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL, sessionId: "", chatUrl: "" });
+  // The token is read from storage.local, where saveOptions puts it —
+  // see there for why it does not live in sync with the rest.
+  const { apiToken } = await chrome.storage.local.get({ apiToken: "" });
   document.getElementById("base-url").value = cfg.baseUrl;
   document.getElementById("session-id").value = cfg.sessionId;
+  document.getElementById("chat-url").value = cfg.chatUrl;
+  document.getElementById("api-token").value = apiToken;
+  updateTokensLink(cfg.baseUrl);
+}
+
+// updateTokensLink points the "mint one here" link at whichever JLP this
+// extension is configured against, so it works for a dev instance and
+// the deployed one without editing anything.
+function updateTokensLink(baseUrl) {
+  const link = document.getElementById("tokens-link");
+  if (link) link.href = `${String(baseUrl).replace(/\/+$/, "")}/settings/tokens`;
 }
 
 // requestOriginPermission asks Chrome to grant the optional host
@@ -36,11 +50,21 @@ async function saveOptions(e) {
   e.preventDefault();
   const baseUrl = document.getElementById("base-url").value.trim().replace(/\/+$/, "");
   const sessionId = document.getElementById("session-id").value.trim();
+  const chatUrl = document.getElementById("chat-url").value.trim().replace(/\/+$/, "");
+  const apiToken = document.getElementById("api-token").value.trim();
   const statusEl = document.getElementById("options-status");
 
   await requestOriginPermission(baseUrl);
-  await chrome.storage.sync.set({ baseUrl, sessionId });
-  statusEl.textContent = "保存しました。";
+  await chrome.storage.sync.set({ baseUrl, sessionId, chatUrl });
+  // The token goes to storage.local, NOT sync. sync replicates to every
+  // device signed into this Chrome profile, which is a reasonable place
+  // for a base URL and an unreasonable one for a credential — and
+  // keeping both in one store would hide that difference.
+  await chrome.storage.local.set({ apiToken });
+  updateTokensLink(baseUrl);
+  statusEl.textContent = apiToken
+    ? "保存しました。"
+    : "保存しました（APIトークンが未設定のため、JLPへの操作は失敗します）。";
 }
 
 document.addEventListener("DOMContentLoaded", () => {

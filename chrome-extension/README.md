@@ -15,6 +15,61 @@ No build tooling: plain ES modules/scripts, loaded straight off disk by
 Chrome. `make ext-build` just zips the directory (see below) — there is
 nothing to compile.
 
+## Authentication: an API token, not cookies
+
+Every call sends `Authorization: Bearer <token>`. There is no cookie
+anywhere in this extension, and adding one back would not work.
+
+This is not a preference. Under `APP_AUTH_MODE=oidc` the app's session
+cookie is `SameSite=Lax`, so it never travels from an extension origin —
+`credentials: "include"` produced a silent 401 on every call, and the
+extension was dead from the OIDC cutover until this change. No amount of
+host permissions fixes that; it was never a CORS problem.
+
+**Setup:** mint a token in JLP under 設定 → APIトークン and paste it into
+this extension's options page. It needs three scopes:
+
+| Scope | Used by |
+|---|---|
+| `vocabulary:write` | JLPに語彙を保存 |
+| `sessions:write` | JLPで新しいセッション |
+| `feedback:request` | JLPで添削 |
+
+`sessions:write` and `feedback:request` are separate on purpose: parking
+text costs nothing, while every feedback request spends real money on a
+model call. A token that only files things away cannot run up a bill.
+
+The token is stored in `chrome.storage.local`, deliberately not `.sync`
+where the base URL and default session live — a credential replicated to
+every device signed into the Chrome profile is a different posture than
+a URL.
+
+## The four actions
+
+Select text anywhere, right-click:
+
+| Menu item | What it does |
+|---|---|
+| JLPで添削 | Asks for corrections on the selection, in your default (or most recent) session. Costs a model call. |
+| JLPで新しいセッション | Creates a new session with the selection as its text. No AI call, nothing to wait for — the "work on this later" action. |
+| JLPに語彙を保存 | Saves the selection as a vocabulary lookup. |
+| JLPでチャット | Opens the deployed A2A chat with the selection pre-filled. |
+
+「JLPでチャット」 appears **only when a chat URL is configured** in the
+options page — a menu item that cannot work is worse than an absent one.
+
+### Known failure mode for the chat action
+
+It opens the deployed chat, so it needs that service running AND an
+Authelia session in that tab. Signed out, you land on a login page with
+your text in the URL. That is the accepted cost of having one chat
+implementation rather than a second one embedded here; the extension
+contains no A2A code at all.
+
+The chat pre-fills the composer and does **not** send. A right-click
+that silently spends money on a model call is a spend you never
+confirmed, and a web selection usually needs a trim first.
+
 ## Install (manual, `chrome://extensions`)
 
 1. `make up && make migrate && make seed` (see the root README) so

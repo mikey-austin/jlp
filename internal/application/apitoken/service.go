@@ -45,8 +45,23 @@ const ScopeVocabularyWrite = "vocabulary:write"
 // app that only uploads words must never be handed this by default.
 const ScopeA2AUse = "a2a:use"
 
+// ScopeSessionsWrite lets a client create a session, optionally with
+// the text it is about — the browser extension's "park this selection
+// for later".
+const ScopeSessionsWrite = "sessions:write"
+
+// ScopeFeedbackRequest lets a client ask for corrections on a piece of
+// text.
+//
+// Separate from sessions:write rather than folded into one
+// "writing:review" scope, because the two grants differ in a way worth
+// being able to withhold: parking text costs nothing, while every
+// feedback request spends real money on a model call. A client that
+// only files things away should not be able to run up a bill.
+const ScopeFeedbackRequest = "feedback:request"
+
 // Scopes is every scope a token may be minted with.
-var Scopes = []string{ScopeVocabularyWrite, ScopeA2AUse}
+var Scopes = []string{ScopeVocabularyWrite, ScopeSessionsWrite, ScopeFeedbackRequest, ScopeA2AUse}
 
 // tokenPrefix marks a JLP credential wherever it turns up — a log line,
 // a config file, a secret scanner's ruleset.

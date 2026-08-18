@@ -159,6 +159,10 @@ func requiredScope(r *http.Request) (string, bool) {
 		return apitoken.ScopeVocabularyWrite, true
 	case r.Method == http.MethodPost && p == "/api/v1/vocabulary/events":
 		return apitoken.ScopeVocabularyWrite, true
+	case r.Method == http.MethodPost && p == "/api/v1/sessions":
+		return apitoken.ScopeSessionsWrite, true
+	case r.Method == http.MethodPost && strings.HasPrefix(p, "/api/v1/sessions/") && strings.HasSuffix(p, "/feedback"):
+		return apitoken.ScopeFeedbackRequest, true
 	case strings.HasPrefix(p, "/a2a"):
 		return apitoken.ScopeA2AUse, true
 	}

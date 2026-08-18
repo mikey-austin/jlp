@@ -20,9 +20,20 @@
     <label>Base URL
       <input type="url" id="base-url" required placeholder="http://localhost:8080">
     </label>
+    <label>APIトークン
+      <input type="password" id="api-token" placeholder="jlp_…" autocomplete="off">
+    </label>
+    <p class="hint">
+      JLPの<a id="tokens-link" href="#" target="_blank" rel="noopener">設定 → APIトークン</a>で発行してください。
+      必要な権限: <code>vocabulary:write</code>、<code>sessions:write</code>、<code>feedback:request</code>。
+    </p>
     <label>デフォルトセッション ID（任意）
       <input type="text" id="session-id" placeholder="未設定なら最新のセッションを使用">
     </label>
+    <label>チャットURL（任意）
+      <input type="url" id="chat-url" placeholder="https://a2a.lan.jackiemclean.net">
+    </label>
+    <p class="hint">未設定の場合、右クリックメニューに「JLPでチャット」は表示されません。</p>
     <button type="submit">保存</button>
   </form>
   <p id="options-status" class="hint"></p>

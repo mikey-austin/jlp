@@ -10,8 +10,8 @@
 //
 // Deliberately tiny: get/set/remove on two independent in-memory areas,
 // both callback- and Promise-style (mirroring the real API, which
-// supports both), no persistence across reloads, no chrome.storage.local,
-// no onChanged. That's the full surface popup.js/options.js touch.
+// supports both), no persistence across reloads, no onChanged. That's
+// the full surface popup.js/options.js touch.
 (function () {
   if (window.chrome && window.chrome.storage) return;
 
@@ -50,7 +50,13 @@
   }
 
   window.chrome = window.chrome || {};
-  window.chrome.storage = { sync: makeArea(), session: makeArea() };
+  // local joins sync/session because the API token lives there — see
+  // options.js's saveOptions for why a credential does not belong in
+  // sync. Without it here, every popup.js call throws before it can even
+  // build a request, and the documented verification protocol (which
+  // drives popup.js through this shim) could not exercise the extension
+  // at all.
+  window.chrome.storage = { sync: makeArea(), session: makeArea(), local: makeArea() };
   window.chrome.runtime = {
     getURL: (path) => path,
     sendMessage: () => {},

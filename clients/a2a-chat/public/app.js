@@ -419,6 +419,27 @@ els.composerInput.addEventListener('keydown', (ev) => {
 });
 
 renderEmptyState();
+// ?q= pre-fills the composer — the browser extension's "chat about this
+// selection" lands here.
+//
+// It deliberately does NOT send. A right-click that silently spends
+// money on a model call is a spend the reader never confirmed, and a web
+// selection routinely picks up navigation chrome and stray whitespace
+// worth editing out first. The text is put in front of you with the
+// cursor at the end; pressing Send stays your decision.
+function prefillFromQuery() {
+  const q = new URLSearchParams(window.location.search).get('q');
+  if (!q || !els.composerInput) return;
+  els.composerInput.value = q;
+  els.composerInput.focus();
+  els.composerInput.setSelectionRange(q.length, q.length);
+  // Drop the parameter from the address bar so a refresh does not
+  // resurrect text already sent or cleared, and so the selection stops
+  // living in browser history longer than it needs to.
+  window.history.replaceState({}, '', window.location.pathname);
+}
+
+prefillFromQuery();
 refreshState().catch((err) => showConnectError(String(err)));
 
 // renderableMedia reports whether this client has a widget for a part.

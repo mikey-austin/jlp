@@ -15,10 +15,13 @@
 package httpx
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -28,6 +31,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/correction"
+	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/domain/writing"
@@ -283,6 +287,15 @@ type sessionCreateRequest struct {
 	TeacherMode         string `json:"teacher_mode"`
 	ExplanationLanguage string `json:"explanation_language"`
 	Strictness          string `json:"strictness"`
+	// Text, when present, becomes the new session's document — the
+	// browser extension's "park this selection for later" action, and
+	// useful to any client that has the writing before it has a session
+	// to put it in.
+	//
+	// Optional, and absent behaves exactly as it always has, so no
+	// existing caller changes. Nothing is generated and no AI is called:
+	// this is a place to put text, not a request to do anything with it.
+	Text string `json:"text,omitempty"`
 }
 
 // apiSessionsCreate handles POST /api/v1/sessions via
@@ -301,6 +314,17 @@ func (s *Server) apiSessionsCreate(w http.ResponseWriter, r *http.Request) {
 		Strictness:          req.Strictness,
 	}
 	sess, err := s.opts.Sessions.Create(r.Context(), ident.ID, req.Title, req.Purpose, profile)
+	if err == nil && strings.TrimSpace(req.Text) != "" {
+		// Best effort, and deliberately non-fatal: the session exists and
+		// is the thing the caller asked for. Failing the whole request
+		// here would leave a created session behind while reporting an
+		// error, which is the worst of both — the caller retries and gets
+		// a second session.
+		if err := s.storeInitialText(r.Context(), ident.ID, sess.ID, req.Text); err != nil {
+			slog.Error("api: could not store the session's initial text",
+				"err", err, "session_id", sess.ID, "identity", ident.ID)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, sessions.ErrInvalidTitle) {
 			writeAPIError(w, http.StatusBadRequest, sessions.ErrInvalidTitle.Error())
@@ -577,4 +601,20 @@ func (s *Server) apiVocabularyIngest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, toVocabularyItemDTO(item))
+}
+
+// storeInitialText writes text into a freshly created session's
+// document. Open is what creates that document; Autosave is the same
+// path the editor itself writes through, so the text lands exactly where
+// the workspace expects to find it rather than in a shape only this
+// endpoint produces.
+func (s *Server) storeInitialText(ctx context.Context, identity learner.IdentityID, sid session.ID, text string) error {
+	doc, err := s.opts.Writing.Open(ctx, identity, sid)
+	if err != nil {
+		return fmt.Errorf("open document: %w", err)
+	}
+	if _, err := s.opts.Writing.Autosave(ctx, identity, doc.ID, text); err != nil {
+		return fmt.Errorf("autosave: %w", err)
+	}
+	return nil
 }
