@@ -284,3 +284,9 @@ func TestAgentUsageZeroRequestsReturnsZeroRate(t *testing.T) {
 		t.Fatalf("AgentUsage() = %+v, want SuccessRate 0", got)
 	}
 }
+
+// PracticeStats backs 学習's 練習 section; these tests do not assert on
+// it, so an empty value keeps them honest about what they DO cover.
+func (f fakeAnalyticsRepo) PracticeStats(context.Context, learner.IdentityID) (storage.PracticeStats, error) {
+	return storage.PracticeStats{}, nil
+}

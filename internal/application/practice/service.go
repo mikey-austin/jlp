@@ -150,6 +150,18 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID, opts S
 		return s.persist(ctx, identity, wordRecall(item))
 	}
 
+	// A due WORD is drilled before a due concept is looked for, because
+	// both come from the same queue and the queue is already ordered by
+	// how overdue each item is. Skipped under SkipWords for the same
+	// reason the recent queue is.
+	if !opts.SkipWords {
+		if item, ok, err := s.dueWord(ctx, identity); err != nil {
+			return exercise.Exercise{}, fmt.Errorf("practice: due word: %w", err)
+		} else if ok {
+			return s.persist(ctx, identity, wordRecall(item))
+		}
+	}
+
 	concept, ok, err := s.dueConcept(ctx, identity)
 	if err != nil {
 		return exercise.Exercise{}, fmt.Errorf("practice: due concept: %w", err)
@@ -227,10 +239,64 @@ func (s *Service) recentWord(ctx context.Context, identity learner.IdentityID) (
 		return vocabulary.Item{}, false, err
 	}
 	for _, item := range items {
-		// A word with no reading AND no meaning has nothing on the back
-		// of the card. Skipped rather than shown, since a flip card that
-		// reveals nothing teaches nothing.
-		if strings.TrimSpace(item.Reading) != "" || strings.TrimSpace(item.Meaning) != "" || strings.TrimSpace(item.MeaningEN) != "" {
+		if hasCardBack(item) {
+			return item, true, nil
+		}
+	}
+	return vocabulary.Item{}, false, nil
+}
+
+// hasCardBack reports whether item has anything to reveal. A flip card
+// that turns over to nothing teaches nothing, so such a word is skipped
+// rather than shown — by both the recent queue and the due queue, from
+// one definition so the two cannot disagree about what is drillable.
+func hasCardBack(item vocabulary.Item) bool {
+	return strings.TrimSpace(item.Reading) != "" ||
+		strings.TrimSpace(item.Meaning) != "" ||
+		strings.TrimSpace(item.MeaningEN) != ""
+}
+
+// dueWord returns the most overdue word in identity's review queue.
+//
+// The queue schedules words as ("expression", vocabulary id) — the type
+// handleVocabularyProducedCorrectly has always used and the one a
+// drilled word now gets too, so a word has ONE schedule however it was
+// practised. Before this, an expression coming due could never be
+// drilled: dueConcept skipped everything that was not a concept, so the
+// queue displayed words on 学習 that nothing would ever resurface.
+//
+// ok is false — with no error — when retrieval or vocab is nil, nothing
+// is due, or no due expression still resolves to a word worth showing.
+func (s *Service) dueWord(ctx context.Context, identity learner.IdentityID) (vocabulary.Item, bool, error) {
+	if s.retrieval == nil || s.vocab == nil {
+		return vocabulary.Item{}, false, nil
+	}
+	due, err := s.retrieval.DueSubjects(ctx, identity, dueSubjectsScanLimit)
+	if err != nil {
+		return vocabulary.Item{}, false, err
+	}
+	// Collected in queue order, then resolved in ONE query — the due list
+	// is mixed (concepts are slugs, words are ids) and a lookup per entry
+	// would be a round trip per non-match.
+	var ids []string
+	for _, item := range due {
+		if item.SubjectType == "expression" {
+			ids = append(ids, item.Subject)
+		}
+	}
+	items, err := s.vocab.GetByIDs(ctx, identity, ids)
+	if err != nil {
+		return vocabulary.Item{}, false, err
+	}
+	byID := make(map[string]vocabulary.Item, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	// Walk ids, not items: the queue's order is the whole point, and a
+	// map has none. A due word whose row is gone (deleted since it was
+	// scheduled) simply falls through, like a stale concept slug does.
+	for _, id := range ids {
+		if item, found := byID[id]; found && hasCardBack(item) {
 			return item, true, nil
 		}
 	}
@@ -384,10 +450,18 @@ func (s *Service) Answer(ctx context.Context, identity learner.IdentityID, exerc
 	}
 
 	evidence := map[string]any{
-		"concept":    ex.ConceptSlug,
-		"type":       ex.Type,
-		"correct":    eval.Correct,
-		"confidence": confidence,
+		"concept": ex.ConceptSlug,
+		"type":    ex.Type,
+		"correct": eval.Correct,
+		// subject_type/subject_ref, not just concept: a word drill has no
+		// ConceptSlug, so a consumer reading "concept" alone treats every
+		// word drill as having no subject and silently does nothing with
+		// it. That is what kept drilled words out of the review schedule
+		// entirely. "concept" stays for events written before this pair
+		// existed — see retrieval's handleQuizAnswered.
+		"subject_type": ex.SubjectType,
+		"subject_ref":  ex.SubjectRef,
+		"confidence":   confidence,
 	}
 	if err := s.rec.Record(ctx, event.LearningEvent{
 		IdentityID: identity,

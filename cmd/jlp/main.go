@@ -126,6 +126,11 @@ func main() {
 		obsUpdater.SetPlanner(teachingPlanner)
 		bus.Subscribe(event.TypeCorrectionPresented, obsUpdater.HandleEvent)
 		bus.Subscribe(event.TypeGrammarConceptEncountered, obsUpdater.HandleEvent)
+		// 練習 feeds the same loop: a concept the learner keeps getting
+		// wrong in drills is the same evidence as one they keep getting
+		// wrong in writing. Without this subscription the whole path
+		// exists and never fires — see learnermodel's classify.
+		bus.Subscribe(event.TypeQuizAnswered, obsUpdater.HandleEvent)
 
 		// settingsSvc is the ports/ai.ModelResolver every AI adapter
 		// buildAIGenerator/buildToolCaller construct below holds and

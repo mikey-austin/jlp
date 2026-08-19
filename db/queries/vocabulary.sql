@@ -259,3 +259,19 @@ WHERE identity_id = $1
   AND successful_productions = 0
 ORDER BY first_seen DESC
 LIMIT sqlc.arg(limit_count);
+
+-- name: GetVocabularyItemsByIDs :many
+-- Resolves a small, caller-supplied set of vocabulary IDs — the bounded
+-- indexed sibling of GetVocabularyItemsByExpressions above, for callers
+-- that hold an ID rather than a surface form. 練習 is the one today: a
+-- retrieval_items row due for review carries the vocabulary ID as its
+-- subject, and the drill needs the word itself to build a card.
+--
+-- deleted_at IS NULL, unlike GetVocabularyItem's deliberate exception:
+-- nothing here is replaying an idempotent write, and a word the learner
+-- removed must not come back as a drill.
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags, deleted_at
+FROM vocabulary_items
+WHERE identity_id = $1 AND deleted_at IS NULL AND id = ANY(sqlc.arg(ids)::uuid[]);

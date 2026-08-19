@@ -219,3 +219,9 @@ func (panicVocabRepo) ListPage(context.Context, learner.IdentityID, string, stor
 func (panicVocabRepo) ListRecentUnpracticed(context.Context, learner.IdentityID, time.Time, int) ([]vocabulary.Item, error) {
 	panic("not used by these tests")
 }
+
+// GetByIDs resolves due words for 練習; the practice double below is the
+// only one that needs real behaviour.
+func (panicVocabRepo) GetByIDs(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	panic("not used by these tests")
+}

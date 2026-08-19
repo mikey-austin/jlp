@@ -101,3 +101,9 @@ func (s *Service) AgentUsage(ctx context.Context, identity learner.IdentityID) (
 func (s *Service) SystemStats(ctx context.Context, identity learner.IdentityID) (storage.SystemStats, error) {
 	return s.repo.SystemStats(ctx, identity)
 }
+
+// PracticeStats is /learner's 練習 section — see
+// storage.PracticeStats.
+func (s *Service) PracticeStats(ctx context.Context, identity learner.IdentityID) (storage.PracticeStats, error) {
+	return s.repo.PracticeStats(ctx, identity)
+}

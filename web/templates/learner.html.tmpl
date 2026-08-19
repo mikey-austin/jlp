@@ -32,6 +32,23 @@
     </table>
   </div>
 
+  {{/* 練習 sits directly above 復習キュー because the two are one loop:
+       what you drill here is what gets scheduled there, and a word
+       answered correctly leaves the queue. Counted from the same
+       quiz.answered events the scheduler and the learner model consume,
+       so these numbers cannot disagree with the tables around them. */}}
+  <h2>練習</h2>
+  {{if .Practice.HasAnswers}}
+  <div class="stat-grid">
+    <div class="stat"><span class="stat__value">{{.Practice.Answered}}</span><span class="stat__label">解答した問題</span></div>
+    <div class="stat"><span class="stat__value">{{.Practice.Accuracy}}%</span><span class="stat__label">正答率</span></div>
+    <div class="stat"><span class="stat__value">{{.Practice.Words}}</span><span class="stat__label">語彙の練習</span></div>
+    <div class="stat"><span class="stat__value">{{.Practice.Concepts}}</span><span class="stat__label">文法の練習</span></div>
+  </div>
+  {{else}}
+  <p class="description">まだ練習していません。<a href="/practice">練習</a>で始めましょう。</p>
+  {{end}}
+
   <h2>復習キュー</h2>
   {{/* Whole-branch review C-1, the functional half: the scheduler is
        driven by correction.retried / quiz.answered /
@@ -43,15 +60,17 @@
        "nothing due". Said plainly rather than left to be inferred from
        an empty table. */}}
   <p class="description">
-    復習予定は、<strong>添削・クイズ・語彙の正用</strong>から作られます。会話練習と音声練習で指摘された<strong>文法</strong>は、
-    まだこのキューには入りません（語彙は入ります）。
+    復習予定は、<strong>添削・練習・語彙の正用</strong>から作られます。練習した語彙も文法も、ここに予定として入ります。
+    会話練習と音声練習で指摘された<strong>文法</strong>は、まだこのキューには入りません（語彙は入ります）。
   </p>
   <div class="table-card table-card--stack">
     <table>
       <thead><tr><th>対象</th><th>種類</th><th>期日</th><th>間隔</th></tr></thead>
       <tbody>
         {{range .Retrieval}}<tr>
-          <td data-label="対象">{{.Subject}}</td>
+          {{/* Label, not Subject: a due word's subject is its vocabulary
+               UUID, which tells the learner nothing about what to revise. */}}
+          <td data-label="対象">{{.Label}}</td>
           <td data-label="種類"><span class="badge badge--type">{{.SubjectType}}</span></td>
           <td data-label="期日">{{.DueAt.Format "2006-01-02"}}</td>
           <td data-label="間隔">{{days .Interval}}日</td>

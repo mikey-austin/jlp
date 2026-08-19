@@ -150,8 +150,10 @@ func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.L
 
 type fakeVocabRepo struct {
 	recent     []vocabulary.Item
+	byID       map[string]vocabulary.Item
 	askedSince time.Time
 	askedLimit int
+	askedIDs   []string
 }
 
 func (f *fakeVocabRepo) UpsertOnLookup(context.Context, learner.IdentityID, string, string, string, string, string, vocabulary.Kind, string, time.Time) (vocabulary.Item, bool, error) {
@@ -887,5 +889,106 @@ func TestSkipWordsPassesOverAFullWordQueue(t *testing.T) {
 	if ex.SubjectType != exercise.SubjectConcept {
 		t.Errorf("subject type = %q, want %q — SkipWords did not bypass the word queue",
 			ex.SubjectType, exercise.SubjectConcept)
+	}
+}
+
+// GetByIDs IS exercised here — dueWord resolves the queue's ids through
+// it. byID is what the query would have matched.
+func (r *fakeVocabRepo) GetByIDs(_ context.Context, _ learner.IdentityID, ids []string) ([]vocabulary.Item, error) {
+	r.askedIDs = ids
+	var out []vocabulary.Item
+	for _, id := range ids {
+		if item, ok := r.byID[id]; ok {
+			out = append(out, item)
+		}
+	}
+	return out, nil
+}
+
+// The other half of the loop: a word that comes due must actually be
+// drillable. dueConcept skipped everything that was not a concept, so
+// an expression coming due could never be practised — 学習 displayed it
+// in 復習キュー and nothing would ever resurface it.
+func TestADueWordIsDrilled(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	word := recentItem("vocab-42", "紛らわしい", "まぎらわしい", "confusing")
+
+	grammarRepo := &fakeGrammarRepo{
+		concepts: []grammar.Concept{iAdjectivePastConcept},
+		bySlug:   map[string]grammar.Concept{iAdjectivePastConcept.Slug: iAdjectivePastConcept},
+	}
+	// A due CONCEPT is in the queue too, behind the word, so a pass here
+	// is about the word being reachable rather than about it being alone.
+	retrievalRepo := &fakeRetrievalRepoForPractice{due: []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "vocab-42"},
+		{IdentityID: testIdentity, SubjectType: "concept", Subject: "i-adjective-past"},
+	}}
+	sched := appretrieval.NewScheduler(retrievalRepo, func() time.Time { return now })
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, &fakePriorityRepo{}, &fakeVocabRepo{}, func() time.Time { return now })
+	// recent is empty, so this cannot pass via the recent-word branch.
+	vocab := &fakeVocabRepo{byID: map[string]vocabulary.Item{"vocab-42": word}}
+	svc := apppractice.NewService(newFakeExerciseRepo(), drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, sched, vocab,
+		func() time.Time { return now })
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if ex.SubjectType != exercise.SubjectWord || ex.SubjectRef != "vocab-42" {
+		t.Fatalf("drilled %s/%s, want word/vocab-42 — a due word is still unreachable",
+			ex.SubjectType, ex.SubjectRef)
+	}
+	if ex.Prompt != "紛らわしい" {
+		t.Errorf("prompt = %q, want the expression", ex.Prompt)
+	}
+}
+
+// The due queue is ordered by how overdue each item is, and that order
+// has to survive the id→item resolution. Resolving through a map and
+// ranging over it would scramble it.
+func TestTheMostOverdueWordWins(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	grammarRepo := &fakeGrammarRepo{bySlug: map[string]grammar.Concept{}}
+	// Eight, not two: ranging a map instead of the id slice picks a
+	// random entry, and with two the wrong implementation passes half the
+	// time — which is exactly what it did.
+	var due []storage.RetrievalItem
+	items := map[string]vocabulary.Item{}
+	for _, id := range []string{"first", "b", "c", "d", "e", "f", "g", "h"} {
+		due = append(due, storage.RetrievalItem{IdentityID: testIdentity, SubjectType: "expression", Subject: id})
+		items[id] = recentItem(id, "語"+id, "ご"+id, "meaning "+id)
+	}
+	retrievalRepo := &fakeRetrievalRepoForPractice{due: due}
+	sched := appretrieval.NewScheduler(retrievalRepo, func() time.Time { return now })
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, &fakePriorityRepo{}, &fakeVocabRepo{}, func() time.Time { return now })
+	vocab := &fakeVocabRepo{byID: items}
+	svc := apppractice.NewService(newFakeExerciseRepo(), drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, sched, vocab,
+		func() time.Time { return now })
+
+	for i := 0; i < 5; i++ {
+		ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+		if err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		if ex.SubjectRef != "first" {
+			t.Fatalf("run %d drilled %q, want the most overdue word %q", i, ex.SubjectRef, "first")
+		}
+	}
+
+	// The deterministic half: the ids must be collected in queue order.
+	// A PREFIX of the queue, not all of it — Start scans only the first
+	// dueSubjectsScanLimit due items, which is the point of that cap.
+	want := []string{"first", "b", "c", "d", "e", "f", "g", "h"}
+	if len(vocab.askedIDs) == 0 {
+		t.Fatal("dueWord resolved no ids at all")
+	}
+	for i, id := range vocab.askedIDs {
+		if id != want[i] {
+			t.Fatalf("asked for %v, want the queue's own order %v", vocab.askedIDs, want[:len(vocab.askedIDs)])
+		}
 	}
 }

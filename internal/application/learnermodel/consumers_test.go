@@ -347,3 +347,109 @@ func TestDuplicateCorrectionIDCountsOnce(t *testing.T) {
 		t.Errorf("Evidence[count] = %v, want 3 (deduped by correction_id, not 4 raw events)", o.Evidence["count"])
 	}
 }
+
+// drillEvent is one answered exercise for a concept.
+func drillEvent(exerciseID, concept string, correct bool, at time.Time) event.LearningEvent {
+	return event.LearningEvent{
+		ID:         exerciseID + "-ev",
+		IdentityID: testIdentity,
+		Type:       event.TypeQuizAnswered,
+		Subject:    exerciseID,
+		OccurredAt: at,
+		Evidence: map[string]any{
+			"subject_type": "concept",
+			"subject_ref":  concept,
+			"correct":      correct,
+		},
+	}
+}
+
+// Getting the same grammar wrong in 練習 is the same evidence as getting
+// it wrong in writing. Before this, drills were invisible here: a
+// learner could fail the same concept every day and the planner would
+// never hear about it.
+func TestThreeFailedDrillsUpsertAConceptWeakness(t *testing.T) {
+	store := newFakeEventStore()
+	obs := newFakeObsRepo()
+	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
+
+	fireAll(t, u, store,
+		drillEvent("ex1", "te-form", false, baseTime),
+		drillEvent("ex2", "te-form", false, baseTime.Add(time.Hour)),
+		drillEvent("ex3", "te-form", false, baseTime.Add(2*time.Hour)),
+	)
+
+	o, ok := obs.find(testIdentity, learnermodel.SubjectConcept, "te-form")
+	if !ok {
+		t.Fatal("three failed drills on one concept produced no observation")
+	}
+	if o.Kind != learnermodel.KindWeakness {
+		t.Errorf("Kind = %q, want %q", o.Kind, learnermodel.KindWeakness)
+	}
+}
+
+// A correct answer is evidence of the OPPOSITE. If passes counted, a
+// learner drilling diligently would manufacture weaknesses by practising.
+func TestCorrectDrillsNeverBuildAWeakness(t *testing.T) {
+	store := newFakeEventStore()
+	obs := newFakeObsRepo()
+	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
+
+	fireAll(t, u, store,
+		drillEvent("ex1", "te-form", true, baseTime),
+		drillEvent("ex2", "te-form", true, baseTime.Add(time.Hour)),
+		drillEvent("ex3", "te-form", true, baseTime.Add(2*time.Hour)),
+		drillEvent("ex4", "te-form", true, baseTime.Add(3*time.Hour)),
+	)
+
+	if _, ok := obs.find(testIdentity, learnermodel.SubjectConcept, "te-form"); ok {
+		t.Error("practising a concept successfully created a weakness for it")
+	}
+}
+
+// A word drill contributes nothing here — there is no SubjectType for
+// vocabulary, and inventing one would ripple through the planner and
+// 成果. Words live in the retrieval schedule instead. Pinned so a future
+// change makes that choice deliberately rather than by accident.
+func TestWordDrillsProduceNoObservation(t *testing.T) {
+	store := newFakeEventStore()
+	obs := newFakeObsRepo()
+	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
+
+	for i, id := range []string{"ex1", "ex2", "ex3", "ex4"} {
+		ev := drillEvent(id, "vocab-42", false, baseTime.Add(time.Duration(i)*time.Hour))
+		ev.Evidence["subject_type"] = "word"
+		fireAll(t, u, store, ev)
+	}
+
+	if _, ok := obs.find(testIdentity, learnermodel.SubjectConcept, "vocab-42"); ok {
+		t.Error("a word drill created a concept observation — a vocabulary id is not a concept slug")
+	}
+}
+
+// sweep decides when a weakness goes quiet, and used to count ONE event
+// type per subject type. A concept kept alive purely by drill failures
+// would have been retired as emerging while the learner was still
+// getting it wrong every day.
+func TestADrillFailureKeepsAConceptWeaknessAlive(t *testing.T) {
+	store := newFakeEventStore()
+	obs := newFakeObsRepo()
+	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
+
+	fireAll(t, u, store,
+		drillEvent("ex1", "te-form", false, baseTime),
+		drillEvent("ex2", "te-form", false, baseTime.Add(time.Hour)),
+		drillEvent("ex3", "te-form", false, baseTime.Add(2*time.Hour)),
+	)
+	// One more, well after the first three, which sweeps on its way past.
+	fireAll(t, u, store, drillEvent("ex4", "te-form", false, baseTime.Add(3*time.Hour)))
+
+	o, ok := obs.find(testIdentity, learnermodel.SubjectConcept, "te-form")
+	if !ok {
+		t.Fatal("observation vanished")
+	}
+	if o.Kind != learnermodel.KindWeakness {
+		t.Errorf("Kind = %q, want %q — sweep retired a weakness the learner is still failing",
+			o.Kind, learnermodel.KindWeakness)
+	}
+}

@@ -70,6 +70,13 @@ type VocabularyRepository interface {
 	// one indexed query regardless of how large a learner's vocabulary
 	// grows.
 	ListActivationCandidates(ctx context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error)
+	// GetByIDs resolves a small, caller-supplied set of vocabulary IDs.
+	// GetByExpressions' sibling, for callers holding an ID rather than a
+	// surface form: a retrieval_items row due for review carries the
+	// vocabulary ID, and 練習 needs the word itself to build a card.
+	// Soft-deleted rows are excluded — a word the learner removed must
+	// not come back as a drill.
+	GetByIDs(ctx context.Context, identity learner.IdentityID, ids []string) ([]vocabulary.Item, error)
 	// ListRecentUnpracticed returns identity's words added at or after
 	// addedSince that have never been produced correctly, newest first,
 	// capped at limit.

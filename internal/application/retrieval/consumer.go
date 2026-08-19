@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 )
 
 // Consumer is the event-bus side of spaced retrieval (PRD §54):
@@ -40,21 +41,49 @@ func (c *Consumer) HandleEvent(ctx context.Context, ev event.LearningEvent) erro
 	}
 }
 
-// handleQuizAnswered schedules the exercise's concept (Evidence
-// "concept") using the reported correct/confidence — quiz.answered's
-// Evidence always carries both (application/practice.Service.Answer).
-// A missing/empty concept is a no-op: nothing to schedule.
+// handleQuizAnswered schedules whatever the exercise drilled, using the
+// reported correct/confidence — quiz.answered's Evidence always carries
+// both (application/practice.Service.Answer).
+//
+// The subject comes from Evidence subject_type/subject_ref, falling back
+// to "concept" for events written before that pair existed. The fallback
+// is not politeness: reading "concept" alone is what made every WORD
+// drill a no-op here, because a word drill has no ConceptSlug — so a
+// word the learner practised was never scheduled, and 復習キュー stayed
+// blind to the one page meant for practising.
+//
+// Subject types are the scheduler's existing two: a drilled concept is
+// "concept", a drilled word is "expression" — the same type and the same
+// vocabulary id handleVocabularyProducedCorrectly already uses, so a word
+// has ONE schedule however it was practised.
 func (c *Consumer) handleQuizAnswered(ctx context.Context, ev event.LearningEvent) error {
-	concept, _ := ev.Evidence["concept"].(string)
-	if concept == "" {
+	subjectType, subject := quizSubject(ev)
+	if subject == "" {
 		return nil
 	}
 	correct, _ := ev.Evidence["correct"].(bool)
 	confidence := evidenceInt(ev.Evidence, "confidence")
-	if err := c.scheduler.RecordOutcome(ctx, ev.IdentityID, "concept", concept, correct, confidence); err != nil {
+	if err := c.scheduler.RecordOutcome(ctx, ev.IdentityID, subjectType, subject, correct, confidence); err != nil {
 		return fmt.Errorf("retrieval: handle %s: %w", event.TypeQuizAnswered, err)
 	}
 	return nil
+}
+
+// quizSubject maps a quiz.answered event onto the scheduler's
+// (subjectType, subject) pair, or ("", "") when there is nothing to
+// schedule.
+func quizSubject(ev event.LearningEvent) (subjectType, subject string) {
+	ref, _ := ev.Evidence["subject_ref"].(string)
+	switch st, _ := ev.Evidence["subject_type"].(string); st {
+	case exercise.SubjectWord:
+		return "expression", ref
+	case exercise.SubjectConcept:
+		return "concept", ref
+	}
+	// Written before subject_type existed: those were all concept drills,
+	// because that was the only kind there was.
+	concept, _ := ev.Evidence["concept"].(string)
+	return "concept", concept
 }
 
 // handleCorrectionRetried schedules every RESOLVED concept tagged to

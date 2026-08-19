@@ -433,3 +433,9 @@ func TestStaticServesDesignSystemAssets(t *testing.T) {
 		}
 	}
 }
+
+// PracticeStats backs 学習's 練習 section; these tests do not assert on
+// it, so an empty value keeps them honest about what they DO cover.
+func (f fakeAnalyticsRepo) PracticeStats(context.Context, learner.IdentityID) (storage.PracticeStats, error) {
+	return storage.PracticeStats{}, nil
+}

@@ -17,6 +17,7 @@ import (
 
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/domain/event"
+	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
@@ -136,7 +137,7 @@ func (u *Updater) HandleEvent(ctx context.Context, ev event.LearningEvent) error
 		return err
 	}
 
-	count := countOccurrences(all, ev.Type, subjectType, subject, ev.OccurredAt, weaknessWindow)
+	count := countOccurrences(all, subjectType, subject, ev.OccurredAt, weaknessWindow)
 	if count >= weaknessThreshold {
 		if err := u.upsertWeakness(ctx, ev.IdentityID, subjectType, subject, count); err != nil {
 			return err
@@ -259,8 +260,7 @@ func (u *Updater) sweep(ctx context.Context, identity learner.IdentityID, all []
 		if o.Kind != learnermodel.KindWeakness {
 			continue
 		}
-		evType := eventTypeFor(o.SubjectType)
-		if countOccurrences(all, evType, o.SubjectType, o.Subject, now, quietWindow) > 0 {
+		if countOccurrences(all, o.SubjectType, o.Subject, now, quietWindow) > 0 {
 			continue
 		}
 		updated := o
@@ -288,26 +288,46 @@ func classify(ev event.LearningEvent) (subjectType learnermodel.SubjectType, sub
 			return "", "", false
 		}
 		return learnermodel.SubjectConcept, ev.Subject, true
+	case event.TypeQuizAnswered:
+		// A drilled CONCEPT contributes to that concept, exactly as an
+		// encountered one does — getting the same grammar wrong in
+		// practice is the same evidence as getting it wrong in writing,
+		// and 練習 was previously invisible to this entirely.
+		//
+		// A drilled WORD contributes nothing here, deliberately: there is
+		// no SubjectType for vocabulary (only concept and
+		// correction-type), and inventing one would ripple through the
+		// planner, the observations table and 成果's concept-centric
+		// reporting. Words are not unrepresented in the learning loop —
+		// they are scheduled by application/retrieval, which is where a
+		// word's progress lives.
+		if st, _ := ev.Evidence["subject_type"].(string); st != exercise.SubjectConcept {
+			return "", "", false
+		}
+		ref, _ := ev.Evidence["subject_ref"].(string)
+		if ref == "" {
+			return "", "", false
+		}
+		return learnermodel.SubjectConcept, ref, true
 	default:
 		return "", "", false
 	}
 }
 
-// eventTypeFor is classify's inverse for the subject-type half: which
-// event type carries occurrences of a given kind of subject. Used by
-// sweep, which starts from a stored Observation (SubjectType, Subject)
-// rather than a live event.
-func eventTypeFor(st learnermodel.SubjectType) event.Type {
-	if st == learnermodel.SubjectConcept {
-		return event.TypeGrammarConceptEncountered
+// qualifies reports whether ev counts toward weakness detection.
+//
+// What "counts" means depends on where the evidence came from. A
+// correction counts when it was serious enough to matter: only
+// "incorrect" and "unnatural" do — "style" never contributes, however
+// often it occurs. A drill counts when it was answered WRONG; a correct
+// answer is evidence of the opposite and must never accumulate toward a
+// weakness.
+func qualifies(ev event.LearningEvent) bool {
+	if ev.Type == event.TypeQuizAnswered {
+		correct, _ := ev.Evidence["correct"].(bool)
+		return !correct
 	}
-	return event.TypeCorrectionPresented
-}
-
-// qualifyingSeverity reports whether sev counts toward weakness
-// detection: only "incorrect" and "unnatural" do — "style" and any
-// other severity never contribute, however often they occur.
-func qualifyingSeverity(sev string) bool {
+	sev, _ := ev.Evidence["severity"].(string)
 	return sev == "incorrect" || sev == "unnatural"
 }
 
@@ -324,6 +344,12 @@ func dedupKey(ev event.LearningEvent) string {
 	if ev.Type == event.TypeCorrectionPresented {
 		return ev.Subject
 	}
+	if ev.Type == event.TypeQuizAnswered {
+		// The exercise id: one drill is one occurrence, and answering the
+		// same exercise twice is one piece of evidence about the concept,
+		// not two.
+		return ev.Subject
+	}
 	if cid, ok := ev.Evidence["correction_id"].(string); ok && cid != "" {
 		return cid
 	}
@@ -334,22 +360,26 @@ func dedupKey(ev event.LearningEvent) string {
 }
 
 // countOccurrences returns the number of distinct (per dedupKey)
-// qualifying occurrences of (subjectType, subject) among evType events
-// in all, within window trailing back from now (inclusive, and never
+// qualifying occurrences of (subjectType, subject) in all, within window
+// trailing back from now.
+//
+// Counted by SUBJECT, not by event type. It used to take an evType and
+// filter on it, which quietly assumed one subject type had exactly one
+// source of evidence — true until 練習 started contributing concept
+// failures. Under that assumption sweep would have retired a weakness
+// kept alive only by drills, because it counted the other event type and
+// found nothing. classify already says which subject an event belongs
+// to; that is the only filter needed (inclusive, and never
 // counting events after now — see NewUpdater's doc comment on why "now"
 // is always the triggering event's OccurredAt, never wall-clock time).
-func countOccurrences(all []event.LearningEvent, evType event.Type, subjectType learnermodel.SubjectType, subject string, now time.Time, window time.Duration) int {
+func countOccurrences(all []event.LearningEvent, subjectType learnermodel.SubjectType, subject string, now time.Time, window time.Duration) int {
 	seen := map[string]struct{}{}
 	for _, e := range all {
-		if e.Type != evType {
-			continue
-		}
 		st, subj, ok := classify(e)
 		if !ok || st != subjectType || subj != subject {
 			continue
 		}
-		sev, _ := e.Evidence["severity"].(string)
-		if !qualifyingSeverity(sev) {
+		if !qualifies(e) {
 			continue
 		}
 		if e.OccurredAt.After(now) || now.Sub(e.OccurredAt) > window {

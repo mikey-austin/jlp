@@ -97,3 +97,23 @@ ORDER BY type;
 
 -- name: CountAIRequestsForIdentity :one
 SELECT COUNT(*)::int FROM ai_requests WHERE identity_id = $1;
+
+-- name: PracticeStats :one
+-- 学習's 練習 section: how much drilling has actually happened, and how
+-- much of it went right, split by what was drilled.
+--
+-- Read from learning_events rather than exercise_attempts because the
+-- event is what the rest of the learning loop reacts to — the retrieval
+-- scheduler and the learner model both consume quiz.answered — so a
+-- number derived from the same row is a number that agrees with the
+-- queue and the observations beside it on the page.
+--
+-- subject_type is absent on events written before drills carried one;
+-- those were all concept drills, and are counted as such.
+SELECT
+    COUNT(*)::int AS answered,
+    COUNT(*) FILTER (WHERE evidence->>'correct' = 'true')::int AS correct,
+    COUNT(*) FILTER (WHERE COALESCE(evidence->>'subject_type', 'concept') = 'word')::int AS words,
+    COUNT(*) FILTER (WHERE COALESCE(evidence->>'subject_type', 'concept') = 'concept')::int AS concepts
+FROM learning_events
+WHERE identity_id = $1 AND type = 'quiz.answered';

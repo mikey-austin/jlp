@@ -294,3 +294,26 @@ func TestLearnerPageSystemStatsRepositoryErrorReturns500(t *testing.T) {
 		t.Fatalf("status = %d, want 500", rec.Code)
 	}
 }
+
+// A due word's subject is its vocabulary UUID. Showing that raw tells
+// the learner nothing about what to revise, and 復習キュー only started
+// carrying words when 練習 began scheduling them.
+func TestLearnerPageShowsTheWordBehindADueExpression(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Retrieval.(*fakeLearnerRetrievalRepo).list = []storage.RetrievalItem{
+		{SubjectType: "expression", Subject: "11111111-1111-1111-1111-111111111111",
+			DueAt: time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC), Interval: 24 * time.Hour},
+	}
+	opts.Vocabulary = nil // the label path must survive an unwired service
+
+	rec := httptest.NewRecorder()
+	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 — a nil vocabulary service must not 500 the page that shows everything else", rec.Code)
+	}
+	// With nothing to resolve it, the raw subject is the honest fallback:
+	// a blank cell would be worse than an unfriendly one.
+	if !strings.Contains(rec.Body.String(), "11111111-1111-1111-1111-111111111111") {
+		t.Error("an unresolvable subject rendered as neither its label nor its raw value")
+	}
+}

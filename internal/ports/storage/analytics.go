@@ -105,6 +105,20 @@ type SystemStats struct {
 	AIRequests     int
 }
 
+// PracticeStats is /learner's 練習 section: how much drilling has
+// happened and how much of it went right, split by what was drilled.
+//
+// Derived from quiz.answered learning events — the same rows the
+// retrieval scheduler and the learner model consume — so these numbers
+// agree with the review queue and the observations beside them on the
+// page, rather than being a second count of the same thing.
+type PracticeStats struct {
+	Answered int
+	Correct  int
+	Words    int
+	Concepts int
+}
+
 // AnalyticsRepository computes a learner's aggregate Statistics from
 // their documents, sessions, feedback requests, and corrections, plus
 // the richer Task 7 views: vocabulary funnel, weakness trends,
@@ -119,4 +133,5 @@ type AnalyticsRepository interface {
 	ConfidenceCalibration(ctx context.Context, identity learner.IdentityID) ([]ConfidenceCalibration, error)
 	AgentUsage(ctx context.Context, identity learner.IdentityID) ([]AgentUsage, error)
 	SystemStats(ctx context.Context, identity learner.IdentityID) (SystemStats, error)
+	PracticeStats(ctx context.Context, identity learner.IdentityID) (PracticeStats, error)
 }

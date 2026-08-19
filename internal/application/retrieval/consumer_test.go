@@ -253,3 +253,77 @@ func TestHandleEventIgnoresUnrelatedTypes(t *testing.T) {
 		t.Fatalf("repo.items = %+v, want none scheduled", repo.items)
 	}
 }
+
+// A drilled WORD must be scheduled. Reading Evidence["concept"] alone
+// made every word drill a no-op here — a word has no ConceptSlug — so a
+// word the learner practised was never scheduled, and 復習キュー stayed
+// blind to the one page meant for practising it.
+func TestHandleQuizAnsweredSchedulesADrilledWord(t *testing.T) {
+	consumer, repo := newConsumerHarness()
+
+	err := consumer.HandleEvent(context.Background(), event.LearningEvent{
+		IdentityID: testIdentity,
+		Type:       event.TypeQuizAnswered,
+		Subject:    "ex-1",
+		Evidence: map[string]any{
+			"subject_type": "word",
+			"subject_ref":  "vocab-42",
+			"correct":      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+
+	got, err := repo.Get(context.Background(), testIdentity, "expression", "vocab-42")
+	if err != nil {
+		t.Fatalf("the drilled word was never scheduled: %v", err)
+	}
+	if got.Successes != 1 {
+		t.Errorf("Successes = %d, want 1", got.Successes)
+	}
+}
+
+// "expression" and the vocabulary id, matching what
+// handleVocabularyProducedCorrectly already writes — so a word has ONE
+// schedule however it was practised, rather than two that disagree.
+func TestADrilledWordSharesItsScheduleWithAProducedOne(t *testing.T) {
+	consumer, repo := newConsumerHarness()
+	ctx := context.Background()
+
+	if err := consumer.HandleEvent(ctx, event.LearningEvent{
+		IdentityID: testIdentity, Type: event.TypeVocabularyProducedCorrectly, Subject: "vocab-42",
+	}); err != nil {
+		t.Fatalf("produced: %v", err)
+	}
+	if err := consumer.HandleEvent(ctx, event.LearningEvent{
+		IdentityID: testIdentity, Type: event.TypeQuizAnswered, Subject: "ex-1",
+		Evidence: map[string]any{"subject_type": "word", "subject_ref": "vocab-42", "correct": true},
+	}); err != nil {
+		t.Fatalf("drilled: %v", err)
+	}
+
+	got, err := repo.Get(ctx, testIdentity, "expression", "vocab-42")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Successes != 2 {
+		t.Errorf("Successes = %d, want 2 — the two paths wrote to different schedules", got.Successes)
+	}
+}
+
+// Events written before subject_type existed were all concept drills.
+// They must keep scheduling, or upgrading silently drops history.
+func TestHandleQuizAnsweredStillHonoursTheOldConceptEvidence(t *testing.T) {
+	consumer, repo := newConsumerHarness()
+
+	if err := consumer.HandleEvent(context.Background(), event.LearningEvent{
+		IdentityID: testIdentity, Type: event.TypeQuizAnswered, Subject: "ex-1",
+		Evidence: map[string]any{"concept": "te-form", "correct": true},
+	}); err != nil {
+		t.Fatalf("HandleEvent returned error: %v", err)
+	}
+	if _, err := repo.Get(context.Background(), testIdentity, "concept", "te-form"); err != nil {
+		t.Fatalf("a pre-subject_type event stopped scheduling: %v", err)
+	}
+}

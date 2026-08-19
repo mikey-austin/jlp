@@ -174,3 +174,19 @@ func isoWeekStarts(now time.Time, n int) []time.Time {
 	}
 	return starts
 }
+
+// PracticeStats implements storage.AnalyticsRepository.PracticeStats —
+// see that type's doc comment for why this reads learning_events rather
+// than exercise_attempts.
+func (r *AnalyticsRepository) PracticeStats(ctx context.Context, identity learner.IdentityID) (storage.PracticeStats, error) {
+	row, err := r.q.PracticeStats(ctx, string(identity))
+	if err != nil {
+		return storage.PracticeStats{}, err
+	}
+	return storage.PracticeStats{
+		Answered: int(row.Answered),
+		Correct:  int(row.Correct),
+		Words:    int(row.Words),
+		Concepts: int(row.Concepts),
+	}, nil
+}

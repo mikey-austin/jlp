@@ -278,6 +278,41 @@ func (r *VocabularyRepository) GetByExpressions(ctx context.Context, identity le
 	return out, nil
 }
 
+// GetByIDs is GetByExpressions' sibling for callers holding an ID —
+// see the port's doc comment. An empty ids returns an empty result
+// without a query round trip, exactly as GetByExpressions does.
+func (r *VocabularyRepository) GetByIDs(ctx context.Context, identity learner.IdentityID, ids []string) ([]vocabulary.Item, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	parsed := make([]pgtype.UUID, 0, len(ids))
+	for _, id := range ids {
+		u, err := parseUUID(id)
+		if err != nil {
+			// A subject that is not a UUID is not one of our vocabulary
+			// rows — skipped rather than failed, because the caller is
+			// scanning a mixed list of due subjects (concepts are slugs).
+			continue
+		}
+		parsed = append(parsed, u)
+	}
+	if len(parsed) == 0 {
+		return nil, nil
+	}
+	rows, err := r.q.GetVocabularyItemsByIDs(ctx, sqlcgen.GetVocabularyItemsByIDsParams{
+		IdentityID: string(identity),
+		Ids:        parsed,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]vocabulary.Item, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, fromVocabularyItemRow(row))
+	}
+	return out, nil
+}
+
 // SeedBank inserts entries as expression-bank baseline items, all in
 // one transaction (mirroring GrammarRepository.UpsertConcepts' shape),
 // doing nothing per-entry when (identity, expression) already has a

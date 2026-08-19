@@ -128,6 +128,65 @@ func (q *Queries) GetVocabularyItemsByExpressions(ctx context.Context, arg GetVo
 	return items, nil
 }
 
+const getVocabularyItemsByIDs = `-- name: GetVocabularyItemsByIDs :many
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags, deleted_at
+FROM vocabulary_items
+WHERE identity_id = $1 AND deleted_at IS NULL AND id = ANY($2::uuid[])
+`
+
+type GetVocabularyItemsByIDsParams struct {
+	IdentityID string
+	Ids        []pgtype.UUID
+}
+
+// Resolves a small, caller-supplied set of vocabulary IDs — the bounded
+// indexed sibling of GetVocabularyItemsByExpressions above, for callers
+// that hold an ID rather than a surface form. 練習 is the one today: a
+// retrieval_items row due for review carries the vocabulary ID as its
+// subject, and the drill needs the word itself to build a card.
+//
+// deleted_at IS NULL, unlike GetVocabularyItem's deliberate exception:
+// nothing here is replaying an idempotent write, and a word the learner
+// removed must not come back as a drill.
+func (q *Queries) GetVocabularyItemsByIDs(ctx context.Context, arg GetVocabularyItemsByIDsParams) ([]VocabularyItem, error) {
+	rows, err := q.db.Query(ctx, getVocabularyItemsByIDs, arg.IdentityID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VocabularyItem
+	for rows.Next() {
+		var i VocabularyItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdentityID,
+			&i.Expression,
+			&i.Reading,
+			&i.Meaning,
+			&i.Kind,
+			&i.JlptLevel,
+			&i.Source,
+			&i.Lookups,
+			&i.Productions,
+			&i.SuccessfulProductions,
+			&i.FirstSeen,
+			&i.LastEvent,
+			&i.MeaningEn,
+			&i.Tags,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const insertVocabularyEvent = `-- name: InsertVocabularyEvent :exec
 INSERT INTO vocabulary_events (id, identity_id, item_id, type, payload, client_event_id, occurred_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7)

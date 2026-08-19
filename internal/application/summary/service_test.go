@@ -298,3 +298,15 @@ func (f *fakeVocabRepo) ListPage(ctx context.Context, identity learner.IdentityI
 func (r *fakeVocabRepo) ListRecentUnpracticed(context.Context, learner.IdentityID, time.Time, int) ([]vocabulary.Item, error) {
 	panic("not used by these tests")
 }
+
+// GetByIDs resolves due words for 練習; the practice double below is the
+// only one that needs real behaviour.
+func (r *fakeVocabRepo) GetByIDs(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
+	panic("not used by these tests")
+}
+
+// PracticeStats backs 学習's 練習 section; these tests do not assert on
+// it, so an empty value keeps them honest about what they DO cover.
+func (f *fakeAnalyticsRepo) PracticeStats(context.Context, learner.IdentityID) (storage.PracticeStats, error) {
+	return storage.PracticeStats{}, nil
+}

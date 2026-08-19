@@ -152,6 +152,46 @@ func (q *Queries) LearningEventsByType(ctx context.Context, identityID string) (
 	return items, nil
 }
 
+const practiceStats = `-- name: PracticeStats :one
+SELECT
+    COUNT(*)::int AS answered,
+    COUNT(*) FILTER (WHERE evidence->>'correct' = 'true')::int AS correct,
+    COUNT(*) FILTER (WHERE COALESCE(evidence->>'subject_type', 'concept') = 'word')::int AS words,
+    COUNT(*) FILTER (WHERE COALESCE(evidence->>'subject_type', 'concept') = 'concept')::int AS concepts
+FROM learning_events
+WHERE identity_id = $1 AND type = 'quiz.answered'
+`
+
+type PracticeStatsRow struct {
+	Answered int32
+	Correct  int32
+	Words    int32
+	Concepts int32
+}
+
+// 学習's 練習 section: how much drilling has actually happened, and how
+// much of it went right, split by what was drilled.
+//
+// Read from learning_events rather than exercise_attempts because the
+// event is what the rest of the learning loop reacts to — the retrieval
+// scheduler and the learner model both consume quiz.answered — so a
+// number derived from the same row is a number that agrees with the
+// queue and the observations beside it on the page.
+//
+// subject_type is absent on events written before drills carried one;
+// those were all concept drills, and are counted as such.
+func (q *Queries) PracticeStats(ctx context.Context, identityID string) (PracticeStatsRow, error) {
+	row := q.db.QueryRow(ctx, practiceStats, identityID)
+	var i PracticeStatsRow
+	err := row.Scan(
+		&i.Answered,
+		&i.Correct,
+		&i.Words,
+		&i.Concepts,
+	)
+	return i, err
+}
+
 const subjectOccurrencesByWeek = `-- name: SubjectOccurrencesByWeek :many
 SELECT date_trunc('week', occurred_at AT TIME ZONE 'UTC')::date AS week_start,
        COUNT(*)::int AS count

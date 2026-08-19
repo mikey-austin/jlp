@@ -276,6 +276,15 @@ func (s *Service) GetByExpressions(ctx context.Context, identity learner.Identit
 //
 // One thing brings a word back without Restore, on purpose: looking it
 // up again (Ingest). See storage.VocabularyRepository.SoftDelete.
+// GetByIDs resolves a small set of vocabulary IDs — see
+// storage.VocabularyRepository.GetByIDs. /learner uses it to show what
+// a due "expression" in 復習キュー actually IS: the queue stores the
+// vocabulary id, and a table of UUIDs tells a learner nothing about
+// what they are being asked to review.
+func (s *Service) GetByIDs(ctx context.Context, identity learner.IdentityID, ids []string) ([]vocabulary.Item, error) {
+	return s.repo.GetByIDs(ctx, identity, ids)
+}
+
 func (s *Service) Delete(ctx context.Context, identity learner.IdentityID, itemID string) error {
 	if err := s.repo.SoftDelete(ctx, identity, itemID, time.Now().UTC()); err != nil {
 		return err
