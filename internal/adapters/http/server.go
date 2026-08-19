@@ -229,10 +229,14 @@ type Options struct {
 type Server struct {
 	http.Server
 	opts Options
+	// prefetch holds at most one drill built ahead per learner — see
+	// practiceprefetch.go. Process state, not a cache of anything
+	// authoritative: losing it costs one synchronous build.
+	prefetch *drillPrefetcher
 }
 
 func NewServer(opts Options) *Server {
-	s := &Server{opts: opts}
+	s := &Server{opts: opts, prefetch: newDrillPrefetcher()}
 	s.Addr = opts.Addr
 	s.Handler = s.routes()
 	// Guard against slow-client resource exhaustion (Slowloris-style

@@ -142,6 +142,25 @@ func NewService(repo storage.ExerciseRepository, agent *drill.Agent, plnr *plann
 //
 // Records quiz.started with Evidence {"concept":…, "type":…}.
 func (s *Service) Start(ctx context.Context, identity learner.IdentityID, opts StartOptions) (exercise.Exercise, error) {
+	ex, err := s.Build(ctx, identity, opts)
+	if err != nil {
+		return exercise.Exercise{}, err
+	}
+	return s.persist(ctx, identity, ex)
+}
+
+// Build chooses and generates a drill WITHOUT persisting it or
+// recording quiz.started.
+//
+// Split out so a caller can generate ahead of time — the next question
+// while the learner is still answering this one — and only commit it
+// when it is actually shown. Persisting at generation time instead would
+// leave an exercise row and a "started" event behind for every drill
+// prepared and never reached, which is every abandoned run.
+//
+// See Start for the selection order; this is that whole function minus
+// its last step.
+func (s *Service) Build(ctx context.Context, identity learner.IdentityID, opts StartOptions) (exercise.Exercise, error) {
 	// A recent word short-circuits everything below, including the model
 	// call: nothing to generate, so nothing to wait for or pay for.
 	//
@@ -159,7 +178,7 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID, opts S
 			// drill than by 練習 refusing to produce anything.
 			slog.Warn("practice: passage unavailable, falling back", "identity", identity, "err", err)
 		} else if ok {
-			return s.persist(ctx, identity, ex)
+			return ex, nil
 		}
 	}
 
@@ -179,7 +198,7 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID, opts S
 		if item, ok, err := s.dueWord(ctx, identity); err != nil {
 			return exercise.Exercise{}, fmt.Errorf("practice: due word: %w", err)
 		} else if ok {
-			return s.persist(ctx, identity, s.drillFor(ctx, identity, item))
+			return s.drillFor(ctx, identity, item), nil
 		}
 	}
 
@@ -211,6 +230,12 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID, opts S
 	ex.SubjectType = exercise.SubjectConcept
 	ex.SubjectRef = concept.Slug
 
+	return ex, nil
+}
+
+// Serve commits a drill produced by Build: it persists the exercise and
+// records quiz.started, exactly as Start's last step does.
+func (s *Service) Serve(ctx context.Context, identity learner.IdentityID, ex exercise.Exercise) (exercise.Exercise, error) {
 	return s.persist(ctx, identity, ex)
 }
 

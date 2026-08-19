@@ -294,6 +294,35 @@ func aiProviderOptions(names []string, def string) []aiProviderOptionView {
 	return out
 }
 
+// aiProviderOptionsWithAuto is aiProviderOptions plus a leading
+// "automatic" entry, selected by default, whose value is EMPTY.
+//
+// An empty provider_override means "route normally", which is what
+// restores the configured route chain and its fallback. A dropdown whose
+// default option carries a provider NAME pins every request to that
+// provider with no fallback (see airouter's override branch) — so the
+// most common case, the learner never touching the dropdown, silently
+// became the least resilient one. Picking a provider deliberately still
+// pins it; that is the point of picking.
+//
+// The workspace deliberately keeps the naming-default behaviour (Phase 4
+// Task W item 5, where an operator choosing an adapter wants exactly
+// that adapter). This variant exists because 練習's dropdown is used by
+// a learner who just wants a question, not by an operator running a
+// comparison.
+func aiProviderOptionsWithAuto(names []string, def string) []aiProviderOptionView {
+	out := make([]aiProviderOptionView, 0, len(names)+1)
+	out = append(out, aiProviderOptionView{Name: "", Label: "自動（推奨）", Default: true})
+	for _, name := range names {
+		label := aiProviderLabel(name)
+		if name == def {
+			label += "（既定）"
+		}
+		out = append(out, aiProviderOptionView{Name: name, Label: label})
+	}
+	return out
+}
+
 // isKnownAIProvider reports whether name appears in names — the
 // feedbackRequest handler's guard against a stale/tampered
 // provider_override value (Phase 4 Task W item 5's "reject an unknown/

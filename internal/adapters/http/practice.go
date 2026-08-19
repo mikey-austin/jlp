@@ -175,7 +175,7 @@ func (s *Server) practicePage(w http.ResponseWriter, r *http.Request) {
 		// helper. A drill is a model call of exactly the kind the
 		// workspace lets you steer, and there was no reason for it to be
 		// steerable in one place and not the other.
-		"AIProviders": aiProviderOptions(s.opts.AIProviders, s.opts.AIDefaultProvider),
+		"AIProviders": aiProviderOptionsWithAuto(s.opts.AIProviders, s.opts.AIDefaultProvider),
 	})
 }
 
@@ -204,6 +204,20 @@ func runStateFrom(r *http.Request) (position, streak int) {
 	return position, streak
 }
 
+// drillOptionsFor is the run's rhythm: which slots skip the word queue
+// so a large vocabulary cannot crowd grammar out, and which ask for a
+// reading passage. It lives here rather than in the service because only
+// the HTTP layer knows where in a run a drill sits — and it is one
+// function so that serving position N and PREPARING position N choose
+// identically. Two spellings of this would mean every prefetch missed.
+func drillOptionsFor(position int, override string) practice.StartOptions {
+	return practice.StartOptions{
+		ProviderOverride: override,
+		SkipWords:        position%conceptEvery == 0,
+		WantPassage:      position%passageEvery == 0,
+	}
+}
+
 func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
@@ -217,15 +231,19 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	position, streak := runStateFrom(r)
-	// Every conceptEvery-th slot in a run skips the word queue, so a
-	// large imported vocabulary cannot crowd grammar out entirely. The
-	// rhythm lives here rather than in the service because only the HTTP
-	// layer knows where in a run this drill sits.
-	ex, err := s.opts.Practice.Start(r.Context(), ident.ID, practice.StartOptions{
-		ProviderOverride: override,
-		SkipWords:        position%conceptEvery == 0,
-		WantPassage:      position%passageEvery == 0,
-	})
+	opts := drillOptionsFor(position, override)
+
+	// Already built while the learner was answering the previous
+	// question, in the common case — see practiceprefetch.go. A miss just
+	// means building it now.
+	ex, ok := s.prefetch.take(ident.ID, position, opts)
+	var err error
+	if !ok {
+		ex, err = s.opts.Practice.Build(r.Context(), ident.ID, opts)
+	}
+	if err == nil {
+		ex, err = s.opts.Practice.Serve(r.Context(), ident.ID, ex)
+	}
 	if err != nil {
 		// Logged before answering, because htmx does not swap a non-2xx
 		// response: without this the learner sees a page that did not
@@ -236,6 +254,14 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start practice", http.StatusInternalServerError)
 		return
 	}
+	// Start the NEXT one now. The learner is about to spend at least a
+	// few seconds reading this question, and a grammar drill takes longer
+	// than that to generate — this is the whole reason question three
+	// used to stall while one and two were instant.
+	if next := position + 1; next <= runLength {
+		s.prefetch.start(r.Context(), s.opts.Practice, ident.ID, next, drillOptionsFor(next, override))
+	}
+
 	RenderPartial(w, r, "exercise", toExerciseView(ex, position, streak))
 }
 
