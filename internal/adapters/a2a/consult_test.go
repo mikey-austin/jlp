@@ -161,7 +161,7 @@ func TestConsultationRecordIsClearedWhenTheRunEnds(t *testing.T) {
 	if _, err := srv.Consult(ctx, "mikey", "review_writing", "一回目"); err != nil {
 		t.Fatalf("consult: %v", err)
 	}
-	srv.forgetConsultations("run-parent")
+	srv.endRun("run-parent")
 
 	if _, err := srv.Consult(ctx, "mikey", "review_writing", "次の質問"); err != nil {
 		t.Errorf("a new run could not consult a specialist the previous run had used: %v", err)

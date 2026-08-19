@@ -101,7 +101,38 @@ func (s *Server) Consult(ctx context.Context, identity learner.IdentityID, skill
 		// far.
 		return "", fmt.Errorf("consulting %s: %w", skill, err)
 	}
+
+	// Keep what the specialist READ, not just what it said. The
+	// coordinator's own tool calls are all consult_specialist, which
+	// renders as nothing, so without this a coordinated answer is the
+	// one kind of answer that can never carry a card — the corrections
+	// were fetched one level down and thrown away with the child run.
+	//
+	// The raw calls are kept, not parts: the client's
+	// acceptedOutputModes are not visible here, and widgetParts already
+	// knows how to filter and dedupe. Doing it there means a delegated
+	// widget obeys exactly the same rules as a direct one, including
+	// the socratic redaction internal/tools already applied.
+	//
+	// Only the model-facing prose is returned. The coordinator reads
+	// text; feeding it the raw JSON as well would spend its context on
+	// data it cannot do anything with and invite it to transcribe the
+	// card into words.
+	s.recordDelegated(agentrun.RunIDFrom(ctx), out.ToolCalls)
 	return out.Text, nil
+}
+
+// recordDelegated files a specialist's tool calls under the run that
+// consulted it. A run id of "" means nothing is coordinating this call
+// (a direct Consult in a test, say), so there is no task to attach them
+// to and holding them would leak.
+func (s *Server) recordDelegated(parent string, calls []agentrun.ToolCall) {
+	if parent == "" || len(calls) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.delegated[parent] = append(s.delegated[parent], calls...)
 }
 
 // CoordinatorAgent exposes the agent name behind the "coordinate"
@@ -127,14 +158,20 @@ func (s *Server) markConsulted(run, skill string) bool {
 	return true
 }
 
-// forgetConsultations drops a finished run's record. Called when the run
-// ends, so this map holds only work in flight rather than growing for
-// the life of the process.
-func (s *Server) forgetConsultations(run string) {
+// endRun drops a finished run's delegation bookkeeping and hands back
+// the tool calls its specialists made, for the task to render.
+//
+// Both maps are cleared here, in one place, because they have the same
+// lifetime: they describe work in flight, and a process that kept them
+// would grow one entry per question ever asked.
+func (s *Server) endRun(run string) []agentrun.ToolCall {
 	if run == "" {
-		return
+		return nil
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.consulted, run)
+	calls := s.delegated[run]
+	delete(s.delegated, run)
+	return calls
 }

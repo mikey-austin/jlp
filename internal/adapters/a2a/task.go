@@ -402,8 +402,9 @@ func (s *Server) handleSendMessage(ctx context.Context, identity learner.Identit
 
 	out, runErr := s.runner.Run(ctx, run)
 
-	// The run is over, so its consultation record is dead weight.
-	s.forgetConsultations(out.RunID)
+	// The run is over: drop its bookkeeping, and adopt what its
+	// specialists read so the answer can carry their cards too.
+	out.ToolCalls = append(out.ToolCalls, s.endRun(out.RunID)...)
 
 	taskID := out.RunID
 	if taskID == "" {

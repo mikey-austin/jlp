@@ -264,12 +264,19 @@ An unrecognised skill id is **not** an error — it falls back to `chat`.
 An A2A client is entitled to know nothing about JLP's skill ids, and
 refusing its message would be refusing the protocol's normal case.
 
-| ID | Local agent | Allowlist source |
-|----|-------------|-------------------|
-| `chat` (default) | `teacher` (Japanese Tutor Chat) | `cmd/jlp/main.go`'s `toolRegistry.Allow("teacher", …)` |
+| ID | Local agent | May do |
+|----|-------------|--------|
+| `chat` (default) | `teacher` (Japanese Tutor Chat) | read the learner's session, corrections, vocabulary, priorities |
 | `review_writing` | `teacher` (Writing Reviewer) | same |
-| `analyse_learner` | `summary` (Learner Analyst) | none configured yet — runs with no tool access |
-| `plan_lesson` | `lesson` (Lesson Planner) | none configured yet — runs with no tool access |
+| `analyse_learner` | `summary` (Learner Analyst) | read the learner over time — no session tools |
+| `plan_lesson` | `lesson` (Lesson Planner) | same, plus `search_vocabulary` |
+| `coordinate` | `coordinator` (Coordinating Tutor) | what `teacher` may, plus `consult_specialist` |
+
+Every grant lives in one place — `allowA2AAgents` in `cmd/jlp/main.go` —
+and all of them are read-only. `coordinator` is the only agent granted
+`consult_specialist`, which is what bounds delegation depth to one
+without a counter: a consulted specialist cannot consult, because it was
+never allowed to.
 
 Each skill frames the task with its own system prompt (recorded as
 `agent_runs.prompt_name` `a2a.chat`/`a2a.review_writing`/
@@ -279,6 +286,53 @@ own `ReviewWritingAgentic` renders for the local agentic-teacher path —
 that prompt and its template are private to that package (Rule 3); this
 adapter hands `agentrun.Runner` a system string directly rather than
 importing prompt-rendering machinery of its own.
+
+### Structured parts
+
+An artifact always leads with a **text part carrying the whole answer**.
+Anything else is enrichment: any A2A client may ignore parts it does not
+understand, and most will, so nothing a reader needs exists only in a
+data part.
+
+On top of that, a client that says what it can draw gets the structured
+data the agent read, as `+json` data parts:
+
+```json
+{"configuration": {"acceptedOutputModes": [
+  "text/plain",
+  "application/vnd.jlp.correction+json",
+  "application/vnd.jlp.vocabulary+json",
+  "application/vnd.jlp.priorities+json",
+  "application/vnd.jlp.lesson+json"
+]}}
+```
+
+| Media type | Payload | Produced by |
+|------------|---------|-------------|
+| `…correction+json` | corrections, plus a character-level `spans` diff | `get_recent_errors`, `get_correction_history` |
+| `…vocabulary+json` | vocabulary rows as the tool shaped them | `get_vocabulary_history`, `search_vocabulary` |
+| `…priorities+json` | ranked learning priorities | `get_learning_priorities` |
+| `…lesson+json` | a lesson plan | `create_lesson_plan` (granted to nobody, so unreachable today) |
+
+Three rules govern them. Only a media type the client **accepted** is
+sent — otherwise a stranger gets a payload it can only print as JSON,
+and the prose may have deferred to a card that never appeared. At most
+**one part per media type**, the last one, so an agent that narrows a
+search three times produces the final view rather than three stacked
+cards. And a payload is the tool's result **verbatim**: it arrives
+already redacted by `internal/tools`, which is the only reason a card
+cannot leak a correction still under the socratic gate. The one addition
+is `spans`, because a JavaScript diff would be a second implementation
+that has to agree with `internal/domain/diff` about Japanese.
+
+Cards survive delegation. A `coordinate` run's own tool calls are all
+`consult_specialist`, which renders as nothing — the structured data is
+read one level down. The specialists' tool calls are adopted by the
+coordinating run, so a coordinated answer carries the same cards a
+direct one would, filtered and deduplicated by the same rules. A gated
+correction stays gated through that hop for the same reason it does
+anywhere else: the redaction happened in the tool, before anyone here
+saw it.
 
 ### `contextId` is not a JLP session id
 

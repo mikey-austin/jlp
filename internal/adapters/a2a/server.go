@@ -68,9 +68,15 @@ type Server struct {
 	runner agentRunner
 	// consulted records which specialists each in-flight run has already
 	// asked, so a coordinator cannot ask the same one twice. Guarded by
-	// mu, and cleared by handleSendMessage when the run it belongs to
-	// ends — see forgetConsultations.
+	// mu, and cleared when the run it belongs to ends — see endRun.
 	consulted map[string]map[string]bool
+	// delegated collects the tool calls each in-flight run's SPECIALISTS
+	// made, keyed by the consulting run's id. A coordinator's own tool
+	// calls are all consult_specialist, which renders as nothing; the
+	// structured data a client can draw was read one level down, and
+	// without this it dies with the delegated run. Guarded by mu, and
+	// handed to the finished task by endRun.
+	delegated map[string][]agentrun.ToolCall
 	// asyncSlots caps background runs in flight — see async.go. Buffered
 	// to maxConcurrentAsyncRuns; a send that would block means we are at
 	// the cap.
@@ -136,6 +142,7 @@ func New(runner agentRunner, reg *tools.Registry, cfg config.A2A) *Server {
 		cfg:        cfg,
 		tasks:      make(map[string]taskRecord),
 		consulted:  make(map[string]map[string]bool),
+		delegated:  make(map[string][]agentrun.ToolCall),
 		asyncSlots: make(chan struct{}, maxConcurrentAsyncRuns),
 	}
 }

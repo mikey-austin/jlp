@@ -138,7 +138,10 @@ func (s *Server) runAsync(
 	defer func() { <-s.asyncSlots }()
 
 	out, runErr := s.runner.Run(ctx, run)
-	s.forgetConsultations(out.RunID)
+
+	// As in the blocking path: drop the run's bookkeeping and adopt the
+	// tool calls its specialists made, so applyOutcome can render them.
+	out.ToolCalls = append(out.ToolCalls, s.endRun(out.RunID)...)
 
 	// The finished task replaces the working one under the SAME id, so a
 	// client that has been polling sees its state change rather than
