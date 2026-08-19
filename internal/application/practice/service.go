@@ -28,6 +28,23 @@ import (
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
+// StartOptions is what the caller knows and Start cannot: which adapter
+// the learner picked, and whether this slot in their run should skip the
+// word queue.
+type StartOptions struct {
+	// ProviderOverride, when non-empty, names the AI adapter that must
+	// generate this drill — the 練習 page's dropdown, for this request
+	// only. Passed straight to drill.GenerateInput and never persisted.
+	// Empty means "route normally", which is what every non-interactive
+	// caller (the channel adapters) wants: nobody is there to pick.
+	ProviderOverride string
+	// SkipWords passes over the recent-word queue for this drill, so a
+	// large vocabulary cannot crowd grammar out entirely. The caller
+	// decides the rhythm — see the HTTP layer's conceptEvery — because
+	// only it knows where in a run this drill sits.
+	SkipWords bool
+}
+
 // ErrInvalidConfidence is returned when Answer is asked to record a
 // confidence outside the documented 0 (not given) / 1..5 (valid) range.
 var ErrInvalidConfidence = errors.New("practice: confidence must be 0 (not given) or between 1 and 5")
@@ -116,17 +133,18 @@ func NewService(repo storage.ExerciseRepository, agent *drill.Agent, plnr *plann
 // model call at all: the reading and meaning are already stored, so the
 // exercise is built directly from the item (see wordRecall).
 //
-// providerOverride, when non-empty, names the AI adapter that must
-// generate this drill — the 練習 page's dropdown, for this request only.
-// It is passed straight to drill.GenerateInput and never persisted.
-// Empty means "route normally", which is what every non-interactive
-// caller (the channel adapters) wants: nobody is there to pick.
-//
 // Records quiz.started with Evidence {"concept":…, "type":…}.
-func (s *Service) Start(ctx context.Context, identity learner.IdentityID, providerOverride string) (exercise.Exercise, error) {
+func (s *Service) Start(ctx context.Context, identity learner.IdentityID, opts StartOptions) (exercise.Exercise, error) {
 	// A recent word short-circuits everything below, including the model
 	// call: nothing to generate, so nothing to wait for or pay for.
-	if item, ok, err := s.recentWord(ctx, identity); err != nil {
+	//
+	// SkipWords is what stops that from becoming a monopoly. A learner
+	// who imports 500 words has 500 recent ones, and pure recency would
+	// mean 500 word drills before a single grammar question — the
+	// ordering the caller asked for, taken to a place nobody wants.
+	if item, ok, err := s.recentWord(ctx, identity); opts.SkipWords {
+		_ = item
+	} else if err != nil {
 		return exercise.Exercise{}, fmt.Errorf("practice: recent word: %w", err)
 	} else if ok {
 		return s.persist(ctx, identity, wordRecall(item))
@@ -152,7 +170,7 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID, provid
 	ex, _, err := s.agent.Generate(ctx, drill.GenerateInput{
 		Identity:         identity,
 		Concept:          concept,
-		ProviderOverride: providerOverride,
+		ProviderOverride: opts.ProviderOverride,
 	})
 	if err != nil {
 		return exercise.Exercise{}, fmt.Errorf("practice: generate exercise: %w", err)
@@ -310,6 +328,9 @@ func (s *Service) randomCatalogConcept(ctx context.Context) (grammar.Concept, er
 // given" (never persisted as a literal 0 — see
 // storage.ExerciseAttempt.Confidence's *int/nil shape), 1..5 is valid,
 // anything else is ErrInvalidConfidence.
+// For TypeWordRecall, response carries a self-grade token
+// (exercise.SelfGradeKnew / SelfGradeAgain) rather than typed text — see
+// selfGradedEvaluation.
 func (s *Service) Answer(ctx context.Context, identity learner.IdentityID, exerciseID, response string, confidence int) (exercise.Evaluation, error) {
 	if confidence != 0 && (confidence < 1 || confidence > 5) {
 		return exercise.Evaluation{}, fmt.Errorf("%w: got %d", ErrInvalidConfidence, confidence)
@@ -321,13 +342,26 @@ func (s *Service) Answer(ctx context.Context, identity learner.IdentityID, exerc
 	}
 
 	var eval exercise.Evaluation
-	if ex.Type == exercise.TypeFreeProduction {
+	switch {
+	case ex.Type == exercise.TypeWordRecall:
+		eval = selfGradedEvaluation(response)
+	case ex.Type == exercise.TypeFreeProduction:
 		eval, _, err = s.agent.Evaluate(ctx, identity, ex, response)
 		if err != nil {
 			return exercise.Evaluation{}, fmt.Errorf("practice: evaluate: %w", err)
 		}
-	} else {
+	default:
 		eval = deterministicEvaluation(response, ex)
+	}
+
+	// A word drill has to move the word's own counters, or the drill
+	// never ends: recentWord selects on successful_productions = 0, so a
+	// word answered correctly but never recorded stays at the front of
+	// the queue and every subsequent drill is the same card.
+	if ex.SubjectType == exercise.SubjectWord && ex.SubjectRef != "" && s.vocab != nil {
+		if err := s.vocab.RecordProduction(ctx, identity, ex.SubjectRef, eval.Correct, s.now().UTC()); err != nil {
+			return exercise.Evaluation{}, fmt.Errorf("practice: record production: %w", err)
+		}
 	}
 
 	var confidencePtr *int
@@ -373,6 +407,28 @@ func (s *Service) Answer(ctx context.Context, identity learner.IdentityID, exerc
 	}
 
 	return eval, nil
+}
+
+// selfGradedEvaluation grades a flip card from the learner's own verdict.
+//
+// Only they know whether they recalled it before turning the card over,
+// so there is nothing to compare and nothing for a model to judge.
+// Anything that is not an explicit "knew" counts as "again": an
+// unrecognised token is not a reason to credit a recall that may never
+// have happened, and the cost of being wrong in that direction is one
+// extra sighting of a word.
+func selfGradedEvaluation(response string) exercise.Evaluation {
+	if strings.TrimSpace(response) == exercise.SelfGradeKnew {
+		return exercise.Evaluation{Correct: true, Score: deterministicCorrectScore, FeedbackJA: correctFeedbackJA, FeedbackEN: correctFeedbackEN}
+	}
+	return exercise.Evaluation{Correct: false, Score: deterministicWrongScore, FeedbackJA: wrongFeedbackJA, FeedbackEN: wrongFeedbackEN}
+}
+
+// Get returns one of identity's exercises. The HTTP layer needs it to
+// render an answer's diff against the canonical answer, which the
+// Evaluation alone does not carry.
+func (s *Service) Get(ctx context.Context, identity learner.IdentityID, exerciseID string) (exercise.Exercise, error) {
+	return s.repo.Get(ctx, identity, exerciseID)
 }
 
 // deterministicEvaluation implements the brief's deterministic scoring

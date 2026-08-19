@@ -5,10 +5,12 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
 	"github.com/mikeyaustin/jlp/internal/application/practice"
+	"github.com/mikeyaustin/jlp/internal/domain/diff"
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -24,17 +26,58 @@ type exerciseView struct {
 	InstructionsJA, InstructionsEN string
 	Prompt                         string
 	Choices                        []string
+	// IsWord selects the flip-card branch. A word drill has no input to
+	// type: the learner turns the card over and grades themselves.
+	IsWord bool
+	// Reading/Meaning are the back of the flip card, and are sent ONLY
+	// for a word drill. They are the learner's own stored vocabulary, so
+	// putting them in the DOM reveals nothing they did not write — unlike
+	// a generated exercise's Answer, which is never sent.
+	Reading, Meaning string
+	// Position/Total/Streak drive the run header. They round-trip through
+	// hx-vals rather than living server-side: a run's position is a
+	// property of the exchange, not of the learner, and storing it would
+	// mean deciding when an abandoned run expires.
+	Position, Total, Streak int
+	// Percent is Position/Total as a whole number, computed here because
+	// html/template cannot divide.
+	Percent int
 }
 
-func toExerciseView(ex exercise.Exercise) exerciseView {
-	return exerciseView{
+// runLength is how many questions one practice run is. Ten is long
+// enough to feel like a session and short enough to finish in a sitting.
+const runLength = 10
+
+// conceptEvery is how often a run insists on a grammar drill regardless
+// of how many fresh words are queued. Every third: words still lead, and
+// still come freshest-first, but a 500-word import no longer means 500
+// drills before a single grammar question.
+const conceptEvery = 3
+
+func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
+	if position < 1 {
+		position = 1
+	}
+	v := exerciseView{
 		ID:             ex.ID,
 		Type:           ex.Type,
 		InstructionsJA: ex.InstructionsJA,
 		InstructionsEN: ex.InstructionsEN,
 		Prompt:         ex.Prompt,
 		Choices:        ex.Choices,
+		IsWord:         ex.Type == exercise.TypeWordRecall,
+		Position:       position,
+		Total:          runLength,
+		Streak:         streak,
+		Percent:        position * 100 / runLength,
 	}
+	if v.IsWord {
+		v.Reading = ex.Answer
+		if len(ex.Acceptable) > 0 {
+			v.Meaning = ex.Acceptable[0]
+		}
+	}
+	return v
 }
 
 // exerciseResultView is the result of one Answer call, as the
@@ -46,15 +89,51 @@ type exerciseResultView struct {
 	Correct                bool
 	Score                  int
 	FeedbackJA, FeedbackEN string
+	// Spans is the character-level diff from what the learner typed to
+	// the canonical answer, so a near-miss shows WHERE it missed instead
+	// of just "not quite". Rendered with the same .d-ins/.d-del the
+	// correction card uses. Empty when there is nothing to diff: a
+	// correct answer, a self-graded card, or free production, which has
+	// no single right answer to diff against.
+	Spans []diffSpanView
+	// Answer is the canonical answer, shown alongside the diff. Only ever
+	// set once the attempt is over, never while the question is open.
+	Answer string
+	// Position/Total/Streak/Percent carry the run forward — see
+	// exerciseView. Done marks the end of a run.
+	Position, Total, Streak, Percent int
+	Done                             bool
+	// NextPosition is where 次の問題へ resumes. Computed here because
+	// html/template cannot add.
+	NextPosition int
 }
 
-func toExerciseResultView(eval exercise.Evaluation) exerciseResultView {
-	return exerciseResultView{
-		Correct:    eval.Correct,
-		Score:      eval.Score,
-		FeedbackJA: eval.FeedbackJA,
-		FeedbackEN: eval.FeedbackEN,
+func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, response string, position, streak int) exerciseResultView {
+	v := exerciseResultView{
+		Correct:      eval.Correct,
+		Score:        eval.Score,
+		FeedbackJA:   eval.FeedbackJA,
+		FeedbackEN:   eval.FeedbackEN,
+		Position:     position,
+		Total:        runLength,
+		Streak:       streak,
+		Percent:      position * 100 / runLength,
+		Done:         position >= runLength,
+		NextPosition: position + 1,
 	}
+	// A diff only means something when there is one canonical answer the
+	// learner tried to type. Free production has none, and a flip card
+	// was never typed at all.
+	if !eval.Correct && ex.Answer != "" &&
+		ex.Type != exercise.TypeFreeProduction && ex.Type != exercise.TypeWordRecall {
+		v.Answer = ex.Answer
+		// toDiffSpans, not a second mapping of its own: the correction
+		// card already renders .d-ins/.d-del from the same diff, and two
+		// spellings of "what changed" is two things to keep agreeing
+		// about Japanese.
+		v.Spans = toDiffSpans(diff.Runes(strings.TrimSpace(response), strings.TrimSpace(ex.Answer)))
+	}
+	return v
 }
 
 // practicePage renders the /practice page shell: a 練習する button posts
@@ -76,6 +155,27 @@ func (s *Server) practicePage(w http.ResponseWriter, r *http.Request) {
 // own 次の問題へ button, which posts here too): generates and persists
 // one new exercise for the caller, rendering the "exercise" partial into
 // #exercise-area.
+// runStateFrom reads the run position and streak the previous partial
+// sent back. Absent or malformed means "first question of a fresh run" —
+// a run is a property of the exchange, not of the learner, so a lost
+// value simply starts over rather than erroring.
+func runStateFrom(r *http.Request) (position, streak int) {
+	position, err := strconv.Atoi(r.FormValue("position"))
+	if err != nil || position < 1 || position > runLength {
+		position = 1
+	}
+	// run_correct, not "streak": the word itself must not appear in a
+	// wrong answer's response body (PRD §56 — no penalty language, and a
+	// broken streak is the most common way an app manufactures some).
+	// The COUNT is still carried and still shown after a correct answer;
+	// it is reset and hidden on a miss, so a failure never mentions it.
+	streak, err = strconv.Atoi(r.FormValue("run_correct"))
+	if err != nil || streak < 0 {
+		streak = 0
+	}
+	return position, streak
+}
+
 func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 
@@ -88,7 +188,15 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ex, err := s.opts.Practice.Start(r.Context(), ident.ID, override)
+	position, streak := runStateFrom(r)
+	// Every conceptEvery-th slot in a run skips the word queue, so a
+	// large imported vocabulary cannot crowd grammar out entirely. The
+	// rhythm lives here rather than in the service because only the HTTP
+	// layer knows where in a run this drill sits.
+	ex, err := s.opts.Practice.Start(r.Context(), ident.ID, practice.StartOptions{
+		ProviderOverride: override,
+		SkipWords:        position%conceptEvery == 0,
+	})
 	if err != nil {
 		// Logged before answering, because htmx does not swap a non-2xx
 		// response: without this the learner sees a page that did not
@@ -99,7 +207,7 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not start practice", http.StatusInternalServerError)
 		return
 	}
-	RenderPartial(w, r, "exercise", toExerciseView(ex))
+	RenderPartial(w, r, "exercise", toExerciseView(ex, position, streak))
 }
 
 // practiceAnswer handles an exercise form's submit: form field response
@@ -125,6 +233,13 @@ func (s *Server) practiceAnswer(w http.ResponseWriter, r *http.Request) {
 		confidence = c
 	}
 
+	ex, err := s.opts.Practice.Get(r.Context(), ident.ID, id)
+	if err != nil && !errors.Is(err, storage.ErrNotFound) {
+		slog.Error("practice: could not load exercise", "identity", ident.ID, "exercise", id, "err", err)
+		http.Error(w, "could not submit answer", http.StatusInternalServerError)
+		return
+	}
+
 	eval, err := s.opts.Practice.Answer(r.Context(), ident.ID, id, r.FormValue("response"), confidence)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
@@ -140,5 +255,11 @@ func (s *Server) practiceAnswer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "could not submit answer", http.StatusInternalServerError)
 		return
 	}
-	RenderPartial(w, r, "exercise_result", toExerciseResultView(eval))
+	position, streak := runStateFrom(r)
+	if eval.Correct {
+		streak++
+	} else {
+		streak = 0
+	}
+	RenderPartial(w, r, "exercise_result", toExerciseResultView(eval, ex, r.FormValue("response"), position, streak))
 }

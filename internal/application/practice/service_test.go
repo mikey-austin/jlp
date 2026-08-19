@@ -259,7 +259,7 @@ func defaultHarness() *testHarness {
 func TestStartUsesPlannerTopConcept(t *testing.T) {
 	h := defaultHarness()
 
-	ex, err := h.svc.Start(context.Background(), testIdentity, "")
+	ex, err := h.svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -313,7 +313,7 @@ func TestStartFallsBackToCatalogWhenNoPriorities(t *testing.T) {
 		},
 	)
 
-	ex, err := h.svc.Start(context.Background(), testIdentity, "")
+	ex, err := h.svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -330,7 +330,7 @@ func TestStartFallsBackToCatalogWhenNoPriorities(t *testing.T) {
 func TestStartPropagatesTopConceptError(t *testing.T) {
 	h := newTestHarness(fakeai.New(), &fakePriorityRepoErr{err: errBoom}, &fakeGrammarRepo{})
 
-	if _, err := h.svc.Start(context.Background(), testIdentity, ""); err == nil {
+	if _, err := h.svc.Start(context.Background(), testIdentity, apppractice.StartOptions{}); err == nil {
 		t.Fatal("expected an error when TopConcept fails, got nil")
 	}
 }
@@ -352,7 +352,7 @@ func (f *fakePriorityRepoErr) Top(context.Context, learner.IdentityID, int) ([]s
 
 func startExercise(t *testing.T, h *testHarness) exercise.Exercise {
 	t.Helper()
-	ex, err := h.svc.Start(context.Background(), testIdentity, "")
+	ex, err := h.svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -606,7 +606,7 @@ func TestStartPrefersDueConceptOverPlannerTopConcept(t *testing.T) {
 	agent := drill.New(fakeai.New())
 	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched, nil, nil)
 
-	ex, err := svc.Start(context.Background(), testIdentity, "")
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -636,7 +636,7 @@ func TestStartFallsBackToPlannerWhenNothingDueIsConceptType(t *testing.T) {
 	agent := drill.New(fakeai.New())
 	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched, nil, nil)
 
-	ex, err := svc.Start(context.Background(), testIdentity, "")
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -665,7 +665,7 @@ func TestStartFallsBackToPlannerWhenDueConceptSlugIsStale(t *testing.T) {
 	agent := drill.New(fakeai.New())
 	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched, nil, nil)
 
-	ex, err := svc.Start(context.Background(), testIdentity, "")
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -702,7 +702,7 @@ func TestStartFindsDueConceptBehindLeadingExpressionItems(t *testing.T) {
 	agent := drill.New(fakeai.New())
 	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched, nil, nil)
 
-	ex, err := svc.Start(context.Background(), testIdentity, "")
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -768,7 +768,7 @@ func TestARecentWordIsDrilledBeforeAnythingElse(t *testing.T) {
 		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing, easily mixed up"),
 	}, now)
 
-	ex, err := svc.Start(context.Background(), testIdentity, "")
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -796,7 +796,7 @@ func TestTheRecentWordQueryIsBoundedToTheWindow(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	svc, vocab, _ := wordSelectionHarness(t, nil, now)
 
-	if _, err := svc.Start(context.Background(), testIdentity, ""); err != nil {
+	if _, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{}); err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	want := now.Add(-14 * 24 * time.Hour)
@@ -814,7 +814,7 @@ func TestNoRecentWordFallsThroughToTheConceptPath(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	svc, _, _ := wordSelectionHarness(t, nil, now)
 
-	ex, err := svc.Start(context.Background(), testIdentity, "")
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -836,7 +836,7 @@ func TestAWordWithNothingOnTheBackIsSkipped(t *testing.T) {
 		recentItem("w2", "紛らわしい", "まぎらわしい", "confusing"),
 	}, now)
 
-	ex, err := svc.Start(context.Background(), testIdentity, "")
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -859,11 +859,33 @@ func TestAServiceWithNoVocabularyStillDrillsConcepts(t *testing.T) {
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, events, grammarRepo, &fakePriorityRepo{}, &fakeVocabRepo{}, func() time.Time { return now })
 	svc := apppractice.NewService(repo, drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, nil, nil, nil)
 
-	ex, err := svc.Start(context.Background(), testIdentity, "")
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if ex.SubjectType != exercise.SubjectConcept {
 		t.Errorf("subject type = %q, want %q", ex.SubjectType, exercise.SubjectConcept)
+	}
+}
+
+// A learner who imports 500 words has 500 recent ones. Pure recency
+// would mean 500 drills before a single grammar question — the ordering
+// the caller asked for, taken somewhere nobody wants. SkipWords is the
+// caller's way out, and it has to actually bypass the queue rather than
+// merely reorder it.
+func TestSkipWordsPassesOverAFullWordQueue(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+		recentItem("w2", "曖昧", "あいまい", "vague"),
+	}, now)
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{SkipWords: true})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.SubjectType != exercise.SubjectConcept {
+		t.Errorf("subject type = %q, want %q — SkipWords did not bypass the word queue",
+			ex.SubjectType, exercise.SubjectConcept)
 	}
 }

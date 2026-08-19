@@ -55,6 +55,32 @@ same word repeats until the SRS interval catches up.
 `dueConcept`'s `SubjectType == "concept"` filter is removed rather than
 widened — expressions become drillable through the same door.
 
+**Words do not get every slot.** Recency-first, taken literally, means a
+learner who imports 500 words gets 500 word drills before a single
+grammar question — the ordering asked for, carried somewhere nobody
+wants. Every third drill in a run skips the word queue
+(`conceptEvery`). Words still lead and still come freshest-first; they
+just cannot crowd grammar out entirely. The rhythm lives in the HTTP
+layer, because only it knows where in a run a drill sits.
+
+## Still to build
+
+The two shapes requested after this spec was written, both of which are
+generated exercises rather than deterministic ones:
+
+- **Cloze from example sentences** — a sentence the learner has already
+  seen, with the target word blanked. Needs the example carried on the
+  vocabulary item (`Source`/example) or generated, plus a new type in
+  `exercise.v1.json`.
+- **Read-then-choose** — a short paragraph using several words due for
+  revision, followed by multiple choice on what it conveys. Needs a
+  prompt that takes a SET of subjects rather than one, which is a change
+  to `drill.GenerateInput`'s shape, not just its schema.
+
+Both are model-generated, so both inherit the existing rule: prose is
+complete on its own, and nothing under the socratic gate reaches a
+drill payload.
+
 ## Exercise gains a subject
 
 `Exercise.ConceptSlug` cannot name a word. Rather than overload it,

@@ -1,9 +1,70 @@
+{{/* run_header is the progress bar and streak shared by the question
+     and its result, so one run reads as one run rather than a series of
+     unrelated cards. */}}
+{{define "run_header"}}
+<div class="run-header">
+  <div class="run-bar" role="progressbar" aria-valuenow="{{.Position}}" aria-valuemin="1" aria-valuemax="{{.Total}}"
+       aria-label="練習の進捗">
+    <span class="run-bar__fill" style="width: {{.Percent}}%"></span>
+  </div>
+  <p class="run-meta">
+    <span class="run-count">{{.Position}} / {{.Total}}</span>
+    {{if gt .Streak 1}}<span class="run-run" title="連続正解">🔥 {{.Streak}}連続</span>{{end}}
+  </p>
+</div>
+{{end}}
+
 {{define "exercise"}}
 <div class="exercise card" id="exercise-{{.ID}}" data-exercise-id="{{.ID}}" data-type="{{.Type}}">
+  {{template "run_header" .}}
   <p class="instructions ja">{{.InstructionsJA}}</p>
   <p class="instructions en">{{.InstructionsEN}}</p>
+
+  {{if .IsWord}}
+  {{/* A flip card, not a form. The reading and meaning are the learner's
+       OWN stored vocabulary, so having them in the DOM reveals nothing
+       they did not write themselves — unlike a generated exercise's
+       Answer, which is never sent to the page.
+
+       <details>, not Alpine: turning a card over is exactly what it
+       does, natively and with no JavaScript. An x-show/x-cloak version
+       stays permanently shut if Alpine fails to load — the learner could
+       never reveal the answer or grade themselves — and this has neither
+       failure mode, plus keyboard and screen-reader behaviour for free. */}}
+  <div class="flip-card">
+    <p class="flip-card__front" lang="ja">{{.Prompt}}</p>
+    <details class="flip-card__reveal">
+      <summary class="btn btn--ghost">めくる</summary>
+      <div class="flip-card__back">
+      {{if .Reading}}<p class="flip-card__reading" lang="ja">{{.Reading}}</p>{{end}}
+      {{if .Meaning}}<p class="flip-card__meaning">{{.Meaning}}</p>{{end}}
+      {{/* Self-graded, because only the learner knows whether they
+           recalled it BEFORE turning the card over. Both buttons post
+           the same route as a typed answer; the token is what differs. */}}
+      <div class="flip-card__grade">
+        <form hx-post="/practice/{{.ID}}/answer" hx-target="#exercise-area" hx-swap="innerHTML">
+          <input type="hidden" name="response" value="again">
+          <input type="hidden" name="position" value="{{.Position}}">
+          <input type="hidden" name="run_correct" value="{{.Streak}}">
+          <button type="submit" class="btn btn--ghost">もう一度</button>
+        </form>
+        <form hx-post="/practice/{{.ID}}/answer" hx-target="#exercise-area" hx-swap="innerHTML">
+          <input type="hidden" name="response" value="knew">
+          <input type="hidden" name="position" value="{{.Position}}">
+          <input type="hidden" name="run_correct" value="{{.Streak}}">
+          <button type="submit" class="btn">できた</button>
+        </form>
+        </div>
+      </div>
+    </details>
+  </div>
+  {{else}}
   <p class="prompt">{{.Prompt}}</p>
   <form class="exercise-form" hx-post="/practice/{{.ID}}/answer" hx-target="#exercise-area" hx-swap="innerHTML">
+    {{/* The run travels with the exchange rather than living on the
+         server — see exerciseView's own comment. */}}
+    <input type="hidden" name="position" value="{{.Position}}">
+    <input type="hidden" name="run_correct" value="{{.Streak}}">
     {{if eq .Type "multiple-choice"}}
     <div class="choices">
       {{range .Choices}}<label class="choice"><input type="radio" name="response" value="{{.}}" required> {{.}}</label>{{end}}
@@ -11,7 +72,7 @@
     {{else if eq .Type "free-production"}}
     <textarea class="textarea" name="response" rows="4" required></textarea>
     {{else}}
-    <input class="input" type="text" name="response" required autocomplete="off">
+    <input class="input" type="text" name="response" required autocomplete="off" lang="ja">
     {{end}}
     <label class="field confidence-select">自信度（任意）
       <select class="select" name="confidence">
@@ -25,20 +86,45 @@
     </label>
     <button type="submit" class="btn">送信</button>
   </form>
+  {{end}}
 </div>
 {{end}}
 
 {{define "exercise_result"}}
 <div class="exercise-result card" data-correct="{{.Correct}}">
+  {{template "run_header" .}}
   {{if .Correct}}<p class="result-banner correct">正解！</p>{{else}}<p class="result-banner retry">もう一度挑戦しましょう。</p>{{end}}
+
+  {{/* The diff shows WHERE it missed instead of only that it did — same
+       .d-ins/.d-del the correction card renders, from the same diff. Only
+       present when there is one canonical answer that was actually typed
+       (never for free production, never for a self-graded card). */}}
+  {{if .Spans}}
+  <div class="answer-diff">
+    <p class="answer-diff__label">正解との違い</p>
+    <p class="answer-diff__spans" lang="ja">{{range .Spans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
+    <p class="answer-diff__answer" lang="ja">正解：{{.Answer}}</p>
+  </div>
+  {{end}}
+
   <p class="feedback ja">{{.FeedbackJA}}</p>
   <p class="feedback en">{{.FeedbackEN}}</p>
+
+  {{if .Done}}
+  <p class="run-done">{{.Total}}問おつかれさまでした。</p>
+  <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML"
+          hx-vals="js:{provider_override: document.getElementById('provider-override').value, position: 1, run_correct: 0}"
+          data-progress-into="#exercise-area"
+          data-progress-label-from="#provider-override"
+          data-progress-verb="が問題を作成中">もう一度やる</button>
+  {{else}}
   {{/* Reads the SAME #provider-override the page bar owns — it lives
        outside #exercise-area precisely so it survives this swap. */}}
   <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML"
-          hx-vals="js:{provider_override: document.getElementById('provider-override').value}"
+          hx-vals="js:{provider_override: document.getElementById('provider-override').value, position: {{.NextPosition}}, run_correct: {{.Streak}}}"
           data-progress-into="#exercise-area"
           data-progress-label-from="#provider-override"
           data-progress-verb="が問題を作成中">次の問題へ</button>
+  {{end}}
 </div>
 {{end}}

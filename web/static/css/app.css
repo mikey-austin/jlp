@@ -564,6 +564,112 @@ main p.description {
   width: auto;
   min-width: 12ch;
 }
+/* ---- practice run header ---- */
+.run-header {
+  margin-bottom: var(--space-4);
+}
+.run-bar {
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border);
+  overflow: hidden;
+}
+.run-bar__fill {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+  /* The bar is the only thing on the page that moves between questions,
+     so it is worth animating — it is what makes ten separate cards read
+     as one run. */
+  transition: width 240ms ease-out;
+}
+.run-meta {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+.run-done {
+  font-weight: 700;
+  margin: var(--space-3) 0 0;
+}
+
+/* ---- flip card ---- */
+.flip-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-3);
+}
+.flip-card__front {
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  margin: var(--space-2) 0;
+}
+.flip-card__reveal summary {
+  /* A <summary> is a list-item box by default; this makes it sit like
+     the button it reads as. */
+  display: inline-block;
+  list-style: none;
+  cursor: pointer;
+}
+.flip-card__reveal summary::-webkit-details-marker {
+  display: none;
+}
+.flip-card__reveal[open] summary {
+  display: none;
+}
+.flip-card__back {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: 100%;
+  padding-top: var(--space-3);
+  border-top: 1px solid var(--border);
+}
+.flip-card__reading {
+  font-size: var(--text-lg);
+  margin: 0;
+}
+.flip-card__meaning {
+  color: var(--fg-muted);
+  margin: 0;
+}
+.flip-card__grade {
+  display: flex;
+  gap: var(--space-3);
+  margin-top: var(--space-2);
+}
+.flip-card__grade form {
+  margin: 0;
+}
+
+/* ---- answer diff ---- */
+/* Reuses .d-ins/.d-del from the correction card — same diff, same
+   colours, so "what changed" looks identical everywhere it appears. */
+.answer-diff {
+  margin: var(--space-3) 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+.answer-diff__label {
+  margin: 0 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+.answer-diff__spans {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+.answer-diff__answer {
+  margin: var(--space-2) 0 0;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+
 .exercise .instructions.en,
 .exercise-result .feedback.en {
   color: var(--fg-muted);

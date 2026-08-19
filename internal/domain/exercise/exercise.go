@@ -104,6 +104,16 @@ const (
 	SubjectWord    = "word"
 )
 
+// Self-grade tokens. A TypeWordRecall response carries one of these
+// instead of typed text: a flip card is graded by the learner, because
+// only they know whether they actually recalled it before turning the
+// card over. Anything else counts as SelfGradeAgain — an unrecognised
+// token is not a reason to credit a recall that may not have happened.
+const (
+	SelfGradeKnew  = "knew"
+	SelfGradeAgain = "again"
+)
+
 // Evaluation is the result of grading a learner's response to an
 // Exercise — either computed deterministically (a typed answer compared
 // against Answer/Acceptable) or by internal/agent/drill.Agent.Evaluate

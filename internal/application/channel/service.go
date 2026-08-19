@@ -156,7 +156,7 @@ func (s *Service) Handle(ctx context.Context, in channels.Inbound) (channels.Out
 func (s *Service) handlePractice(ctx context.Context, in channels.Inbound, identity learner.IdentityID, key string) (channels.Outbound, error) {
 	// No provider override: a drill requested over Slack/Signal has no
 	// dropdown behind it and no operator watching, so it routes normally.
-	ex, err := s.practice.Start(ctx, identity, "")
+	ex, err := s.practice.Start(ctx, identity, practice.StartOptions{})
 	if err != nil {
 		return channels.Outbound{}, fmt.Errorf("channel: start practice: %w", err)
 	}

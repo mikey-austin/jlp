@@ -101,7 +101,7 @@ func createExerciseTool(svc *appractice.Service) Tool {
 			// No provider override: an agent calling this tool is already
 			// running on whichever adapter the caller chose, and letting a
 			// model pick its own would make the choice unauditable.
-			ex, err := svc.Start(ctx, identity, "")
+			ex, err := svc.Start(ctx, identity, appractice.StartOptions{})
 			if err != nil {
 				return "", fmt.Errorf("create_exercise: %w", err)
 			}
