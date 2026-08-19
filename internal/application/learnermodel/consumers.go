@@ -294,21 +294,21 @@ func classify(ev event.LearningEvent) (subjectType learnermodel.SubjectType, sub
 		// practice is the same evidence as getting it wrong in writing,
 		// and 練習 was previously invisible to this entirely.
 		//
-		// A drilled WORD contributes nothing here, deliberately: there is
-		// no SubjectType for vocabulary (only concept and
-		// correction-type), and inventing one would ripple through the
-		// planner, the observations table and 成果's concept-centric
-		// reporting. Words are not unrepresented in the learning loop —
-		// they are scheduled by application/retrieval, which is where a
-		// word's progress lives.
-		if st, _ := ev.Evidence["subject_type"].(string); st != exercise.SubjectConcept {
-			return "", "", false
-		}
+		// A drilled WORD contributes too, as its own subject type: a word
+		// the learner keeps failing is a weakness in exactly the sense
+		// this package means, and leaving it out made 練習's word half
+		// invisible to the planner.
 		ref, _ := ev.Evidence["subject_ref"].(string)
 		if ref == "" {
 			return "", "", false
 		}
-		return learnermodel.SubjectConcept, ref, true
+		switch st, _ := ev.Evidence["subject_type"].(string); st {
+		case exercise.SubjectConcept:
+			return learnermodel.SubjectConcept, ref, true
+		case exercise.SubjectWord:
+			return learnermodel.SubjectWord, ref, true
+		}
+		return "", "", false
 	default:
 		return "", "", false
 	}

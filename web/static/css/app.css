@@ -646,6 +646,43 @@ main p.description {
   margin: 0;
 }
 
+/* ---- reading passage ---- */
+.passage {
+  margin: var(--space-3) 0 var(--space-4);
+  padding: var(--space-4);
+  border-left: 3px solid var(--primary);
+  border-radius: 0 10px 10px 0;
+  background: var(--bg-subtle, var(--surface));
+  font-size: var(--text-lg);
+  line-height: 1.9;
+  white-space: pre-wrap;
+}
+
+/* ---- live check (cloze) ---- */
+/* Colour is the fast signal, the glyph beside it the accessible one:
+   never colour alone. */
+.input[data-check-state="partial"] {
+  border-color: var(--primary);
+}
+.input[data-check-state="complete"] {
+  border-color: var(--success);
+}
+.input[data-check-state="wrong"] {
+  border-color: var(--danger);
+}
+.live-check {
+  margin: var(--space-1) 0 0;
+  min-height: 1.2em;
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+.live-check[data-state="complete"] {
+  color: var(--success);
+}
+.live-check[data-state="wrong"] {
+  color: var(--danger);
+}
+
 /* ---- answer diff ---- */
 /* Reuses .d-ins/.d-del from the correction card — same diff, same
    colours, so "what changed" looks identical everywhere it appears. */

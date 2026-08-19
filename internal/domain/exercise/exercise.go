@@ -96,6 +96,26 @@ const (
 	// cheap enough to do daily, and why this type is absent from
 	// exercise.v1.json: nothing generates it.
 	TypeWordRecall = "word-recall"
+	// TypeWordCloze is the learner's OWN example sentence with the target
+	// word blanked out — the sentence they met the word in, from their
+	// reading, not one invented for the drill.
+	//
+	// Like TypeWordRecall it is built from stored data with no model
+	// call, and is absent from exercise.v1.json for the same reason. It
+	// is preferred over a flip card when an example exists: producing the
+	// word in its own context is a stronger test than recognising it
+	// alone, and the context is the part that makes it stick.
+	TypeWordCloze = "word-cloze"
+	// TypePassageChoice is a short generated passage that reuses several
+	// words the learner is revising, followed by a multiple-choice
+	// question about what it CONVEYS.
+	//
+	// Model-generated, unlike the other two word shapes, because writing
+	// natural prose that uses a given set of words is exactly what a
+	// model is for. It is absent from exercise.v1.json because it has its
+	// own schema (passage.v1) — a passage and a question are not the same
+	// shape as a single-concept drill.
+	TypePassageChoice = "passage-choice"
 )
 
 // Subject types for SubjectType.

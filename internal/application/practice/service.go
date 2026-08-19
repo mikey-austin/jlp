@@ -10,6 +10,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/rand"
 	"strings"
 	"time"
@@ -43,6 +44,12 @@ type StartOptions struct {
 	// decides the rhythm — see the HTTP layer's conceptEvery — because
 	// only it knows where in a run this drill sits.
 	SkipWords bool
+	// WantPassage asks for a reading passage over several words the
+	// learner is revising, rather than a single-word drill. Honoured only
+	// when enough words are actually available (passageWordCount); a run
+	// slot that cannot be filled this way falls through to the ordinary
+	// order rather than failing.
+	WantPassage bool
 }
 
 // ErrInvalidConfidence is returned when Answer is asked to record a
@@ -142,12 +149,26 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID, opts S
 	// who imports 500 words has 500 recent ones, and pure recency would
 	// mean 500 word drills before a single grammar question — the
 	// ordering the caller asked for, taken to a place nobody wants.
+	// A passage reuses SEVERAL words at once, so it is tried before the
+	// single-word branches — otherwise the first of those words would be
+	// drilled alone and the slot spent.
+	if opts.WantPassage && !opts.SkipWords {
+		if ex, ok, err := s.passageDrill(ctx, identity, opts.ProviderOverride); err != nil {
+			// Not fatal: a passage is the richest shape available, not a
+			// required one, and a learner is better served by an ordinary
+			// drill than by 練習 refusing to produce anything.
+			slog.Warn("practice: passage unavailable, falling back", "identity", identity, "err", err)
+		} else if ok {
+			return s.persist(ctx, identity, ex)
+		}
+	}
+
 	if item, ok, err := s.recentWord(ctx, identity); opts.SkipWords {
 		_ = item
 	} else if err != nil {
 		return exercise.Exercise{}, fmt.Errorf("practice: recent word: %w", err)
 	} else if ok {
-		return s.persist(ctx, identity, wordRecall(item))
+		return s.persist(ctx, identity, s.drillFor(ctx, identity, item))
 	}
 
 	// A due WORD is drilled before a due concept is looked for, because
@@ -158,7 +179,7 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID, opts S
 		if item, ok, err := s.dueWord(ctx, identity); err != nil {
 			return exercise.Exercise{}, fmt.Errorf("practice: due word: %w", err)
 		} else if ok {
-			return s.persist(ctx, identity, wordRecall(item))
+			return s.persist(ctx, identity, s.drillFor(ctx, identity, item))
 		}
 	}
 
@@ -222,6 +243,129 @@ func (s *Service) persist(ctx context.Context, identity learner.IdentityID, ex e
 	}
 
 	return ex, nil
+}
+
+// passageWordCount is how many words a passage revisits. Three is
+// enough for a paragraph to have a subject rather than being three
+// unrelated clauses, and few enough that a learner meets each one in a
+// context they can still hold in mind.
+const passageWordCount = 3
+
+// passageDrill builds a reading passage over the words most worth
+// revisiting: the recent ones first, then whatever is due.
+//
+// ok is false — with no error — when there are not enough words to make
+// a passage worth writing. That is the common case for a new learner,
+// and it is a fall-through, not a failure.
+func (s *Service) passageDrill(ctx context.Context, identity learner.IdentityID, providerOverride string) (exercise.Exercise, bool, error) {
+	items, err := s.passageCandidates(ctx, identity)
+	if err != nil {
+		return exercise.Exercise{}, false, err
+	}
+	if len(items) < passageWordCount {
+		return exercise.Exercise{}, false, nil
+	}
+	items = items[:passageWordCount]
+
+	words := make([]drill.WordRef, 0, len(items))
+	for _, item := range items {
+		words = append(words, drill.WordRef{
+			Expression: item.Expression,
+			Reading:    item.Reading,
+			Meaning:    item.Meaning,
+		})
+	}
+
+	ex, _, err := s.agent.GeneratePassage(ctx, drill.PassageInput{
+		Identity:         identity,
+		Words:            words,
+		ProviderOverride: providerOverride,
+	})
+	if err != nil {
+		return exercise.Exercise{}, false, err
+	}
+	// The subject is the FIRST word: a passage revisits several, but an
+	// exercise records one, and the retrieval schedule needs a single
+	// subject to move. The others are still met in context, which is the
+	// point of the shape — they simply are not what this attempt scores.
+	ex.SubjectType = exercise.SubjectWord
+	ex.SubjectRef = items[0].ID
+	return ex, true, nil
+}
+
+// passageCandidates gathers words worth revisiting, recent before due,
+// without repeats.
+func (s *Service) passageCandidates(ctx context.Context, identity learner.IdentityID) ([]vocabulary.Item, error) {
+	if s.vocab == nil {
+		return nil, nil
+	}
+	recent, err := s.vocab.ListRecentUnpracticed(ctx, identity, s.now().UTC().Add(-recentWordWindow), recentWordScanLimit)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]bool, len(recent))
+	out := make([]vocabulary.Item, 0, passageWordCount)
+	add := func(item vocabulary.Item) {
+		if seen[item.ID] || !hasCardBack(item) {
+			return
+		}
+		seen[item.ID] = true
+		out = append(out, item)
+	}
+	for _, item := range recent {
+		add(item)
+	}
+	if len(out) >= passageWordCount {
+		return out, nil
+	}
+
+	// Not enough fresh words: top up from the review queue, which is
+	// where everything older lives.
+	if s.retrieval == nil {
+		return out, nil
+	}
+	due, err := s.retrieval.DueSubjects(ctx, identity, dueSubjectsScanLimit)
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, d := range due {
+		if d.SubjectType == "expression" && !seen[d.Subject] {
+			ids = append(ids, d.Subject)
+		}
+	}
+	items, err := s.vocab.GetByIDs(ctx, identity, ids)
+	if err != nil {
+		return nil, err
+	}
+	byID := make(map[string]vocabulary.Item, len(items))
+	for _, item := range items {
+		byID[item.ID] = item
+	}
+	for _, id := range ids {
+		if item, found := byID[id]; found {
+			add(item)
+		}
+	}
+	return out, nil
+}
+
+// drillFor chooses the shape of a word's drill, fetching its example
+// sentence to decide.
+//
+// A failed example lookup degrades to a flip card rather than failing
+// the drill: the sentence is an enrichment, and no learner is served by
+// 練習 refusing to run because one optional query did not answer.
+func (s *Service) drillFor(ctx context.Context, identity learner.IdentityID, item vocabulary.Item) exercise.Exercise {
+	if s.vocab == nil {
+		return wordRecall(item)
+	}
+	examples, err := s.vocab.LatestExamples(ctx, identity, []string{item.ID})
+	if err != nil {
+		return wordRecall(item)
+	}
+	return wordDrill(item, examples[item.ID])
 }
 
 // recentWord returns the newest word identity added inside
@@ -301,6 +445,66 @@ func (s *Service) dueWord(ctx context.Context, identity learner.IdentityID) (voc
 		}
 	}
 	return vocabulary.Item{}, false, nil
+}
+
+// clozeBlank is what replaces the target word in a cloze prompt. Three
+// full-width underscores, matching what the drill prompt template
+// already uses for TypeFillInBlank so both shapes read the same.
+const clozeBlank = "＿＿＿"
+
+// wordDrill builds the best drill available for item: a cloze over the
+// learner's own example sentence when there is one containing the word,
+// and a flip card otherwise.
+//
+// Cloze is preferred because producing a word in its own context is a
+// stronger test than recognising it alone, and because the context is
+// the part that makes it stick. The sentence has to actually CONTAIN
+// the expression — an example that mentions the word without using it,
+// or one recorded against a different surface form, would blank nothing
+// and leave the learner staring at an unmodified sentence.
+func wordDrill(item vocabulary.Item, example string) exercise.Exercise {
+	example = strings.TrimSpace(example)
+	if example != "" && strings.Contains(example, item.Expression) {
+		return wordCloze(item, example)
+	}
+	return wordRecall(item)
+}
+
+// wordCloze blanks the target word out of the sentence it came from.
+func wordCloze(item vocabulary.Item, example string) exercise.Exercise {
+	meaning := strings.TrimSpace(item.Meaning)
+	if meaning == "" {
+		meaning = strings.TrimSpace(item.MeaningEN)
+	}
+	instructionsJA := "空欄に入る語を入力してください。"
+	if meaning != "" {
+		instructionsJA = "空欄に入る語を入力してください。（意味：" + meaning + "）"
+	}
+	return exercise.Exercise{
+		SubjectType:    exercise.SubjectWord,
+		SubjectRef:     item.ID,
+		Type:           exercise.TypeWordCloze,
+		InstructionsJA: instructionsJA,
+		InstructionsEN: "Type the word that belongs in the blank.",
+		// Replaced everywhere it occurs: leaving a second, unblanked copy
+		// in the sentence would hand over the answer.
+		Prompt: strings.ReplaceAll(example, item.Expression, clozeBlank),
+		Answer: item.Expression,
+		// The reading is accepted too. A learner who recalls the word but
+		// types it in kana has produced it; failing them on orthography
+		// would test something the drill never asked about.
+		Acceptable: acceptableForms(item),
+	}
+}
+
+// acceptableForms is the alternatives a cloze answer may take: the
+// reading, when it differs from the expression itself.
+func acceptableForms(item vocabulary.Item) []string {
+	reading := strings.TrimSpace(item.Reading)
+	if reading == "" || reading == item.Expression {
+		return nil
+	}
+	return []string{reading}
 }
 
 // wordRecall builds a flip card from a stored vocabulary item.

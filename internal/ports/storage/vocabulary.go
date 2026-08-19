@@ -70,6 +70,15 @@ type VocabularyRepository interface {
 	// one indexed query regardless of how large a learner's vocabulary
 	// grows.
 	ListActivationCandidates(ctx context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error)
+	// LatestExamples returns, per vocabulary id, the most recent
+	// non-empty example sentence recorded for it — keyed by id, absent
+	// when the word has none.
+	//
+	// Example sentences live on the lookup EVENT, not on the item (see
+	// UpsertOnLookup), which is what makes them worth drilling: the
+	// sentence is the one the learner actually met the word in, from
+	// their own reading.
+	LatestExamples(ctx context.Context, identity learner.IdentityID, ids []string) (map[string]string, error)
 	// GetByIDs resolves a small, caller-supplied set of vocabulary IDs.
 	// GetByExpressions' sibling, for callers holding an ID rather than a
 	// surface form: a retrieval_items row due for review carries the

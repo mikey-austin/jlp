@@ -38,6 +38,14 @@ const (
 	// SubjectCorrectionType: Subject is a correction type string as
 	// produced by the teacher agent, e.g. "conjugation".
 	SubjectCorrectionType SubjectType = "correction-type"
+	// SubjectWord: Subject is a vocabulary item id. Produced by 練習
+	// when the learner repeatedly fails a word drill.
+	//
+	// An id rather than the expression, because the expression is not
+	// stable — a word can be re-read with a different surface form, and
+	// two learners' "同じ" are different rows. Anything rendering this to
+	// a person resolves it first (see /learner).
+	SubjectWord SubjectType = "word"
 )
 
 // Observation is one row of the learner model: identity's standing on

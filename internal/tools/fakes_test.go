@@ -523,3 +523,8 @@ func (r *fakeVocabRepo) ListRecentUnpracticed(context.Context, learner.IdentityI
 func (r *fakeVocabRepo) GetByIDs(context.Context, learner.IdentityID, []string) ([]vocabulary.Item, error) {
 	panic("not used by these tests")
 }
+
+// LatestExamples backs 練習's cloze drills.
+func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []string) (map[string]string, error) {
+	panic("not used by these tests")
+}

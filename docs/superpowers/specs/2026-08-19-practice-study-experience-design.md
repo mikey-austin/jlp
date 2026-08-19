@@ -63,7 +63,27 @@ wants. Every third drill in a run skips the word queue
 just cannot crowd grammar out entirely. The rhythm lives in the HTTP
 layer, because only it knows where in a run a drill sits.
 
-## Still to build
+## Built since
+
+- **Cloze** (`word-cloze`) — the learner's OWN example sentence with the
+  target blanked, read from `vocabulary_events.payload->>'example'`
+  where lookups already record it. Deterministic, no model call. Falls
+  back to a flip card when the sentence does not contain the word, and
+  blanks every occurrence so no unblanked copy gives the answer away.
+- **Read-then-choose** (`passage-choice`) — a generated passage reusing
+  three words being revised, then a question about what it CONVEYS
+  rather than which word appeared where. Own schema (`passage.v1`) and
+  prompt; the answer-is-one-of-the-choices rule is checked in the agent
+  because JSON Schema cannot express it.
+- **Live kana check** — as-you-type feedback on a cloze, opt-in via
+  `data-live-check`, set only for the learner's own vocabulary.
+- **Word weaknesses** — `learnermodel.SubjectWord`. A repeatedly failed
+  word is a weakness like any other, scored by the planner and shown on
+  学習 with the expression rather than its id.
+
+## Superseded
+
+
 
 The two shapes requested after this spec was written, both of which are
 generated exercises rather than deterministic ones:

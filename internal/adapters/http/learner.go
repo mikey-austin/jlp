@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/domain/learnermodel"
 	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -69,6 +70,10 @@ func (s *Server) learnerPage(w http.ResponseWriter, r *http.Request) {
 		vocab = s.opts.Vocabulary
 	}
 	retrievalRows := withSubjectLabels(r.Context(), vocab, ident.ID, retrieval)
+	// 観察 and 優先項目 carry vocabulary ids too, now that a repeatedly
+	// failed word becomes a weakness. Same resolution, same reason.
+	observationRows := withObservationLabels(r.Context(), vocab, ident.ID, observations)
+	priorityRows := withPriorityLabels(r.Context(), vocab, ident.ID, priorities)
 
 	practice, err := s.opts.Analytics.PracticeStats(r.Context(), ident.ID)
 	if err != nil {
@@ -84,8 +89,8 @@ func (s *Server) learnerPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "learner", map[string]any{
 		"Title":        "学習",
 		"Identity":     ident,
-		"Priorities":   priorities,
-		"Observations": observations,
+		"Priorities":   priorityRows,
+		"Observations": observationRows,
 		"Retrieval":    retrievalRows,
 		"Practice":     practiceStatsView(practice),
 		"AgentUsage":   agentUsage,
@@ -166,4 +171,76 @@ func withSubjectLabels(ctx context.Context, vocab vocabularyByIDs, identity lear
 // so a test can supply it in one line.
 type vocabularyByIDs interface {
 	GetByIDs(ctx context.Context, identity learner.IdentityID, ids []string) ([]vocabulary.Item, error)
+}
+
+// observationRowView / priorityRowView are the same "row plus a human
+// label" shape as retrievalItemView, for the two other tables that can
+// now carry a vocabulary id as a subject.
+type observationRowView struct {
+	learnermodel.Observation
+	Label string
+}
+
+type priorityRowView struct {
+	storage.Priority
+	Label string
+}
+
+func withObservationLabels(ctx context.Context, vocab vocabularyByIDs, identity learner.IdentityID, items []learnermodel.Observation) []observationRowView {
+	subjects := make([]string, 0, len(items))
+	for _, o := range items {
+		if o.SubjectType == learnermodel.SubjectWord {
+			subjects = append(subjects, o.Subject)
+		}
+	}
+	labels := resolveWordLabels(ctx, vocab, identity, subjects)
+
+	out := make([]observationRowView, 0, len(items))
+	for _, o := range items {
+		out = append(out, observationRowView{Observation: o, Label: labelFor(labels, o.Subject)})
+	}
+	return out
+}
+
+func withPriorityLabels(ctx context.Context, vocab vocabularyByIDs, identity learner.IdentityID, items []storage.Priority) []priorityRowView {
+	subjects := make([]string, 0, len(items))
+	for _, p := range items {
+		if p.SubjectType == string(learnermodel.SubjectWord) {
+			subjects = append(subjects, p.Subject)
+		}
+	}
+	labels := resolveWordLabels(ctx, vocab, identity, subjects)
+
+	out := make([]priorityRowView, 0, len(items))
+	for _, p := range items {
+		out = append(out, priorityRowView{Priority: p, Label: labelFor(labels, p.Subject)})
+	}
+	return out
+}
+
+// resolveWordLabels maps vocabulary ids to their expressions, in one
+// query, tolerating both a missing service and a failed lookup — see
+// withSubjectLabels for why a label is never worth failing a page over.
+func resolveWordLabels(ctx context.Context, vocab vocabularyByIDs, identity learner.IdentityID, ids []string) map[string]string {
+	if vocab == nil || len(ids) == 0 {
+		return nil
+	}
+	resolved, err := vocab.GetByIDs(ctx, identity, ids)
+	if err != nil {
+		return nil
+	}
+	labels := make(map[string]string, len(resolved))
+	for _, item := range resolved {
+		labels[item.ID] = item.Expression
+	}
+	return labels
+}
+
+// labelFor prefers the resolved label and falls back to the raw subject:
+// an unfriendly cell beats a blank one.
+func labelFor(labels map[string]string, subject string) string {
+	if l, ok := labels[subject]; ok && l != "" {
+		return l
+	}
+	return subject
 }

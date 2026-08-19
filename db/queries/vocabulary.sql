@@ -275,3 +275,27 @@ SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        meaning_en, tags, deleted_at
 FROM vocabulary_items
 WHERE identity_id = $1 AND deleted_at IS NULL AND id = ANY(sqlc.arg(ids)::uuid[]);
+
+-- name: LatestVocabularyExamples :many
+-- The most recent example sentence recorded for each of the given
+-- vocabulary items, from the lookup events that carried them.
+--
+-- This is where example sentences live: UpsertOnLookup writes them into
+-- vocabulary_events.payload, and vocabulary_items has no column for
+-- one. That is the right place for 練習 to read them from — the sentence
+-- the learner ACTUALLY met the word in, from their own reading, rather
+-- than one invented for the drill.
+--
+-- DISTINCT ON with the ordering below picks the newest non-empty
+-- example per item: a word looked up three times keeps the sentence
+-- from the most recent encounter, which is the one still fresh.
+SELECT DISTINCT ON (e.item_id)
+       e.item_id,
+       e.payload->>'example' AS example
+FROM vocabulary_events e
+JOIN vocabulary_items i ON i.id = e.item_id
+WHERE e.identity_id = $1
+  AND i.deleted_at IS NULL
+  AND e.item_id = ANY(sqlc.arg(ids)::uuid[])
+  AND COALESCE(e.payload->>'example', '') <> ''
+ORDER BY e.item_id, e.occurred_at DESC;

@@ -368,3 +368,48 @@ document.addEventListener("click", function (evt) {
     else open();
   });
 })();
+
+// As-you-type feedback for cloze drills: the input turns green once what
+// has been typed matches the expected answer so far, and red once it
+// cannot. Nothing is submitted and nothing is graded here — the real
+// answer still goes through the same POST as every other drill; this
+// only saves the learner from finishing a word they already got wrong.
+//
+// Opt-in via data-live-check, which the server sets ONLY for a cloze
+// over the learner's own vocabulary (see exerciseView.LiveCheck). It is
+// never present for a generated exercise, so this cannot leak an answer
+// the learner was meant to work out.
+//
+// Delegated on document so inputs htmx swaps in are covered.
+(function () {
+  "use strict";
+  // Compare by code point, not by UTF-16 unit: a kanji outside the BMP
+  // is one character to the learner and two to string indexing.
+  function startsWith(expected, typed) {
+    const e = Array.from(expected);
+    const p = Array.from(typed);
+    if (p.length > e.length) return false;
+    return p.every((c, i) => c === e[i]);
+  }
+
+  document.addEventListener("input", function (evt) {
+    const input = evt.target;
+    if (!input || !input.dataset || !input.dataset.liveCheck) return;
+
+    const expected = input.dataset.liveCheck;
+    const typed = input.value;
+    const hint = document.getElementById("live-check-hint");
+
+    let state = "empty";
+    if (typed.length > 0) {
+      if (typed === expected) state = "complete";
+      else if (startsWith(expected, typed)) state = "partial";
+      else state = "wrong";
+    }
+    input.dataset.checkState = state;
+    if (hint) {
+      hint.dataset.state = state;
+      hint.textContent = { complete: "✓", partial: "…", wrong: "✗" }[state] || "";
+    }
+  });
+})();

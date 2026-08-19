@@ -1,0 +1,18 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "PassageV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["passage", "question", "choices", "answer"],
+  "properties": {
+    "passage": { "type": "string", "minLength": 1 },
+    "question": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ja", "en"],
+      "properties": { "ja": { "type": "string" }, "en": { "type": "string" } }
+    },
+    "choices": { "type": "array", "items": { "type": "string" }, "minItems": 3, "maxItems": 4 },
+    "answer": { "type": "string", "minLength": 1 }
+  }
+}

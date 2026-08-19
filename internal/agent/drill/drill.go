@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"slices"
 
 	"github.com/mikeyaustin/jlp/internal/agent/aiutil"
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
@@ -28,9 +29,11 @@ import (
 const (
 	generatePromptName = "drill.generate"
 	evaluatePromptName = "drill.evaluate"
+	passagePromptName  = "drill.passage"
 	promptVersion      = "v1"
 	exerciseSchemaName = "exercise.v1"
 	evalSchemaName     = "exercise_eval.v1"
+	passageSchemaName  = "passage.v1"
 	agentName          = "drill"
 	maxTokens          = 1024
 )
@@ -244,5 +247,107 @@ func (a *Agent) Evaluate(ctx context.Context, identity learner.IdentityID, ex ex
 		Score:      dto.Score,
 		FeedbackJA: dto.Feedback.JA,
 		FeedbackEN: dto.Feedback.EN,
+	}, resp, nil
+}
+
+// WordRef is one vocabulary item a passage must use — the shape
+// GeneratePassage needs, with no dependency on the vocabulary domain
+// (Rule 3: an agent imports ports/ai, prompts, schemas and domain only,
+// and application/practice is what holds the real items).
+type WordRef struct {
+	Expression string
+	Reading    string
+	Meaning    string
+}
+
+// PassageInput asks for a reading passage that revisits several words.
+type PassageInput struct {
+	Identity learner.IdentityID
+	// Words are the items the passage must use. All of them: a passage
+	// that quietly drops one is a revision slot the learner did not get.
+	Words            []WordRef
+	ProviderOverride string
+}
+
+// passageDTO mirrors schemas/defs/passage.v1.json exactly.
+type passageDTO struct {
+	Passage  string `json:"passage"`
+	Question struct {
+		JA string `json:"ja"`
+		EN string `json:"en"`
+	} `json:"question"`
+	Choices []string `json:"choices"`
+	Answer  string   `json:"answer"`
+}
+
+// GeneratePassage writes a short passage using every word in in.Words and
+// one comprehension question about it.
+//
+// The point is a SECOND encounter in context: a word met once in reading
+// and then only ever seen alone on a flip card never gets the second
+// exposure that fixes it. The question deliberately asks what the passage
+// conveys rather than which word appeared where — the latter is a search
+// task, and the learner has already found the words by reading them.
+//
+// The result is an exercise.Exercise shaped like a multiple-choice drill:
+// the passage is the Prompt, the question is the instruction, and the
+// answer is graded by the same deterministic comparison every other
+// choice question uses.
+func (a *Agent) GeneratePassage(ctx context.Context, in PassageInput) (exercise.Exercise, ai.StructuredResponse, error) {
+	if len(in.Words) == 0 {
+		return exercise.Exercise{}, ai.StructuredResponse{}, fmt.Errorf("drill: passage needs at least one word")
+	}
+
+	rendered, err := prompts.Render(passagePromptName, promptVersion, struct{ Words []WordRef }{Words: in.Words})
+	if err != nil {
+		return exercise.Exercise{}, ai.StructuredResponse{}, fmt.Errorf("drill: render passage prompt: %w", err)
+	}
+	schema, err := schemas.Get(passageSchemaName)
+	if err != nil {
+		return exercise.Exercise{}, ai.StructuredResponse{}, fmt.Errorf("drill: get schema: %w", err)
+	}
+
+	req := ai.StructuredRequest{
+		PromptName:       passagePromptName,
+		PromptVersion:    promptVersion,
+		System:           rendered.System,
+		User:             rendered.User,
+		SchemaName:       passageSchemaName,
+		Schema:           schema,
+		MaxTokens:        maxTokens,
+		IdentityID:       in.Identity,
+		Agent:            agentName,
+		ProviderOverride: in.ProviderOverride,
+	}
+
+	resp, err := a.gen.GenerateStructured(ctx, req)
+	if err != nil {
+		return exercise.Exercise{}, resp, fmt.Errorf("drill: generate passage: %w", err)
+	}
+	resp, err = aiutil.ValidateWithRepairAndRetry(ctx, a.gen, passageSchemaName, req, resp)
+	if err != nil {
+		return exercise.Exercise{}, resp, err
+	}
+
+	var dto passageDTO
+	if err := json.Unmarshal(resp.JSON, &dto); err != nil {
+		return exercise.Exercise{}, resp, fmt.Errorf("drill: unmarshal passage: %w", err)
+	}
+
+	// The answer must be one of the choices, or the learner cannot pick
+	// it and the deterministic grader can never return correct. The
+	// schema cannot express that relationship, so it is checked here.
+	if !slices.Contains(dto.Choices, dto.Answer) {
+		return exercise.Exercise{}, resp, fmt.Errorf("drill: passage answer %q is not among its choices", dto.Answer)
+	}
+
+	return exercise.Exercise{
+		IdentityID:     in.Identity,
+		Type:           exercise.TypePassageChoice,
+		InstructionsJA: dto.Question.JA,
+		InstructionsEN: dto.Question.EN,
+		Prompt:         dto.Passage,
+		Choices:        dto.Choices,
+		Answer:         dto.Answer,
 	}, resp, nil
 }

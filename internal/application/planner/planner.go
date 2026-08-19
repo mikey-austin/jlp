@@ -212,8 +212,15 @@ func (p *Planner) scoreObservation(ctx context.Context, identity learner.Identit
 // storage.ErrNotFound — falls back to the same weight-0 band an
 // N1/N2 concept gets, rather than failing Recompute outright.
 func (p *Planner) value(ctx context.Context, o learnermodel.Observation) (float64, string, error) {
-	if o.SubjectType != learnermodel.SubjectConcept {
+	switch o.SubjectType {
+	case learnermodel.SubjectCorrectionType:
 		return 1.0, "value 1.00 (correction-type)", nil
+	case learnermodel.SubjectWord:
+		// No JLPT level to weigh — vocabulary_items carries one, but a
+		// word's difficulty for THIS learner is already expressed by how
+		// often they fail it, which is the persistence term. Weighting it
+		// twice would just amplify the same signal.
+		return 1.0, "value 1.00 (word)", nil
 	}
 
 	concept, err := p.grammar.GetConcept(ctx, o.Subject)
@@ -284,9 +291,38 @@ func classify(ev event.LearningEvent) (subjectType learnermodel.SubjectType, sub
 			return "", "", false
 		}
 		return learnermodel.SubjectConcept, ev.Subject, true
+	case event.TypeQuizAnswered:
+		// Recency has to see drills too, or a weakness the learner is
+		// actively failing in 練習 scores as though nothing had happened
+		// for weeks — the observation would exist and rank last.
+		ref, _ := ev.Evidence["subject_ref"].(string)
+		if ref == "" {
+			return "", "", false
+		}
+		switch st, _ := ev.Evidence["subject_type"].(string); st {
+		case "concept":
+			return learnermodel.SubjectConcept, ref, true
+		case "word":
+			return learnermodel.SubjectWord, ref, true
+		}
+		return "", "", false
 	default:
 		return "", "", false
 	}
+}
+
+// qualifies mirrors learnermodel's rule so recency and weakness
+// detection agree about what counts: a correction qualifies on severity
+// ("incorrect"/"unnatural" only), a drill qualifies when it was answered
+// WRONG. A drill with no severity field would otherwise be filtered out
+// silently, and the classify branch above would score nothing.
+func qualifies(ev event.LearningEvent) bool {
+	if ev.Type == event.TypeQuizAnswered {
+		correct, _ := ev.Evidence["correct"].(bool)
+		return !correct
+	}
+	sev, _ := ev.Evidence["severity"].(string)
+	return qualifyingSeverity(sev)
 }
 
 // qualifyingSeverity mirrors learnermodel's rule: only "incorrect" and
@@ -302,7 +338,10 @@ func qualifyingSeverity(sev string) bool {
 // correction ID); grammar.concept.encountered events dedup on
 // Evidence["correction_id"].
 func dedupKey(ev event.LearningEvent) string {
-	if ev.Type == event.TypeCorrectionPresented {
+	if ev.Type == event.TypeCorrectionPresented || ev.Type == event.TypeQuizAnswered {
+		// The exercise id for a drill: one drill is one occurrence, and
+		// answering the same exercise twice is one piece of evidence
+		// about the subject rather than two. Same rule learnermodel uses.
 		return ev.Subject
 	}
 	if cid, ok := ev.Evidence["correction_id"].(string); ok && cid != "" {
@@ -322,8 +361,7 @@ func countOccurrences(all []event.LearningEvent, subjectType learnermodel.Subjec
 		if !ok || st != subjectType || subj != subject {
 			continue
 		}
-		sev, _ := e.Evidence["severity"].(string)
-		if !qualifyingSeverity(sev) {
+		if !qualifies(e) {
 			continue
 		}
 		if e.OccurredAt.After(now) || now.Sub(e.OccurredAt) > window {

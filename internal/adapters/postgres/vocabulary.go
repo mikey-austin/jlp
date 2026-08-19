@@ -278,6 +278,39 @@ func (r *VocabularyRepository) GetByExpressions(ctx context.Context, identity le
 	return out, nil
 }
 
+// LatestExamples implements storage.VocabularyRepository.LatestExamples
+// — one query for the whole set, like GetByIDs above.
+func (r *VocabularyRepository) LatestExamples(ctx context.Context, identity learner.IdentityID, ids []string) (map[string]string, error) {
+	parsed := make([]pgtype.UUID, 0, len(ids))
+	for _, id := range ids {
+		if u, err := parseUUID(id); err == nil {
+			parsed = append(parsed, u)
+		}
+	}
+	if len(parsed) == 0 {
+		return nil, nil
+	}
+	rows, err := r.q.LatestVocabularyExamples(ctx, sqlcgen.LatestVocabularyExamplesParams{
+		IdentityID: string(identity),
+		Ids:        parsed,
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]string, len(rows))
+	for _, row := range rows {
+		// payload->>'example' is jsonb text, which sqlc types as
+		// interface{}; anything that is not a string is a payload we did
+		// not write and have no use for.
+		example, ok := row.Example.(string)
+		if !ok || example == "" {
+			continue
+		}
+		out[uuid.UUID(row.ItemID.Bytes).String()] = example
+	}
+	return out, nil
+}
+
 // GetByIDs is GetByExpressions' sibling for callers holding an ID —
 // see the port's doc comment. An empty ids returns an empty result
 // without a query round trip, exactly as GetByExpressions does.

@@ -151,6 +151,7 @@ func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.L
 type fakeVocabRepo struct {
 	recent     []vocabulary.Item
 	byID       map[string]vocabulary.Item
+	examples   map[string]string
 	askedSince time.Time
 	askedLimit int
 	askedIDs   []string
@@ -990,5 +991,126 @@ func TestTheMostOverdueWordWins(t *testing.T) {
 		if id != want[i] {
 			t.Fatalf("asked for %v, want the queue's own order %v", vocab.askedIDs, want[:len(vocab.askedIDs)])
 		}
+	}
+}
+
+// LatestExamples backs 練習's cloze drills.
+func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []string) (map[string]string, error) {
+	return r.examples, nil
+}
+
+// --- cloze -----------------------------------------------------------
+
+// The sentence the learner actually met the word in beats a flip card:
+// producing a word in context is a stronger test than recognising it
+// alone, and the context is the part that makes it stick.
+func TestAWordWithAnExampleIsDrilledAsCloze(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, vocab, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+	}, now)
+	vocab.examples = map[string]string{"w1": "この二つの記号は紛らわしいので気をつけてください。"}
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.Type != exercise.TypeWordCloze {
+		t.Fatalf("type = %q, want %q", ex.Type, exercise.TypeWordCloze)
+	}
+	if strings.Contains(ex.Prompt, "紛らわしい") {
+		t.Errorf("the prompt still contains the answer:\n%s", ex.Prompt)
+	}
+	if !strings.Contains(ex.Prompt, "＿＿＿") {
+		t.Errorf("the prompt has no blank:\n%s", ex.Prompt)
+	}
+	if ex.Answer != "紛らわしい" {
+		t.Errorf("answer = %q, want the expression", ex.Answer)
+	}
+	// A learner who recalls the word but types kana has still produced it.
+	if len(ex.Acceptable) == 0 || ex.Acceptable[0] != "まぎらわしい" {
+		t.Errorf("acceptable = %v, want the reading to be accepted", ex.Acceptable)
+	}
+}
+
+// An example that does not contain the word would blank nothing, leaving
+// the learner staring at an unmodified sentence with no way to answer.
+func TestAnExampleThatDoesNotContainTheWordFallsBackToACard(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, vocab, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+	}, now)
+	vocab.examples = map[string]string{"w1": "この文にはその語が入っていません。"}
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.Type != exercise.TypeWordRecall {
+		t.Errorf("type = %q, want a flip card when the example cannot be blanked", ex.Type)
+	}
+}
+
+// Every occurrence is blanked. Leaving a second, unblanked copy in the
+// sentence hands over the answer.
+func TestEveryOccurrenceOfTheWordIsBlanked(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, vocab, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "本", "ほん", "book"),
+	}, now)
+	vocab.examples = map[string]string{"w1": "本を読んで、また本を買った。"}
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if strings.Contains(ex.Prompt, "本") {
+		t.Errorf("an occurrence survived, giving the answer away:\n%s", ex.Prompt)
+	}
+}
+
+// --- passage ---------------------------------------------------------
+
+// A passage revisits several words at once, so it must be tried BEFORE
+// the single-word branches — otherwise the first word is drilled alone
+// and the slot is spent.
+func TestAPassageIsPreferredWhenAskedForAndEnoughWordsExist(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+		recentItem("w2", "曖昧", "あいまい", "vague"),
+		recentItem("w3", "微妙", "びみょう", "subtle"),
+	}, now)
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{WantPassage: true})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.Type != exercise.TypePassageChoice {
+		t.Fatalf("type = %q, want %q", ex.Type, exercise.TypePassageChoice)
+	}
+	// It still records a subject, or the attempt schedules nothing.
+	if ex.SubjectType != exercise.SubjectWord || ex.SubjectRef == "" {
+		t.Errorf("subject = %s/%s, want a word subject so the attempt can be scheduled", ex.SubjectType, ex.SubjectRef)
+	}
+}
+
+// A new learner has one or two words. Asking for a passage then must
+// fall through to an ordinary drill rather than failing the run.
+func TestAPassageFallsThroughWhenThereAreTooFewWords(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+	}, now)
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{WantPassage: true})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.Type == exercise.TypePassageChoice {
+		t.Error("built a passage from one word")
+	}
+	if ex.SubjectRef != "w1" {
+		t.Errorf("fell through to %q, want the single available word", ex.SubjectRef)
 	}
 }

@@ -26,9 +26,24 @@ type exerciseView struct {
 	InstructionsJA, InstructionsEN string
 	Prompt                         string
 	Choices                        []string
-	// IsWord selects the flip-card branch. A word drill has no input to
-	// type: the learner turns the card over and grades themselves.
+	// IsWord selects the flip-card branch. A word RECALL drill has no
+	// input to type: the learner turns the card over and grades
+	// themselves. A word CLOZE is typed like any other answer.
 	IsWord bool
+	// IsPassage renders the prompt as a reading block above the choices,
+	// rather than as the question itself: for this shape the question is
+	// the instruction and the prompt is a paragraph to read.
+	IsPassage bool
+	// LiveCheck is the expected answer for the client's as-you-type
+	// check, set ONLY for a cloze over the learner's own vocabulary.
+	//
+	// This does put the answer in the DOM. That is acceptable for a word
+	// the learner wrote down themselves — its flip-card sibling is
+	// self-graded, so honesty is already assumed — and unacceptable
+	// anywhere else. It is never set for a generated exercise, whose
+	// Answer stays server-side, and never for anything under the
+	// socratic gate.
+	LiveCheck string
 	// Reading/Meaning are the back of the flip card, and are sent ONLY
 	// for a word drill. They are the learner's own stored vocabulary, so
 	// putting them in the DOM reveals nothing they did not write — unlike
@@ -54,6 +69,15 @@ const runLength = 10
 // drills before a single grammar question.
 const conceptEvery = 3
 
+// passageEvery is how often a run asks for a reading passage instead of
+// a single-word drill. Every fifth, so a ten-question run gets two —
+// enough to be a change of pace, rare enough that a run is still mostly
+// quick questions. Falls through when there are not enough words.
+//
+// Chosen not to collide with conceptEvery: positions 3/6/9 are grammar,
+// 5/10 are passages, the rest are single words.
+const passageEvery = 5
+
 func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
 	if position < 1 {
 		position = 1
@@ -66,6 +90,7 @@ func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
 		Prompt:         ex.Prompt,
 		Choices:        ex.Choices,
 		IsWord:         ex.Type == exercise.TypeWordRecall,
+		IsPassage:      ex.Type == exercise.TypePassageChoice,
 		Position:       position,
 		Total:          runLength,
 		Streak:         streak,
@@ -76,6 +101,9 @@ func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
 		if len(ex.Acceptable) > 0 {
 			v.Meaning = ex.Acceptable[0]
 		}
+	}
+	if ex.Type == exercise.TypeWordCloze {
+		v.LiveCheck = ex.Answer
 	}
 	return v
 }
@@ -196,6 +224,7 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	ex, err := s.opts.Practice.Start(r.Context(), ident.ID, practice.StartOptions{
 		ProviderOverride: override,
 		SkipWords:        position%conceptEvery == 0,
+		WantPassage:      position%passageEvery == 0,
 	})
 	if err != nil {
 		// Logged before answering, because htmx does not swap a non-2xx

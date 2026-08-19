@@ -70,6 +70,14 @@ const (
 	// file checkable against one consistent mistake.
 	schemaConversationTurnV1 = "conversation_turn.v1"
 
+	// schemaPassageV1 backs internal/agent/drill's GeneratePassage
+	// (練習's reading drill): same "one fixed canned shape, keyed purely
+	// on SchemaName" treatment as the exercise schemas above. The canned
+	// passage does NOT use the requested words — the fake has no way to
+	// write prose — which is exactly the point: a test asserting on
+	// content would be asserting on this fixture, not on the feature.
+	schemaPassageV1 = "passage.v1"
+
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
@@ -103,6 +111,21 @@ var supportedSchemas = map[string]bool{
 	schemaLessonPlanV1:       true,
 	schemaWeeklySummaryV1:    true,
 	schemaConversationTurnV1: true,
+	schemaPassageV1:          true,
+}
+
+// cannedPassage mirrors schemas/defs/passage.v1.json field-for-field.
+// "answer" is one of "choices", which the schema cannot express and
+// drill.GeneratePassage checks by hand — a fixture that violated it
+// would make that check untestable.
+var cannedPassage = map[string]any{
+	"passage": "きのう、友達と映画を見に行きました。とても面白かったので、また行きたいです。",
+	"question": map[string]any{
+		"ja": "書いた人はどう思っていますか。",
+		"en": "How does the writer feel?",
+	},
+	"choices": []string{"また行きたい", "もう行きたくない", "映画は退屈だった"},
+	"answer":  "また行きたい",
 }
 
 type explanation struct {
@@ -379,6 +402,8 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 		return g.respond(start, req, weeklySummaryFixture)
 	case schemaConversationTurnV1:
 		return g.respondConversationTurn(start, req)
+	case schemaPassageV1:
+		return g.respond(start, req, cannedPassage)
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own

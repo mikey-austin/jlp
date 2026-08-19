@@ -407,23 +407,30 @@ func TestCorrectDrillsNeverBuildAWeakness(t *testing.T) {
 	}
 }
 
-// A word drill contributes nothing here — there is no SubjectType for
-// vocabulary, and inventing one would ripple through the planner and
-// 成果. Words live in the retrieval schedule instead. Pinned so a future
-// change makes that choice deliberately rather than by accident.
-func TestWordDrillsProduceNoObservation(t *testing.T) {
+// A word the learner keeps failing is a weakness in exactly the sense
+// this package means. It gets its OWN subject type — a vocabulary id is
+// not a concept slug, and filing it as one would send the planner
+// looking up a UUID in the grammar catalog.
+func TestFailedWordDrillsUpsertAWordWeakness(t *testing.T) {
 	store := newFakeEventStore()
 	obs := newFakeObsRepo()
 	u := applearnermodel.NewUpdater(store, obs, func() time.Time { return baseTime })
 
-	for i, id := range []string{"ex1", "ex2", "ex3", "ex4"} {
+	for i, id := range []string{"ex1", "ex2", "ex3"} {
 		ev := drillEvent(id, "vocab-42", false, baseTime.Add(time.Duration(i)*time.Hour))
 		ev.Evidence["subject_type"] = "word"
 		fireAll(t, u, store, ev)
 	}
 
 	if _, ok := obs.find(testIdentity, learnermodel.SubjectConcept, "vocab-42"); ok {
-		t.Error("a word drill created a concept observation — a vocabulary id is not a concept slug")
+		t.Error("a word drill created a CONCEPT observation — a vocabulary id is not a concept slug")
+	}
+	o, ok := obs.find(testIdentity, learnermodel.SubjectWord, "vocab-42")
+	if !ok {
+		t.Fatal("three failed word drills produced no word observation")
+	}
+	if o.Kind != learnermodel.KindWeakness {
+		t.Errorf("Kind = %q, want %q", o.Kind, learnermodel.KindWeakness)
 	}
 }
 

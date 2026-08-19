@@ -59,20 +59,33 @@
     </details>
   </div>
   {{else}}
+  {{if .IsPassage}}
+  {{/* The passage is something to READ, not the question — the question
+       is the instruction above. Rendered as its own block so it does not
+       look like a very long prompt. */}}
+  <div class="passage" lang="ja">{{.Prompt}}</div>
+  {{else}}
   <p class="prompt">{{.Prompt}}</p>
+  {{end}}
   <form class="exercise-form" hx-post="/practice/{{.ID}}/answer" hx-target="#exercise-area" hx-swap="innerHTML">
     {{/* The run travels with the exchange rather than living on the
          server — see exerciseView's own comment. */}}
     <input type="hidden" name="position" value="{{.Position}}">
     <input type="hidden" name="run_correct" value="{{.Streak}}">
-    {{if eq .Type "multiple-choice"}}
+    {{if or (eq .Type "multiple-choice") .IsPassage}}
     <div class="choices">
       {{range .Choices}}<label class="choice"><input type="radio" name="response" value="{{.}}" required> {{.}}</label>{{end}}
     </div>
     {{else if eq .Type "free-production"}}
     <textarea class="textarea" name="response" rows="4" required></textarea>
     {{else}}
-    <input class="input" type="text" name="response" required autocomplete="off" lang="ja">
+    {{/* data-live-check is the expected answer, and is present ONLY for
+         a cloze over the learner's own vocabulary — a word they wrote
+         down themselves, whose flip-card sibling is self-graded anyway.
+         A generated exercise's answer never reaches the page. */}}
+    <input class="input" type="text" name="response" required autocomplete="off" lang="ja"
+           {{if .LiveCheck}}data-live-check="{{.LiveCheck}}" aria-describedby="live-check-hint"{{end}}>
+    {{if .LiveCheck}}<p id="live-check-hint" class="live-check" data-state="empty" aria-live="polite"></p>{{end}}
     {{end}}
     <label class="field confidence-select">自信度（任意）
       <select class="select" name="confidence">

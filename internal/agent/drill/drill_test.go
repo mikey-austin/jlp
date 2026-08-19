@@ -2,6 +2,7 @@ package drill_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 
@@ -250,5 +251,68 @@ func TestGenerateFailsAfterRepairAndRetryExhausted(t *testing.T) {
 	}
 	if gen.calls != 2 {
 		t.Fatalf("gen.calls = %d, want 2 (initial call + one retry, then fail)", gen.calls)
+	}
+}
+
+// The answer must be one of the choices, or the learner cannot pick it
+// and the deterministic grader can never return correct. The schema
+// cannot express that relationship, so the agent checks it — and a
+// silent pass here would ship an unanswerable question.
+func TestGeneratePassageRejectsAnAnswerThatIsNotAChoice(t *testing.T) {
+	// Schema-valid, and still unanswerable: the relationship between
+	// answer and choices is not something JSON Schema can express.
+	gen := &flakyGen{payloads: [][]byte{[]byte(`{
+	  "passage": "きのうは忙しかったです。",
+	  "question": {"ja": "どうでしたか。", "en": "How was it?"},
+	  "choices": ["ひまだった", "楽しかった", "疲れた"],
+	  "answer": "存在しない選択肢"
+	}`)}}
+
+	_, _, err := drill.New(gen).GeneratePassage(context.Background(), drill.PassageInput{
+		Identity: "learner-a",
+		Words:    []drill.WordRef{{Expression: "忙しい"}},
+	})
+	if err == nil {
+		t.Fatal("accepted a passage whose answer is not among its choices — unanswerable by construction")
+	}
+	if !strings.Contains(err.Error(), "not among its choices") {
+		t.Errorf("error = %v, want it to name the problem", err)
+	}
+}
+
+// A passage with no words is a caller bug, and writing prose about
+// nothing is not a useful fallback.
+func TestGeneratePassageRefusesAnEmptyWordList(t *testing.T) {
+	_, _, err := drill.New(fakeai.New()).GeneratePassage(context.Background(), drill.PassageInput{Identity: "learner-a"})
+	if err == nil {
+		t.Fatal("accepted a passage request with no words")
+	}
+}
+
+// The passage becomes a multiple-choice exercise: the paragraph is the
+// prompt, the question is the instruction, and the choices are graded by
+// the same deterministic comparison every other choice question uses.
+func TestGeneratePassageShapesAChoiceExercise(t *testing.T) {
+	ex, _, err := drill.New(fakeai.New()).GeneratePassage(context.Background(), drill.PassageInput{
+		Identity: "learner-a",
+		Words:    []drill.WordRef{{Expression: "映画"}, {Expression: "友達"}},
+	})
+	if err != nil {
+		t.Fatalf("GeneratePassage: %v", err)
+	}
+	if ex.Type != exercise.TypePassageChoice {
+		t.Errorf("Type = %q, want %q", ex.Type, exercise.TypePassageChoice)
+	}
+	if ex.Prompt == "" {
+		t.Error("no passage")
+	}
+	if ex.InstructionsJA == "" {
+		t.Error("no question")
+	}
+	if len(ex.Choices) < 3 {
+		t.Errorf("choices = %v, want at least three", ex.Choices)
+	}
+	if !slices.Contains(ex.Choices, ex.Answer) {
+		t.Errorf("answer %q is not among choices %v", ex.Answer, ex.Choices)
 	}
 }
