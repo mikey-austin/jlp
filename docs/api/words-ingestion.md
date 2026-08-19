@@ -26,7 +26,8 @@ Content-Type: application/json
       "meaning_en": "studying",
       "jlpt_level": 3,
       "tags": ["education", "noun"],
-      "source": "Anki Deck"
+      "source": "Anki Deck",
+      "example": "毎日日本語の勉強をしています。"
     },
     {
       "kanji": "猫",
@@ -54,6 +55,24 @@ Per word:
 | `jlpt_level` | no       | Integer `0`–`5`. `0` = unknown (the default when omitted), `5` = N5 (easiest), `1` = N1 (hardest) — the same convention JLP already uses for grammar concepts. |
 | `tags`       | no       | Free-form strings (e.g. `["education", "noun"]`).                      |
 | `source`     | no       | Free text describing where the word came from (e.g. `"Anki Deck"`).    |
+| `example`    | no       | A sentence the word was met in. See below — this is the one optional field that changes what the learner is shown. |
+
+### `example` is worth sending
+
+JLP's 練習 page drills a word **in a sentence** — the sentence with the
+word blanked out, choose which expression fills the gap — and shows the
+intact sentence, with the word emphasised, once the answer is in.
+
+A word with no sentence gets one written for it by a model. That works,
+and it is strictly worse than the real thing: the sentence you send is
+the one the learner actually read, in the context that made them save
+the word. A generated sentence has to invent a context, and inventing
+one is how a word ends up remembered attached to something that never
+happened.
+
+Sent examples win over generated ones, and a later send replaces an
+earlier sentence for the same word. Words already imported without one
+are unaffected until they are sent again.
 
 `kanji`/`reading`/`meaning` must be non-empty after trimming
 whitespace for every word in the batch, and `jlpt_level` (when given)
