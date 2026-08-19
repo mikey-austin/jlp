@@ -321,3 +321,8 @@ func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []st
 func (f *fakeAnalyticsRepo) RecentDrillAttempts(context.Context, learner.IdentityID, int) ([]storage.DrillAttempt, error) {
 	return nil, nil
 }
+
+// RecordExample stores a generated example sentence.
+func (r *fakeVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, time.Time) error {
+	panic("not used by these tests")
+}

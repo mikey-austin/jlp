@@ -24,6 +24,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/prompts"
 	"github.com/mikeyaustin/jlp/internal/schemas"
@@ -33,10 +34,12 @@ const (
 	generatePromptName = "drill.generate"
 	evaluatePromptName = "drill.evaluate"
 	passagePromptName  = "drill.passage"
+	examplePromptName  = "drill.example"
 	promptVersion      = "v1"
 	exerciseSchemaName = "exercise.v1"
 	evalSchemaName     = "exercise_eval.v1"
 	passageSchemaName  = "passage.v1"
+	exampleSchemaName  = "example.v1"
 	agentName          = "drill"
 	maxTokens          = 1024
 )
@@ -386,4 +389,79 @@ func resolveChoice(choices []string, answer string) (string, bool) {
 		return choices[n-1], true
 	}
 	return "", false
+}
+
+// ExampleInput asks for one sentence showing a word in use.
+type ExampleInput struct {
+	Identity   learner.IdentityID
+	Expression string
+	Reading    string
+	Meaning    string
+}
+
+// GenerateExample writes one natural sentence using Expression.
+//
+// It exists because most vocabulary has no recorded sentence: an example
+// is only captured when a word is looked up one at a time (see
+// storage.VocabularyRepository.UpsertOnLookup), and a bulk-imported deck
+// carries none at all. Without this, a learner who imported their
+// vocabulary sees every word alone on a card forever — the definition
+// but never the use, which is the half that makes a word usable.
+//
+// The sentence MUST contain the expression verbatim. A sentence that
+// conjugates it away, substitutes a synonym or talks ABOUT the word
+// cannot be blanked for a cloze and cannot have the word emphasised in
+// it, so it is refused rather than stored: a wrong example is worse than
+// none, because it is shown as though it were right.
+func (a *Agent) GenerateExample(ctx context.Context, in ExampleInput) (sentence string, resp ai.StructuredResponse, err error) {
+	if strings.TrimSpace(in.Expression) == "" {
+		return "", ai.StructuredResponse{}, fmt.Errorf("drill: example needs a word")
+	}
+
+	rendered, err := prompts.Render(examplePromptName, promptVersion, in)
+	if err != nil {
+		return "", ai.StructuredResponse{}, fmt.Errorf("drill: render example prompt: %w", err)
+	}
+	schema, err := schemas.Get(exampleSchemaName)
+	if err != nil {
+		return "", ai.StructuredResponse{}, fmt.Errorf("drill: get schema: %w", err)
+	}
+
+	req := ai.StructuredRequest{
+		PromptName:    examplePromptName,
+		PromptVersion: promptVersion,
+		System:        rendered.System,
+		User:          rendered.User,
+		SchemaName:    exampleSchemaName,
+		Schema:        schema,
+		MaxTokens:     maxTokens,
+		IdentityID:    in.Identity,
+		Agent:         agentName,
+	}
+
+	resp, err = a.gen.GenerateStructured(ctx, req)
+	if err != nil {
+		return "", resp, fmt.Errorf("drill: generate example: %w", err)
+	}
+	resp, err = aiutil.ValidateWithRepairAndRetry(ctx, a.gen, exampleSchemaName, req, resp)
+	if err != nil {
+		return "", resp, err
+	}
+
+	var dto struct {
+		Sentence string `json:"sentence"`
+	}
+	if err := json.Unmarshal(resp.JSON, &dto); err != nil {
+		return "", resp, fmt.Errorf("drill: unmarshal example: %w", err)
+	}
+
+	dto.Sentence = strings.TrimSpace(dto.Sentence)
+	// The matchable form, not the raw expression: a pattern is written
+	// 〜というわけではない and used as 嫌いというわけではない, so demanding
+	// the tilde verbatim would reject every correct sentence for every
+	// pattern in the learner's vocabulary.
+	if _, ok := vocabulary.MatchIn(dto.Sentence, in.Expression); !ok {
+		return "", resp, fmt.Errorf("drill: example %q does not use %q", dto.Sentence, in.Expression)
+	}
+	return dto.Sentence, resp, nil
 }

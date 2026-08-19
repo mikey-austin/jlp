@@ -528,3 +528,8 @@ func (r *fakeVocabRepo) GetByIDs(context.Context, learner.IdentityID, []string) 
 func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []string) (map[string]string, error) {
 	panic("not used by these tests")
 }
+
+// RecordExample stores a generated example sentence.
+func (r *fakeVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, time.Time) error {
+	panic("not used by these tests")
+}

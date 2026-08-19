@@ -230,3 +230,8 @@ func (panicVocabRepo) GetByIDs(context.Context, learner.IdentityID, []string) ([
 func (panicVocabRepo) LatestExamples(context.Context, learner.IdentityID, []string) (map[string]string, error) {
 	panic("not used by these tests")
 }
+
+// RecordExample stores a generated example sentence.
+func (panicVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, time.Time) error {
+	panic("not used by these tests")
+}

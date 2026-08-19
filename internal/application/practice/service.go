@@ -401,7 +401,47 @@ func (s *Service) drillFor(ctx context.Context, identity learner.IdentityID, ite
 	if err != nil {
 		return wordRecall(item)
 	}
-	return wordDrill(item, examples[item.ID])
+	example := examples[item.ID]
+	if example == "" {
+		example = s.generateExample(ctx, identity, item)
+	}
+	return wordDrill(item, example)
+}
+
+// generateExample writes and stores a sentence for a word that has none,
+// returning "" if it cannot.
+//
+// Most vocabulary has none: a sentence is only captured when a word is
+// looked up one at a time, and a bulk-imported deck carries no sentences
+// at all — so without this, a learner who imported their vocabulary sees
+// every word alone on a card forever.
+//
+// Stored, so this is ONE model call per word for the life of that word
+// rather than one per drill. That is also why it is safe to do here: a
+// word drill's "no model call" property survives every repeat, and the
+// first call happens inside a prefetch, where nobody is waiting.
+//
+// Every failure degrades to no example rather than to no drill. A word
+// with no sentence is exactly what the learner had before.
+func (s *Service) generateExample(ctx context.Context, identity learner.IdentityID, item vocabulary.Item) string {
+	sentence, _, err := s.agent.GenerateExample(ctx, drill.ExampleInput{
+		Identity:   identity,
+		Expression: item.Expression,
+		Reading:    item.Reading,
+		Meaning:    item.Meaning,
+	})
+	if err != nil {
+		slog.Warn("practice: could not generate an example sentence",
+			"identity", identity, "word", item.ID, "err", err)
+		return ""
+	}
+	if err := s.vocab.RecordExample(ctx, identity, item.ID, sentence, s.now().UTC()); err != nil {
+		// Usable now, just not remembered — better than discarding a
+		// sentence that was already paid for.
+		slog.Warn("practice: could not store a generated example",
+			"identity", identity, "word", item.ID, "err", err)
+	}
+	return sentence
 }
 
 // recentWord returns the newest word identity added inside
@@ -503,8 +543,12 @@ const clozeBlank = "＿＿＿"
 // and leave the learner staring at an unmodified sentence.
 func wordDrill(item vocabulary.Item, example string) exercise.Exercise {
 	example = strings.TrimSpace(example)
-	if example != "" && strings.Contains(example, item.Expression) {
-		return wordCloze(item, example)
+	// MatchableForm, not Expression: a pattern entry is written
+	// 〜というわけではない and appears in a sentence without the tilde,
+	// so comparing the raw expression never matches and every pattern in
+	// the learner's vocabulary silently falls through to a bare card.
+	if form, ok := vocabulary.MatchIn(example, item.Expression); ok {
+		return wordCloze(item, example, form)
 	}
 	ex := wordRecall(item)
 	// Carried even though it cannot be blanked: a sentence that mentions
@@ -515,7 +559,11 @@ func wordDrill(item vocabulary.Item, example string) exercise.Exercise {
 }
 
 // wordCloze blanks the target word out of the sentence it came from.
-func wordCloze(item vocabulary.Item, example string) exercise.Exercise {
+// form is the part of the expression that actually appears in example —
+// see vocabulary.MatchIn. Blanking anything else would remove text that
+// is not there and leave the real occurrence in place, handing over the
+// answer.
+func wordCloze(item vocabulary.Item, example, form string) exercise.Exercise {
 	meaning := strings.TrimSpace(item.Meaning)
 	if meaning == "" {
 		meaning = strings.TrimSpace(item.MeaningEN)
@@ -532,11 +580,13 @@ func wordCloze(item vocabulary.Item, example string) exercise.Exercise {
 		InstructionsEN: "Type the word that belongs in the blank.",
 		// Replaced everywhere it occurs: leaving a second, unblanked copy
 		// in the sentence would hand over the answer.
-		Prompt: strings.ReplaceAll(example, item.Expression, clozeBlank),
+		Prompt: strings.ReplaceAll(example, form, clozeBlank),
 		// The intact sentence travels alongside the blanked one, so the
 		// result can show what it actually said.
 		Example: example,
-		Answer:  item.Expression,
+		// The form the learner actually types, which for a pattern is
+		// the pattern without its placeholder.
+		Answer: form,
 		// The reading is accepted too. A learner who recalls the word but
 		// types it in kana has produced it; failing them on orthography
 		// would test something the drill never asked about.

@@ -7,6 +7,7 @@
 package vocabulary
 
 import (
+	"strings"
 	"time"
 
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
@@ -61,4 +62,62 @@ type Item struct {
 
 	FirstSeen time.Time
 	LastEvent time.Time
+}
+
+// MatchableForm is the part of an expression that literally appears in a
+// sentence.
+//
+// A pattern entry is written with a leading (and sometimes trailing)
+// 〜 or ～ standing for "whatever comes here": 〜というわけではない is
+// never written with the tilde in a real sentence, it is written as
+// 嫌いというわけではない. Anything comparing an expression against text
+// — finding it, blanking it, emphasising it — has to compare this form,
+// or every pattern in the learner's vocabulary silently fails to match.
+//
+// Returns the expression unchanged when there is no placeholder, which
+// is every ordinary word.
+func (i Item) MatchableForm() string {
+	return MatchableForm(i.Expression)
+}
+
+// MatchableForm is Item.MatchableForm for a bare expression.
+func MatchableForm(expression string) string {
+	return strings.TrimSpace(strings.Trim(strings.TrimSpace(expression), "〜～"))
+}
+
+// minMatchRunes is the shortest prefix of an expression that may stand
+// for it in a sentence. Four is long enough that a match is about this
+// expression rather than a common particle sequence, and short enough
+// that ordinary inflection still matches.
+const minMatchRunes = 4
+
+// MatchIn finds the part of expression that actually appears in
+// sentence, and reports whether anything did.
+//
+// Exact first. Failing that, the longest PREFIX of the expression
+// present in the sentence, because a grammar pattern inflects: a
+// sentence using 〜というわけではない may well say
+// というわけでは*ありません*, and demanding the citation form rejects a
+// perfectly correct example. The prefix is what actually appears, so it
+// is what can honestly be blanked for a cloze or emphasised in prose —
+// returning the citation form instead would mean marking text that is
+// not there.
+//
+// Short prefixes are refused: below minMatchRunes a "match" is a common
+// particle string that says nothing about this expression.
+func MatchIn(sentence, expression string) (string, bool) {
+	form := MatchableForm(expression)
+	if form == "" || sentence == "" {
+		return "", false
+	}
+	if strings.Contains(sentence, form) {
+		return form, true
+	}
+	runes := []rune(form)
+	for n := len(runes) - 1; n >= minMatchRunes; n-- {
+		if prefix := string(runes[:n]); strings.Contains(sentence, prefix) {
+			return prefix, true
+		}
+	}
+	return "", false
 }

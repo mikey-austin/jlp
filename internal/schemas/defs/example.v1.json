@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ExampleV1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sentence"],
+  "properties": {
+    "sentence": { "type": "string", "minLength": 1 },
+    "translation_en": { "type": "string" }
+  }
+}

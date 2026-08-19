@@ -15,6 +15,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/diff"
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -117,7 +118,11 @@ func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
 	// Only on the card: a cloze's whole question is the sentence with a
 	// hole in it, and showing the intact one beside it would answer it.
 	if v.IsWord {
-		v.ExampleParts = highlight(ex.Example, ex.Prompt)
+		// The prompt IS the expression for a card, tilde and all, while
+		// the sentence contains whatever form actually inflected into it.
+		if form, ok := vocabulary.MatchIn(ex.Example, ex.Prompt); ok {
+			v.ExampleParts = highlight(ex.Example, form)
+		}
 	}
 	return v
 }

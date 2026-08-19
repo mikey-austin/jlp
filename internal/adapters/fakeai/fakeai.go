@@ -78,6 +78,13 @@ const (
 	// content would be asserting on this fixture, not on the feature.
 	schemaPassageV1 = "passage.v1"
 
+	// schemaExampleV1 backs internal/agent/drill's GenerateExample. The
+	// canned sentence contains the fixture word 面白い, because the agent
+	// REFUSES a sentence that does not contain the word it was asked
+	// about — a fixture that failed that check would make the check
+	// untestable through the fake.
+	schemaExampleV1 = "example.v1"
+
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
@@ -112,6 +119,7 @@ var supportedSchemas = map[string]bool{
 	schemaWeeklySummaryV1:    true,
 	schemaConversationTurnV1: true,
 	schemaPassageV1:          true,
+	schemaExampleV1:          true,
 }
 
 // cannedPassage mirrors schemas/defs/passage.v1.json field-for-field.
@@ -126,6 +134,12 @@ var cannedPassage = map[string]any{
 	},
 	"choices": []string{"また行きたい", "もう行きたくない", "映画は退屈だった"},
 	"answer":  "また行きたい",
+}
+
+// cannedExample mirrors schemas/defs/example.v1.json.
+var cannedExample = map[string]any{
+	"sentence":       "その映画はとても面白いですね。",
+	"translation_en": "That film is very interesting, isn't it?",
 }
 
 type explanation struct {
@@ -404,6 +418,8 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 		return g.respondConversationTurn(start, req)
 	case schemaPassageV1:
 		return g.respond(start, req, cannedPassage)
+	case schemaExampleV1:
+		return g.respond(start, req, cannedExample)
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own

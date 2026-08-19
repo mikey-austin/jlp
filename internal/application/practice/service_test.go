@@ -1167,3 +1167,12 @@ func TestExcludeSubjectSkipsADueWordToo(t *testing.T) {
 		t.Error("the excluded word was drilled from the due queue")
 	}
 }
+
+// RecordExample stores a generated example sentence.
+func (r *fakeVocabRepo) RecordExample(_ context.Context, _ learner.IdentityID, itemID, sentence string, _ time.Time) error {
+	if r.examples == nil {
+		r.examples = map[string]string{}
+	}
+	r.examples[itemID] = sentence
+	return nil
+}

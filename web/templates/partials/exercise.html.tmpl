@@ -4,7 +4,7 @@
      decoration; when TTS is not configured the button reports
      unavailable on click rather than being absent, so the learner learns
      the capability exists and is off. */}}
-{{define "speak"}}<button type="button" class="speak" data-speak="{{.}}" aria-label="読み上げる" title="読み上げる">🔊</button>{{end}}
+{{define "speak"}}{{if hasJapanese .}}<button type="button" class="speak" data-speak="{{.}}" aria-label="読み上げる" title="読み上げる">🔊</button>{{end}}{{end}}
 
 {{/* run_header is the progress bar and streak shared by the question
      and its result, so one run reads as one run rather than a series of
@@ -25,7 +25,7 @@
 {{define "exercise"}}
 <div class="exercise card" id="exercise-{{.ID}}" data-exercise-id="{{.ID}}" data-type="{{.Type}}">
   {{template "run_header" .}}
-  <p class="instructions ja">{{.InstructionsJA}}</p>
+  <p class="instructions ja">{{.InstructionsJA}}{{template "speak" .InstructionsJA}}</p>
   <p class="instructions en">{{.InstructionsEN}}</p>
 
   {{if .IsWord}}
@@ -45,7 +45,7 @@
       <summary class="btn btn--ghost">めくる</summary>
       <div class="flip-card__back">
       {{if .Reading}}<p class="flip-card__reading" lang="ja">{{.Reading}}{{template "speak" .Reading}}</p>{{end}}
-      {{if .Meaning}}<p class="flip-card__meaning">{{.Meaning}}</p>{{end}}
+      {{if .Meaning}}<p class="flip-card__meaning">{{.Meaning}}{{template "speak" .Meaning}}</p>{{end}}
       {{/* The sentence the learner met this word in, with the word
            itself emphasised — the context is what makes a word stick,
            and it is exactly what a bare flip card throws away. Split

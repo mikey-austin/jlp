@@ -372,3 +372,41 @@ func TestGeneratePassageStillRejectsAnUnresolvableAnswer(t *testing.T) {
 		}
 	}
 }
+
+// A generated sentence that does not contain the word cannot be blanked
+// for a cloze and cannot have the word emphasised in it. Storing one
+// would show the learner a "example" of a word that is not in it — worse
+// than having none, because it is presented as though it were right.
+func TestGenerateExampleRefusesASentenceWithoutTheWord(t *testing.T) {
+	gen := &flakyGen{payloads: [][]byte{[]byte(`{"sentence":"この文には別の語しかありません。"}`)}}
+
+	_, _, err := drill.New(gen).GenerateExample(context.Background(), drill.ExampleInput{
+		Identity: "learner-a", Expression: "紛らわしい",
+	})
+	if err == nil {
+		t.Fatal("accepted a sentence that does not contain the word")
+	}
+	if !strings.Contains(err.Error(), "does not use") {
+		t.Errorf("error = %v, want it to name the problem", err)
+	}
+}
+
+func TestGenerateExampleReturnsASentenceContainingTheWord(t *testing.T) {
+	sentence, _, err := drill.New(fakeai.New()).GenerateExample(context.Background(), drill.ExampleInput{
+		Identity: "learner-a", Expression: "面白い",
+	})
+	if err != nil {
+		t.Fatalf("GenerateExample: %v", err)
+	}
+	if !strings.Contains(sentence, "面白い") {
+		t.Errorf("sentence %q does not contain the word", sentence)
+	}
+}
+
+func TestGenerateExampleRefusesAnEmptyWord(t *testing.T) {
+	if _, _, err := drill.New(fakeai.New()).GenerateExample(context.Background(), drill.ExampleInput{
+		Identity: "learner-a",
+	}); err == nil {
+		t.Fatal("accepted an empty word")
+	}
+}

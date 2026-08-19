@@ -70,6 +70,15 @@ type VocabularyRepository interface {
 	// one indexed query regardless of how large a learner's vocabulary
 	// grows.
 	ListActivationCandidates(ctx context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error)
+	// RecordExample stores a generated example sentence for itemID.
+	//
+	// Written as a vocabulary event, the same place a looked-up word's
+	// own sentence lands, so LatestExamples finds both without knowing
+	// which is which — and so the log says plainly where each sentence
+	// came from. A real sentence from the learner's reading still wins,
+	// because LatestExamples takes the most recent and a lookup happens
+	// after an import.
+	RecordExample(ctx context.Context, identity learner.IdentityID, itemID, sentence string, at time.Time) error
 	// LatestExamples returns, per vocabulary id, the most recent
 	// non-empty example sentence recorded for it — keyed by id, absent
 	// when the word has none.

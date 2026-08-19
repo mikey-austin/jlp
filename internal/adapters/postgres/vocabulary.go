@@ -278,6 +278,34 @@ func (r *VocabularyRepository) GetByExpressions(ctx context.Context, identity le
 	return out, nil
 }
 
+// RecordExample implements storage.VocabularyRepository.RecordExample.
+//
+// Its own event type, not "vocabulary.lookup": nobody looked anything
+// up, and a generated sentence borrowing the lookup type would inflate
+// the lookup counts every other reader trusts.
+func (r *VocabularyRepository) RecordExample(ctx context.Context, identity learner.IdentityID, itemID, sentence string, at time.Time) error {
+	id, err := parseUUID(itemID)
+	if err != nil {
+		return fmt.Errorf("vocabulary: item id: %w", err)
+	}
+	eventID, err := uuid.NewRandom()
+	if err != nil {
+		return err
+	}
+	payload, err := json.Marshal(map[string]any{"example": sentence, "generated": true})
+	if err != nil {
+		return fmt.Errorf("vocabulary: marshal example payload: %w", err)
+	}
+	return r.q.InsertVocabularyEvent(ctx, sqlcgen.InsertVocabularyEventParams{
+		ID:         pgtype.UUID{Bytes: eventID, Valid: true},
+		IdentityID: string(identity),
+		ItemID:     id,
+		Type:       "vocabulary.example-generated",
+		Payload:    payload,
+		OccurredAt: pgtype.Timestamptz{Time: at, Valid: true},
+	})
+}
+
 // LatestExamples implements storage.VocabularyRepository.LatestExamples
 // — one query for the whole set, like GetByIDs above.
 func (r *VocabularyRepository) LatestExamples(ctx context.Context, identity learner.IdentityID, ids []string) (map[string]string, error) {

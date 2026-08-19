@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 	"time"
+	"unicode"
 )
 
 // funcs are the helpers every page/partial template can call.
@@ -28,10 +29,19 @@ import (
 // new markup against an old stylesheet. TestTemplatesRouteStaticThroughAsset
 // keeps that from creeping back.
 var funcs = template.FuncMap{
-	"percent": func(ratio float64) string { return fmt.Sprintf("%.0f", ratio*100) },
-	"lower":   strings.ToLower,
-	"days":    func(d time.Duration) int64 { return int64(d / (24 * time.Hour)) },
-	"asset":   assets.URL,
+	// hasJapanese gates the 読み上げる buttons. The synthesizer and the
+	// browser fallback both speak Japanese; handed English they either
+	// mangle it or read it in a Japanese voice, which for a learner is
+	// worse than silence — it teaches a pronunciation to unlearn.
+	//
+	// A definition may be either: vocabulary carries a Japanese meaning
+	// and an English gloss, and either can be the one on the card. So the
+	// button is offered per string, on what the string actually is.
+	"hasJapanese": hasJapanese,
+	"percent":     func(ratio float64) string { return fmt.Sprintf("%.0f", ratio*100) },
+	"lower":       strings.ToLower,
+	"days":        func(d time.Duration) int64 { return int64(d / (24 * time.Hour)) },
+	"asset":       assets.URL,
 }
 
 // render is what every page handler calls: Render below, plus the
@@ -95,4 +105,19 @@ func RenderPartial(w http.ResponseWriter, r *http.Request, name string, data any
 	if err := t.ExecuteTemplate(w, name, data); err != nil {
 		slog.Error("partial exec", "name", name, "err", err)
 	}
+}
+
+// hasJapanese reports whether s contains any kana or CJK ideograph.
+//
+// Presence, not proportion: "この本はinterestingです" is a Japanese
+// sentence with an English word in it and is worth speaking, while a
+// wholly English gloss has nothing for a Japanese voice to say.
+func hasJapanese(s string) bool {
+	for _, r := range s {
+		switch {
+		case unicode.In(r, unicode.Hiragana, unicode.Katakana, unicode.Han):
+			return true
+		}
+	}
+	return false
 }
