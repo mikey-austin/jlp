@@ -374,7 +374,7 @@ func TestAnswerCorrectChoiceNeverCallsAI(t *testing.T) {
 	deny := &denyAfterStartGen{}
 	h.svc = apppractice.NewService(h.repo, drill.New(deny), planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, h.grammar, h.prios, &fakeVocabRepo{}, time.Now), h.grammar, learning.NewRecorder(h.events, inprocbus.New()), nil, nil, nil)
 
-	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, ex.Answer, 4)
+	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{Response: ex.Answer, Confidence: 4})
 	if err != nil {
 		t.Fatalf("Answer returned error: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestAnswerWrongChoiceIsEncouragingNotPenalizing(t *testing.T) {
 	ex := startExercise(t, h)
 
 	wrong := "面白いでした" // the canned MCQ's own wrong distractor
-	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, wrong, 0)
+	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{Response: wrong, Confidence: 0})
 	if err != nil {
 		t.Fatalf("Answer returned error: %v", err)
 	}
@@ -435,7 +435,7 @@ func TestAnswerAcceptableListHitCountsAsCorrect(t *testing.T) {
 	ex.Acceptable = []string{"おもしろかったです"}
 	h.repo.byID[ex.ID] = ex
 
-	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, "  おもしろかったです  ", 0)
+	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{Response: "  おもしろかったです  ", Confidence: 0})
 	if err != nil {
 		t.Fatalf("Answer returned error: %v", err)
 	}
@@ -454,7 +454,7 @@ func TestAnswerFreeProductionCallsEvaluate(t *testing.T) {
 	ex.Answer = ""
 	h.repo.byID[ex.ID] = ex
 
-	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, "映画はとても面白かったです。", 0)
+	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{Response: "映画はとても面白かったです。", Confidence: 0})
 	if err != nil {
 		t.Fatalf("Answer returned error: %v", err)
 	}
@@ -471,7 +471,7 @@ func TestAnswerRecordsQuizAnsweredAndCompleted(t *testing.T) {
 	ex := startExercise(t, h)
 	h.events.appended = nil // discard the quiz.started event from Start
 
-	if _, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, ex.Answer, 4); err != nil {
+	if _, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{Response: ex.Answer, Confidence: 4}); err != nil {
 		t.Fatalf("Answer returned error: %v", err)
 	}
 
@@ -502,7 +502,7 @@ func TestAnswerConfidenceZeroMeansNotGiven(t *testing.T) {
 	h := defaultHarness()
 	ex := startExercise(t, h)
 
-	if _, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, ex.Answer, 0); err != nil {
+	if _, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{Response: ex.Answer, Confidence: 0}); err != nil {
 		t.Fatalf("Answer returned error: %v", err)
 	}
 	if len(h.repo.attempts) != 1 {
@@ -520,7 +520,7 @@ func TestAnswerInvalidConfidenceErrors(t *testing.T) {
 	ex := startExercise(t, h)
 
 	for _, bad := range []int{-1, 6, 100} {
-		if _, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, ex.Answer, bad); !errors.Is(err, apppractice.ErrInvalidConfidence) {
+		if _, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{Response: ex.Answer, Confidence: bad}); !errors.Is(err, apppractice.ErrInvalidConfidence) {
 			t.Fatalf("Answer(confidence=%d) err = %v, want ErrInvalidConfidence", bad, err)
 		}
 	}
@@ -534,7 +534,7 @@ func TestAnswerCrossIdentityMisses(t *testing.T) {
 	h := defaultHarness()
 	ex := startExercise(t, h)
 
-	_, err := h.svc.Answer(context.Background(), learner.IdentityID("someone-else"), ex.ID, ex.Answer, 0)
+	_, err := h.svc.Answer(context.Background(), learner.IdentityID("someone-else"), ex.ID, apppractice.AnswerInput{Response: ex.Answer, Confidence: 0})
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("Answer across identities err = %v, want storage.ErrNotFound", err)
 	}
@@ -543,7 +543,7 @@ func TestAnswerCrossIdentityMisses(t *testing.T) {
 // TestAnswerUnknownExerciseIDMisses pins the plain not-found case.
 func TestAnswerUnknownExerciseIDMisses(t *testing.T) {
 	h := defaultHarness()
-	_, err := h.svc.Answer(context.Background(), testIdentity, "does-not-exist", "x", 0)
+	_, err := h.svc.Answer(context.Background(), testIdentity, "does-not-exist", apppractice.AnswerInput{Response: "x", Confidence: 0})
 	if !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("Answer unknown id err = %v, want storage.ErrNotFound", err)
 	}
@@ -1291,3 +1291,67 @@ func TestARunDoesNotRepeatTheWordsItAlreadyCovered(t *testing.T) {
 		covered = append(covered, ex.SubjectRef)
 	}
 }
+
+// "I don't know" and a wrong guess are different facts about a learner,
+// and only one of them says anything about what they thought the answer
+// was. Both are incorrect for scheduling — they could not produce it —
+// but the run has to be able to tell them apart afterwards.
+func TestANotSureAnswerIsIncorrectButRecordedDistinctly(t *testing.T) {
+	h := defaultHarness()
+	ex, err := h.svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+
+	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{NotSure: true})
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	if eval.Correct {
+		t.Error("a declined answer was scored correct")
+	}
+
+	var answered *event.LearningEvent
+	for i, e := range h.events.appended {
+		if e.Type == event.TypeQuizAnswered {
+			answered = &h.events.appended[i]
+		}
+	}
+	if answered == nil {
+		t.Fatal("no quiz.answered event")
+	}
+	if got, _ := answered.Evidence["not_sure"].(bool); !got {
+		t.Errorf("evidence not_sure = %v, want true — a decline is indistinguishable from a wrong guess", answered.Evidence["not_sure"])
+	}
+	if got, _ := answered.Evidence["correct"].(bool); got {
+		t.Error("evidence says correct; the scheduler would treat a decline as a recall")
+	}
+}
+
+// Declining must not be mistaken for an empty typed answer that happened
+// to match: an exercise whose answer is genuinely "" would otherwise be
+// marked correct for someone who said they did not know.
+func TestANotSureAnswerIsWrongEvenIfTheAnswerIsEmpty(t *testing.T) {
+	h := defaultHarness()
+	ex, err := h.svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, apppractice.AnswerInput{Response: "", NotSure: true})
+	if err != nil {
+		t.Fatalf("answer: %v", err)
+	}
+	if eval.Correct {
+		t.Error("declining was scored correct")
+	}
+	// And the copy meets them where they are rather than saying "not
+	// quite, try again" to someone who told you they did not know.
+	if eval.FeedbackJA == wrongFeedbackJAForTest {
+		t.Error("a decline got the wrong-answer copy")
+	}
+}
+
+// The deterministic wrong-answer copy, duplicated here rather than
+// exported: a test asserting the two differ should fail if either
+// changes to match the other.
+const wrongFeedbackJAForTest = "惜しい！もう一度挑戦しましょう。"

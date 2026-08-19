@@ -168,6 +168,11 @@ type exerciseResultView struct {
 	// Answer is the canonical answer, shown alongside the diff. Only ever
 	// set once the attempt is over, never while the question is open.
 	Answer string
+	// NotSure is set when the learner declined to answer. The result
+	// still shows everything a wrong answer shows — the answer, the
+	// definition, the sentence — because that is what they asked for by
+	// pressing it.
+	NotSure bool
 	// Definition is the word's meaning, always shown once the answer is
 	// in. Getting a word right without recalling what it means is not
 	// knowing the word, and a choice question makes that especially easy
@@ -191,7 +196,7 @@ type exerciseResultView struct {
 	NextPosition int
 }
 
-func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, response string, position, streak int, drilled []string) exerciseResultView {
+func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, response string, notSure bool, position, streak int, drilled []string) exerciseResultView {
 	v := exerciseResultView{
 		Correct:      eval.Correct,
 		Score:        eval.Score,
@@ -204,6 +209,7 @@ func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, respon
 		Done:         position >= runLength,
 		NextPosition: position + 1,
 		Drilled:      strings.Join(drilled, ","),
+		NotSure:      notSure,
 	}
 	// The word's own sentence, restored. Not shown while the question is
 	// open — for a cloze it IS the answer.
@@ -212,12 +218,20 @@ func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, respon
 		v.ExampleParts = highlight(ex.Example, ex.Answer)
 	}
 
-	// A diff only means something when there is one canonical answer the
-	// learner tried to type. Free production has none, and a flip card
-	// was never typed at all.
-	if !eval.Correct && ex.Answer != "" &&
-		ex.Type != exercise.TypeFreeProduction && ex.Type != exercise.TypeWordRecall {
+	// The answer itself, whenever the attempt is over and there is one.
+	// A declined answer needs it MOST: the learner said they did not
+	// know, and the only useful reply is to tell them.
+	if !eval.Correct && ex.Answer != "" && ex.Type != exercise.TypeFreeProduction {
 		v.Answer = ex.Answer
+	}
+
+	// A diff only means something when there is one canonical answer the
+	// learner actually TRIED to type. Free production has none, a flip
+	// card was never typed, and a declined answer was never attempted —
+	// diffing an empty string against the answer marks the whole thing
+	// inserted, which is noise dressed as feedback.
+	if !eval.Correct && !notSure && ex.Answer != "" && strings.TrimSpace(response) != "" &&
+		ex.Type != exercise.TypeFreeProduction && ex.Type != exercise.TypeWordRecall {
 		// toDiffSpans, not a second mapping of its own: the correction
 		// card already renders .d-ins/.d-del from the same diff, and two
 		// spellings of "what changed" is two things to keep agreeing
@@ -501,7 +515,14 @@ func (s *Server) practiceAnswer(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	eval, err := s.opts.Practice.Answer(r.Context(), ident.ID, id, r.FormValue("response"), confidence)
+	// A "not sure" submit carries no answer, so the response field's
+	// own required-ness is bypassed with formnovalidate in the template.
+	notSure := r.FormValue("not_sure") != ""
+	eval, err := s.opts.Practice.Answer(r.Context(), ident.ID, id, practice.AnswerInput{
+		Response:   r.FormValue("response"),
+		Confidence: confidence,
+		NotSure:    notSure,
+	})
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
 			http.NotFound(w, r)
@@ -529,7 +550,7 @@ func (s *Server) practiceAnswer(w http.ResponseWriter, r *http.Request) {
 	if ex.SubjectType == exercise.SubjectWord && ex.SubjectRef != "" && !slices.Contains(drilled, ex.SubjectRef) {
 		drilled = append(drilled, ex.SubjectRef)
 	}
-	view := toExerciseResultView(eval, ex, r.FormValue("response"), position, streak, drilled)
+	view := toExerciseResultView(eval, ex, r.FormValue("response"), notSure, position, streak, drilled)
 	if view.Done {
 		view.Summary = s.runSummary(r.Context(), ident.ID)
 	}

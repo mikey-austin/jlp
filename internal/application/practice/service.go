@@ -843,10 +843,27 @@ func (s *Service) randomCatalogConcept(ctx context.Context) (grammar.Concept, er
 // given" (never persisted as a literal 0 — see
 // storage.ExerciseAttempt.Confidence's *int/nil shape), 1..5 is valid,
 // anything else is ErrInvalidConfidence.
-// For TypeWordRecall, response carries a self-grade token
-// (exercise.SelfGradeKnew / SelfGradeAgain) rather than typed text — see
-// selfGradedEvaluation.
-func (s *Service) Answer(ctx context.Context, identity learner.IdentityID, exerciseID, response string, confidence int) (exercise.Evaluation, error) {
+// AnswerInput is one attempt at an exercise.
+type AnswerInput struct {
+	// Response is the learner's answer. For TypeWordRecall it carries a
+	// self-grade token (exercise.SelfGradeKnew / SelfGradeAgain) rather
+	// than typed text — see selfGradedEvaluation.
+	Response string
+	// Confidence is 0 (not given) or 1..5.
+	Confidence int
+	// NotSure means the learner declined to answer.
+	//
+	// Scored as incorrect, because it is: they could not produce it. But
+	// recorded distinctly, because "I don't know" and a wrong guess are
+	// different facts about a learner, and only one of them says
+	// anything about what they thought the answer WAS. Without the
+	// button the honest options are to guess — which teaches the
+	// scheduler that a coin flip was a recall — or to abandon the run.
+	NotSure bool
+}
+
+func (s *Service) Answer(ctx context.Context, identity learner.IdentityID, exerciseID string, in AnswerInput) (exercise.Evaluation, error) {
+	confidence, response := in.Confidence, in.Response
 	if confidence != 0 && (confidence < 1 || confidence > 5) {
 		return exercise.Evaluation{}, fmt.Errorf("%w: got %d", ErrInvalidConfidence, confidence)
 	}
@@ -858,6 +875,8 @@ func (s *Service) Answer(ctx context.Context, identity learner.IdentityID, exerc
 
 	var eval exercise.Evaluation
 	switch {
+	case in.NotSure:
+		eval = notSureEvaluation()
 	case ex.Type == exercise.TypeWordRecall:
 		eval = selfGradedEvaluation(response)
 	case ex.Type == exercise.TypeFreeProduction:
@@ -899,9 +918,13 @@ func (s *Service) Answer(ctx context.Context, identity learner.IdentityID, exerc
 	}
 
 	evidence := map[string]any{
-		"concept": ex.ConceptSlug,
-		"type":    ex.Type,
-		"correct": eval.Correct,
+		// Recorded so a summary can tell "I don't know" from a wrong
+		// guess. Both are incorrect for scheduling; only one of them is
+		// a mistake.
+		"not_sure": in.NotSure,
+		"concept":  ex.ConceptSlug,
+		"type":     ex.Type,
+		"correct":  eval.Correct,
 		// subject_type/subject_ref, not just concept: a word drill has no
 		// ConceptSlug, so a consumer reading "concept" alone treats every
 		// word drill as having no subject and silently does nothing with
@@ -952,6 +975,22 @@ func selfGradedEvaluation(response string) exercise.Evaluation {
 // Evaluation alone does not carry.
 func (s *Service) Get(ctx context.Context, identity learner.IdentityID, exerciseID string) (exercise.Exercise, error) {
 	return s.repo.Get(ctx, identity, exerciseID)
+}
+
+// notSureEvaluation scores a declined answer.
+//
+// Incorrect, because the learner could not produce it and that is what
+// the scheduler needs to know. The copy differs from a wrong answer's:
+// "not quite, try again" is the wrong thing to say to someone who told
+// you they did not know, and PRD §56's encouraging tone means meeting
+// them where they are rather than pretending they guessed.
+func notSureEvaluation() exercise.Evaluation {
+	return exercise.Evaluation{
+		Correct:    false,
+		Score:      deterministicWrongScore,
+		FeedbackJA: "だいじょうぶ。答えを見て覚えましょう。",
+		FeedbackEN: "No problem — here's the answer to learn from.",
+	}
 }
 
 // deterministicEvaluation implements the brief's deterministic scoring

@@ -170,7 +170,11 @@ func (s *Service) handlePractice(ctx context.Context, in channels.Inbound, ident
 // reply, so it's passed as 0 ("not given") — practice.Service.Answer's
 // own documented contract for that value.
 func (s *Service) handleAnswer(ctx context.Context, in channels.Inbound, identity learner.IdentityID, exerciseID string) (channels.Outbound, error) {
-	eval, err := s.practice.Answer(ctx, identity, exerciseID, strings.TrimSpace(in.Text), 0)
+	// No "not sure" over a channel: a chat reply is text, and there is no
+	// button to distinguish declining from answering.
+	eval, err := s.practice.Answer(ctx, identity, exerciseID, practice.AnswerInput{
+		Response: strings.TrimSpace(in.Text),
+	})
 	if err != nil {
 		return channels.Outbound{}, fmt.Errorf("channel: answer practice: %w", err)
 	}

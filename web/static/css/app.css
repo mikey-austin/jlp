@@ -814,6 +814,20 @@ main p.description {
   color: var(--danger);
 }
 
+/* 送信 and 分からない sit together: declining is a normal move, not a
+   failure state tucked away somewhere. Ghost styling keeps it the
+   quieter of the two without hiding it. */
+.exercise-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-top: var(--space-1);
+}
+.answer-plain {
+  margin: var(--space-3) 0;
+  font-size: var(--text-lg);
+}
+
 /* ---- answer diff ---- */
 /* Reuses .d-ins/.d-del from the correction card — same diff, same
    colours, so "what changed" looks identical everywhere it appears. */
@@ -886,6 +900,9 @@ main p.description {
   color: var(--success);
 }
 .result-banner.retry {
+  color: var(--fg-muted);
+}
+.result-banner.unsure {
   color: var(--fg-muted);
 }
 .exercise-result .btn {

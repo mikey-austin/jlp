@@ -651,3 +651,52 @@ func TestTheClosingPassageSurvivesAPrefetchMiss(t *testing.T) {
 		t.Errorf("the closing question was not a passage:\n%s", w.Body.String())
 	}
 }
+
+// The answer field is required, so a submit carrying no answer needs
+// formnovalidate or the browser blocks it and the button does nothing —
+// which would be the same class of silent dead button as the last one.
+func TestTheNotSureButtonCanSubmitWithoutAnAnswer(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/practice/start", nil))
+	body := w.Body.String()
+	if !strings.Contains(body, `name="not_sure"`) {
+		t.Fatalf("no 分からない button rendered:\n%s", body)
+	}
+	if !strings.Contains(body, "formnovalidate") {
+		t.Error("the 分からない submit is not marked formnovalidate; a required answer field would block it")
+	}
+}
+
+// A declined answer shows the answer — that is the point of pressing it
+// — but not a diff, because nothing was typed and diffing an empty
+// string marks the whole answer inserted, which is noise dressed as
+// feedback.
+func TestDecliningShowsTheAnswerWithoutADiff(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/practice/start", nil))
+	id := extractExerciseID(t, w.Body.String())
+
+	form := url.Values{"not_sure": {"1"}, "position": {"1"}}
+	req := httptest.NewRequest(http.MethodPost, "/practice/"+id+"/answer", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	res := httptest.NewRecorder()
+	h.ServeHTTP(res, req)
+
+	if res.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", res.Code, res.Body.String())
+	}
+	body := res.Body.String()
+	if !strings.Contains(body, "正解：") {
+		t.Errorf("the answer was not shown to someone who said they did not know:\n%s", body)
+	}
+	if strings.Contains(body, "answer-diff") {
+		t.Errorf("rendered a diff against an answer that was never attempted:\n%s", body)
+	}
+	if strings.Contains(body, "もう一度挑戦しましょう") {
+		t.Error("a decline got the wrong-answer copy")
+	}
+}

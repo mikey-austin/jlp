@@ -119,7 +119,15 @@
         <option value="5">5</option>
       </select>
     </label>
-    <button type="submit" class="btn">送信</button>
+    <div class="exercise-actions">
+      <button type="submit" class="btn">送信</button>
+      {{/* formnovalidate because the answer field is required and this
+           submit deliberately carries no answer. Guessing to get past a
+           question teaches the scheduler that a coin flip was a recall;
+           this says "I don't know" honestly, and the result then shows
+           what it was. */}}
+      <button type="submit" class="btn btn--ghost" name="not_sure" value="1" formnovalidate>分からない</button>
+    </div>
   </form>
   {{end}}
 </div>
@@ -135,7 +143,12 @@
        escapes correctly here. */}}
   <span id="run-drilled" data-drilled="{{.Drilled}}" hidden></span>
   {{template "run_header" .}}
-  {{if .Correct}}<p class="result-banner correct">正解！</p>{{else}}<p class="result-banner retry">もう一度挑戦しましょう。</p>{{end}}
+  {{/* Three states, not two. "もう一度挑戦しましょう" is the wrong thing
+       to say to someone who just told you they did not know — they did
+       not miss, they declined, and the useful reply is the answer. */}}
+  {{if .Correct}}<p class="result-banner correct">正解！</p>
+  {{else if .NotSure}}<p class="result-banner unsure">答えを見てみましょう。</p>
+  {{else}}<p class="result-banner retry">もう一度挑戦しましょう。</p>{{end}}
 
   {{/* The diff shows WHERE it missed instead of only that it did — same
        .d-ins/.d-del the correction card renders, from the same diff. Only
@@ -147,6 +160,10 @@
     <p class="answer-diff__spans" lang="ja">{{range .Spans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
     <p class="answer-diff__answer" lang="ja">正解：{{.Answer}}</p>
   </div>
+  {{else if .Answer}}
+  {{/* No diff to show — nothing was typed, or nothing was attempted —
+       but the answer itself is the whole point of asking. */}}
+  <p class="answer-plain" lang="ja">正解：{{.Answer}}{{template "speak" .Answer}}</p>
   {{end}}
 
   {{/* Always shown once the answer is in: getting a word right without
