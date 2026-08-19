@@ -60,6 +60,13 @@ type GenerateInput struct {
 	// use of the same shape) the drill.generate.v1 prompt weaves in when
 	// they fit the concept. May be empty.
 	RecentErrors []string
+	// ProviderOverride, when non-empty, is threaded straight through to
+	// ai.StructuredRequest.ProviderOverride, exactly as
+	// teacher.FeedbackInput does: the 練習 page's adapter dropdown picks
+	// which adapter generates THIS drill, for this request only. An
+	// explicit override does not fall back, so a failure with one is the
+	// answer rather than a silent hop to another provider.
+	ProviderOverride string
 }
 
 // generatePromptData mirrors exactly what
@@ -134,15 +141,16 @@ func (a *Agent) Generate(ctx context.Context, in GenerateInput) (exercise.Exerci
 	}
 
 	req := ai.StructuredRequest{
-		PromptName:    generatePromptName,
-		PromptVersion: promptVersion,
-		System:        rendered.System,
-		User:          rendered.User,
-		SchemaName:    exerciseSchemaName,
-		Schema:        schema,
-		MaxTokens:     maxTokens,
-		IdentityID:    in.Identity,
-		Agent:         agentName,
+		PromptName:       generatePromptName,
+		PromptVersion:    promptVersion,
+		System:           rendered.System,
+		User:             rendered.User,
+		SchemaName:       exerciseSchemaName,
+		Schema:           schema,
+		MaxTokens:        maxTokens,
+		IdentityID:       in.Identity,
+		Agent:            agentName,
+		ProviderOverride: in.ProviderOverride,
 	}
 
 	resp, err := a.gen.GenerateStructured(ctx, req)

@@ -85,8 +85,14 @@ func NewService(repo storage.ExerciseRepository, agent *drill.Agent, plnr *plann
 //  3. a random catalog concept otherwise (a brand-new learner, or one
 //     whose top priority isn't concept-type).
 //
+// providerOverride, when non-empty, names the AI adapter that must
+// generate this drill — the 練習 page's dropdown, for this request only.
+// It is passed straight to drill.GenerateInput and never persisted.
+// Empty means "route normally", which is what every non-interactive
+// caller (the channel adapters) wants: nobody is there to pick.
+//
 // Records quiz.started with Evidence {"concept":…, "type":…}.
-func (s *Service) Start(ctx context.Context, identity learner.IdentityID) (exercise.Exercise, error) {
+func (s *Service) Start(ctx context.Context, identity learner.IdentityID, providerOverride string) (exercise.Exercise, error) {
 	concept, ok, err := s.dueConcept(ctx, identity)
 	if err != nil {
 		return exercise.Exercise{}, fmt.Errorf("practice: due concept: %w", err)
@@ -104,7 +110,11 @@ func (s *Service) Start(ctx context.Context, identity learner.IdentityID) (exerc
 		}
 	}
 
-	ex, _, err := s.agent.Generate(ctx, drill.GenerateInput{Identity: identity, Concept: concept})
+	ex, _, err := s.agent.Generate(ctx, drill.GenerateInput{
+		Identity:         identity,
+		Concept:          concept,
+		ProviderOverride: providerOverride,
+	})
 	if err != nil {
 		return exercise.Exercise{}, fmt.Errorf("practice: generate exercise: %w", err)
 	}

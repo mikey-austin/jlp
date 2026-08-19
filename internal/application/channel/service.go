@@ -154,7 +154,9 @@ func (s *Service) Handle(ctx context.Context, in channels.Inbound) (channels.Out
 // Start already records quiz.started) and remembers it as key's pending
 // answer.
 func (s *Service) handlePractice(ctx context.Context, in channels.Inbound, identity learner.IdentityID, key string) (channels.Outbound, error) {
-	ex, err := s.practice.Start(ctx, identity)
+	// No provider override: a drill requested over Slack/Signal has no
+	// dropdown behind it and no operator watching, so it routes normally.
+	ex, err := s.practice.Start(ctx, identity, "")
 	if err != nil {
 		return channels.Outbound{}, fmt.Errorf("channel: start practice: %w", err)
 	}

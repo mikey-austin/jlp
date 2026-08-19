@@ -33,6 +33,12 @@
   {{if .Correct}}<p class="result-banner correct">正解！</p>{{else}}<p class="result-banner retry">もう一度挑戦しましょう。</p>{{end}}
   <p class="feedback ja">{{.FeedbackJA}}</p>
   <p class="feedback en">{{.FeedbackEN}}</p>
-  <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML">次の問題へ</button>
+  {{/* Reads the SAME #provider-override the page bar owns — it lives
+       outside #exercise-area precisely so it survives this swap. */}}
+  <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML"
+          hx-vals="js:{provider_override: document.getElementById('provider-override').value}"
+          data-progress-into="#exercise-area"
+          data-progress-label-from="#provider-override"
+          data-progress-verb="が問題を作成中">次の問題へ</button>
 </div>
 {{end}}

@@ -1,9 +1,32 @@
 {{define "content"}}<section class="practice">
   <h1>練習</h1>
+
+  {{/* OUTSIDE #exercise-area on purpose. Every drill response swaps that
+       element's contents, so a control living inside it would be
+       destroyed by the first question — taking the adapter choice with
+       it. Keeping the bar here means one select, chosen once, read by
+       both 練習する and the result partial's 次の問題へ.
+
+       The adapter dropdown is the workspace's, same helper and same
+       contract: this request only, never persisted, unknown value is a
+       400 rather than a silent fallback.
+
+       data-progress-into is what stops the button looking dead during a
+       5-30s model call, and what SHOWS a failure — htmx does not swap a
+       non-2xx response, so without it a failed drill leaves the page
+       byte-identical. */}}
+  <div class="practice-controls">
+    <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML"
+            hx-vals="js:{provider_override: document.getElementById('provider-override').value}"
+            data-progress-into="#exercise-area"
+            data-progress-label-from="#provider-override"
+            data-progress-verb="が問題を作成中">練習する</button>
+    <select id="provider-override" name="provider_override" class="select" aria-label="AIアダプター">
+      {{range .AIProviders}}<option value="{{.Name}}"{{if .Default}} selected{{end}}>{{.Label}}</option>{{end}}
+    </select>
+  </div>
+
   <div id="exercise-area">
-    <div class="card">
-      <p class="practice-intro">文法の練習をしましょう。「練習する」を押すと、あなたの学習状況に合わせた問題が出題されます。</p>
-      <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML">練習する</button>
-    </div>
+    <p class="practice-intro">「練習する」を押すと、あなたの学習状況に合わせた問題が出題されます。</p>
   </div>
 </section>{{end}}

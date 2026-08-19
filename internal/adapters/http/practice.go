@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"errors"
+	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -63,6 +64,11 @@ func (s *Server) practicePage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "practice", map[string]any{
 		"Title":    "練習",
 		"Identity": ident,
+		// The same adapter dropdown the workspace has, from the same
+		// helper. A drill is a model call of exactly the kind the
+		// workspace lets you steer, and there was no reason for it to be
+		// steerable in one place and not the other.
+		"AIProviders": aiProviderOptions(s.opts.AIProviders, s.opts.AIDefaultProvider),
 	})
 }
 
@@ -72,8 +78,24 @@ func (s *Server) practicePage(w http.ResponseWriter, r *http.Request) {
 // #exercise-area.
 func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
-	ex, err := s.opts.Practice.Start(r.Context(), ident.ID)
+
+	// Same contract as the workspace's feedback route: the dropdown
+	// always posts a value, and anything not in the configured list is a
+	// stale or tampered form rather than a routing hint to honour.
+	override := r.FormValue("provider_override")
+	if override != "" && !isKnownAIProvider(s.opts.AIProviders, override) {
+		http.Error(w, "unknown AI provider", http.StatusBadRequest)
+		return
+	}
+
+	ex, err := s.opts.Practice.Start(r.Context(), ident.ID, override)
 	if err != nil {
+		// Logged before answering, because htmx does not swap a non-2xx
+		// response: without this the learner sees a page that did not
+		// change and the operator sees nothing at all, which is how a
+		// failing drill button reads as a dead one.
+		slog.Error("practice: could not start",
+			"identity", ident.ID, "provider_override", override, "err", err)
 		http.Error(w, "could not start practice", http.StatusInternalServerError)
 		return
 	}
@@ -113,6 +135,8 @@ func (s *Server) practiceAnswer(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+		slog.Error("practice: could not submit answer",
+			"identity", ident.ID, "exercise", id, "err", err)
 		http.Error(w, "could not submit answer", http.StatusInternalServerError)
 		return
 	}

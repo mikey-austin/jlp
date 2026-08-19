@@ -255,7 +255,7 @@ func defaultHarness() *testHarness {
 func TestStartUsesPlannerTopConcept(t *testing.T) {
 	h := defaultHarness()
 
-	ex, err := h.svc.Start(context.Background(), testIdentity)
+	ex, err := h.svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -309,7 +309,7 @@ func TestStartFallsBackToCatalogWhenNoPriorities(t *testing.T) {
 		},
 	)
 
-	ex, err := h.svc.Start(context.Background(), testIdentity)
+	ex, err := h.svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -326,7 +326,7 @@ func TestStartFallsBackToCatalogWhenNoPriorities(t *testing.T) {
 func TestStartPropagatesTopConceptError(t *testing.T) {
 	h := newTestHarness(fakeai.New(), &fakePriorityRepoErr{err: errBoom}, &fakeGrammarRepo{})
 
-	if _, err := h.svc.Start(context.Background(), testIdentity); err == nil {
+	if _, err := h.svc.Start(context.Background(), testIdentity, ""); err == nil {
 		t.Fatal("expected an error when TopConcept fails, got nil")
 	}
 }
@@ -348,7 +348,7 @@ func (f *fakePriorityRepoErr) Top(context.Context, learner.IdentityID, int) ([]s
 
 func startExercise(t *testing.T, h *testHarness) exercise.Exercise {
 	t.Helper()
-	ex, err := h.svc.Start(context.Background(), testIdentity)
+	ex, err := h.svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -602,7 +602,7 @@ func TestStartPrefersDueConceptOverPlannerTopConcept(t *testing.T) {
 	agent := drill.New(fakeai.New())
 	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
 
-	ex, err := svc.Start(context.Background(), testIdentity)
+	ex, err := svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -632,7 +632,7 @@ func TestStartFallsBackToPlannerWhenNothingDueIsConceptType(t *testing.T) {
 	agent := drill.New(fakeai.New())
 	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
 
-	ex, err := svc.Start(context.Background(), testIdentity)
+	ex, err := svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -661,7 +661,7 @@ func TestStartFallsBackToPlannerWhenDueConceptSlugIsStale(t *testing.T) {
 	agent := drill.New(fakeai.New())
 	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
 
-	ex, err := svc.Start(context.Background(), testIdentity)
+	ex, err := svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}
@@ -698,7 +698,7 @@ func TestStartFindsDueConceptBehindLeadingExpressionItems(t *testing.T) {
 	agent := drill.New(fakeai.New())
 	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
 
-	ex, err := svc.Start(context.Background(), testIdentity)
+	ex, err := svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
 		t.Fatalf("Start returned error: %v", err)
 	}

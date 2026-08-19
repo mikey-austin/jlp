@@ -44,55 +44,92 @@ if ("serviceWorker" in navigator) {
   }
 })();
 
-// Phase 4 Task W item 1: フィードバックを取得's progress state — a
-// spinner, the requested adapter's name, and a live elapsed-seconds
-// timer, written directly into #feedback-results the instant the
-// request starts (htmx:beforeRequest) so the pane is IMMEDIATELY
-// replaced rather than looking frozen for the 5-30s a local model or a
-// CLI adapter can take. The eventual htmx response swap (on success)
-// overwrites this with the real result; on failure (htmx does not swap
-// non-2xx responses by default) htmx:responseError below shows the
-// error text instead — "an explicit override does not fall back" means
-// a failure here IS the answer the operator needs to see, not a silent
-// blank.
+// Progress state for any htmx trigger that asks for it: a spinner, the
+// requested adapter's name, and a live elapsed-seconds timer, written
+// into the target the instant the request starts (htmx:beforeRequest) so
+// the pane is IMMEDIATELY replaced rather than looking frozen for the
+// 5-30s a local model or a CLI adapter can take. The eventual response
+// swap overwrites this; on failure — htmx does NOT swap a non-2xx
+// response — the error text is shown instead, because a failure here is
+// the answer the operator needs to see, not a silent blank.
+//
+// Opt in per element rather than by id. This was bound to #feedback-btn
+// alone, which is exactly why 練習する shipped with none of it: a five
+// second model call behind a button that never changed, and a failed one
+// that left the page byte-identical. An element declares:
+//
+//   data-progress-into="#exercise-area"        (required) where it goes
+//   data-progress-label-from="#provider-override"  (optional) adapter name
+//   data-progress-verb="問題を作成中"           (optional) copy
+//
+// Delegated on document, so elements swapped in by htmx (the result
+// partial's 次の問題へ) are covered without re-binding.
 (function () {
   "use strict";
-  const btn = document.getElementById("feedback-btn");
-  const results = document.getElementById("feedback-results");
-  const select = document.getElementById("provider-override");
-  if (!btn || !results) return;
+  const timers = new WeakMap();
 
-  let timerId = null;
-  function stopTimer() {
-    if (timerId) { clearInterval(timerId); timerId = null; }
+  function targetOf(el) {
+    const sel = el && el.dataset && el.dataset.progressInto;
+    return sel ? document.querySelector(sel) : null;
   }
 
-  btn.addEventListener("htmx:beforeRequest", function () {
-    const label = select && select.selectedOptions.length ? select.selectedOptions[0].text : "AI";
-    results.innerHTML =
+  function stopTimer(el) {
+    const id = timers.get(el);
+    if (id) { clearInterval(id); timers.delete(el); }
+  }
+
+  function escapeText(s) {
+    return String(s || "").replace(/[<>&]/g, function (c) {
+      return { "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c];
+    });
+  }
+
+  document.addEventListener("htmx:beforeRequest", function (evt) {
+    const el = evt.target;
+    const into = targetOf(el);
+    if (!into) return;
+
+    const sel = el.dataset.progressLabelFrom
+      ? document.querySelector(el.dataset.progressLabelFrom) : null;
+    const label = sel && sel.selectedOptions && sel.selectedOptions.length
+      ? sel.selectedOptions[0].text : "AI";
+    const verb = el.dataset.progressVerb || "に問い合わせ中";
+
+    into.innerHTML =
       '<div class="feedback-progress btn--busy" role="status" aria-live="polite">' +
       '<span class="btn__dot"></span>' +
-      "<span>" + label + " に問い合わせ中… <span id=\"feedback-timer\">0</span>秒</span>" +
+      "<span>" + escapeText(label) + " " + escapeText(verb) +
+      "… <span data-progress-timer>0</span>秒</span>" +
       "</div>";
+
     const start = Date.now();
-    const timerEl = document.getElementById("feedback-timer");
-    stopTimer();
-    timerId = setInterval(function () {
+    const timerEl = into.querySelector("[data-progress-timer]");
+    stopTimer(el);
+    timers.set(el, setInterval(function () {
       if (timerEl) timerEl.textContent = String(Math.floor((Date.now() - start) / 1000));
-    }, 1000);
+    }, 1000));
   });
-  btn.addEventListener("htmx:afterRequest", stopTimer);
-  btn.addEventListener("htmx:responseError", function (evt) {
-    stopTimer();
-    const status = evt.detail && evt.detail.xhr ? evt.detail.xhr.status : "";
-    const text = evt.detail && evt.detail.xhr ? evt.detail.xhr.responseText : "";
-    results.innerHTML = '<p class="error">フィードバックの取得に失敗しました（' + status + "）: " +
-      (text || "").replace(/[<>&]/g, function (c) { return { "<": "&lt;", ">": "&gt;", "&": "&amp;" }[c]; }) +
-      "</p>";
+
+  document.addEventListener("htmx:afterRequest", function (evt) {
+    if (targetOf(evt.target)) stopTimer(evt.target);
   });
-  btn.addEventListener("htmx:sendError", function () {
-    stopTimer();
-    results.innerHTML = '<p class="error">フィードバックの取得に失敗しました（ネットワークエラー）。</p>';
+
+  document.addEventListener("htmx:responseError", function (evt) {
+    const el = evt.target;
+    const into = targetOf(el);
+    if (!into) return;
+    stopTimer(el);
+    const xhr = evt.detail && evt.detail.xhr;
+    into.innerHTML = '<p class="error">失敗しました（' + (xhr ? xhr.status : "") + "）: " +
+      escapeText(xhr ? xhr.responseText : "") + "</p>";
+  });
+
+  document.addEventListener("htmx:sendError", function (evt) {
+    const el = evt.target;
+    const into = targetOf(el);
+    if (!into) return;
+    stopTimer(el);
+    into.innerHTML = '<p class="error">失敗しました（ネットワークエラー）。</p>';
   });
 })();
 

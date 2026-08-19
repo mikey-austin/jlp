@@ -98,7 +98,10 @@ func createExerciseTool(svc *appractice.Service) Tool {
 			Schema:      json.RawMessage(`{"type":"object","properties":{},"additionalProperties":false}`),
 		},
 		Handler: func(ctx context.Context, identity learner.IdentityID, _ *domsession.ID, _ json.RawMessage) (string, error) {
-			ex, err := svc.Start(ctx, identity)
+			// No provider override: an agent calling this tool is already
+			// running on whichever adapter the caller chose, and letting a
+			// model pick its own would make the choice unauditable.
+			ex, err := svc.Start(ctx, identity, "")
 			if err != nil {
 				return "", fmt.Errorf("create_exercise: %w", err)
 			}

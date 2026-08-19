@@ -20,6 +20,8 @@
         <div class="feedback-trigger">
           <button id="feedback-btn" class="btn" hx-post="/sessions/{{.Session.ID}}/feedback"
                   hx-target="#feedback-results" hx-swap="innerHTML"
+                  data-progress-into="#feedback-results"
+                  data-progress-label-from="#provider-override"
                   hx-vals="js:{...window.jlp.selectionPayload(), provider_override: document.getElementById('provider-override').value}">
             フィードバックを取得</button>
           {{/* Phase 4 Task W item 5: per-request adapter override,

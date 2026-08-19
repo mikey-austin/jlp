@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -19,6 +20,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -287,5 +289,90 @@ func TestPracticePageRenders(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "練習する") {
 		t.Fatalf("body missing the 練習する button: %s", rec.Body.String())
+	}
+}
+
+// failingDrillGen is an ai.StructuredGenerator that always fails, so a
+// test can exercise the path where generation breaks — the path that
+// used to leave no trace anywhere.
+type failingDrillGen struct{}
+
+func (failingDrillGen) GenerateStructured(context.Context, ai.StructuredRequest) (ai.StructuredResponse, error) {
+	return ai.StructuredResponse{}, errors.New("provider exploded")
+}
+
+// A drill that cannot be generated must answer non-2xx. htmx does not
+// swap a non-2xx response, so the learner sees an unchanged page — which
+// is only survivable because the server logs the cause. A handler that
+// answered 200 with an empty body would be worse: a blank card and no
+// error anywhere.
+func TestPracticeStartFailsLoudlyWhenGenerationFails(t *testing.T) {
+	opts := testOptions()
+	events := newFakeEventRepo()
+	rec := learning.NewRecorder(events, inprocbus.New())
+	grammarRepo := &practiceGrammarRepo{
+		concepts: []grammar.Concept{practiceTestConcept},
+		bySlug:   map[string]grammar.Concept{practiceTestConcept.Slug: practiceTestConcept},
+	}
+	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, grammarRepo, practicePriorityRepo{}, &fakeVocabRepo{}, time.Now)
+	opts.Practice = apppractice.NewService(newPracticeExerciseRepo(), drill.New(failingDrillGen{}), teachingPlanner, grammarRepo, rec, nil)
+	h := NewServer(opts).HandlerForTest()
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/practice/start", nil))
+
+	if w.Code == http.StatusOK {
+		t.Fatalf("a failed generation answered 200 — htmx would swap that in as the exercise: %s", w.Body.String())
+	}
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", w.Code)
+	}
+}
+
+// The dropdown always posts a value, so an unknown one is a stale or
+// tampered form rather than a routing hint. Same contract the workspace's
+// feedback route already enforces.
+func TestPracticeStartRejectsAnUnknownProvider(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	form := url.Values{"provider_override": {"not-a-configured-provider"}}
+	req := httptest.NewRequest(http.MethodPost, "/practice/start", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 — an unconfigured adapter must be refused, not routed around", w.Code)
+	}
+}
+
+// The page has to render the dropdown and the progress hooks, or the
+// button is back to looking dead during a 30-second model call.
+func TestPracticePageOffersAdapterChoiceAndProgress(t *testing.T) {
+	h, _, _ := practiceTestServer(t)
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/practice", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	body := w.Body.String()
+
+	for _, want := range []string{
+		`id="provider-override"`,
+		`data-progress-into="#exercise-area"`,
+		`data-progress-label-from="#provider-override"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page missing %s", want)
+		}
+	}
+
+	// The select must sit OUTSIDE the swap target, or the first question
+	// destroys it and takes the adapter choice with it.
+	selectIdx := strings.Index(body, `id="provider-override"`)
+	areaIdx := strings.Index(body, `id="exercise-area"`)
+	if selectIdx == -1 || areaIdx == -1 || selectIdx > areaIdx {
+		t.Error("the adapter select is inside #exercise-area, so the first swap will delete it")
 	}
 }

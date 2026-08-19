@@ -546,6 +546,24 @@ main p.description {
   color: var(--fg-muted);
   margin: 0 0 var(--space-4);
 }
+/* The control bar sits above #exercise-area and outside it, so the
+   adapter choice survives every swap. Same shape as .feedback-trigger,
+   which is the same idea on the workspace. */
+.practice-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+/* Sized to its content. It was inheriting the form-control default and
+   spanning the whole card for a five-option list — the single loudest
+   thing on the page, for the least important control on it. */
+.practice-controls .select,
+.confidence-select .select {
+  width: auto;
+  min-width: 12ch;
+}
 .exercise .instructions.en,
 .exercise-result .feedback.en {
   color: var(--fg-muted);
@@ -575,7 +593,12 @@ main p.description {
   border-color: var(--primary);
 }
 .confidence-select {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
   margin: var(--space-2) 0 var(--space-4);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
 }
 .exercise-form .btn {
   margin-top: var(--space-1);
