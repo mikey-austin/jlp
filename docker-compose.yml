@@ -37,10 +37,10 @@ services:
       APP_AUTH_OIDC_IDLETIMEOUT: ${APP_AUTH_OIDC_IDLETIMEOUT:-}
       APP_AUTH_OIDC_LOGOUTURL: ${APP_AUTH_OIDC_LOGOUTURL:-}
       # Caddy's fixed address on the pinned subnet below (NOT the bridge
-      # gateway 172.28.5.1, which is what direct host->published-port
-      # traffic hairpins through — see internal/adapters/authelia). Trusting
-      # the gateway too would let anyone on the host bypass Caddy entirely.
-      APP_AUTH_TRUSTEDPROXIES: 127.0.0.1/32,172.28.5.9/32
+      # gateway .1, which is what direct host->published-port traffic
+      # hairpins through — see internal/adapters/authelia). Trusting the
+      # gateway too would let anyone on the host bypass Caddy entirely.
+      APP_AUTH_TRUSTEDPROXIES: 127.0.0.1/32,${JLP_SUBNET_PREFIX:-172.28.5}.9/32
       APP_AI_PROVIDER: ${APP_AI_PROVIDER:-fake}
       APP_AI_ANTHROPIC_APIKEY: ${ANTHROPIC_API_KEY:-}
       # Empty is safe here: viper's getEnv only honors a bound env var when
@@ -191,7 +191,7 @@ services:
       default:
         # Fixed address so the app's trusted-proxy CIDR (above) can name
         # Caddy specifically, distinct from the bridge gateway.
-        ipv4_address: 172.28.5.9
+        ipv4_address: ${JLP_SUBNET_PREFIX:-172.28.5}.9
 
   mailpit:
     # SMTP capture inbox for local dev (Phase 3 Task 5, PRD §21/§65):
@@ -347,9 +347,18 @@ networks:
   default:
     ipam:
       config:
-        - subnet: 172.28.5.0/24
+        # Pinned, because Caddy needs a fixed address the app can name as
+        # its sole trusted proxy — and therefore configurable, because a
+        # pinned subnet can only be held by ONE compose project at a time.
+        # A second checkout of this repo (a worktree, say) otherwise fails
+        # every compose command with "Pool overlaps with other one on this
+        # address space", which names neither the other project nor the
+        # subnet. Set JLP_SUBNET_PREFIX in that checkout's .env; `make init`
+        # derives one for you. Everything above derives from it, so the
+        # three addresses can never drift apart.
+        - subnet: ${JLP_SUBNET_PREFIX:-172.28.5}.0/24
           # Reserve the lower half of the subnet from dynamic allocation so a
           # container started without a static address (postgres, app,
-          # authelia, tools) can never race Caddy for its pinned 172.28.5.9
-          # (used above in APP_AUTH_TRUSTEDPROXIES as the sole trusted peer).
-          ip_range: 172.28.5.128/25
+          # authelia, tools) can never race Caddy for its pinned .9 (used
+          # above in APP_AUTH_TRUSTEDPROXIES as the sole trusted peer).
+          ip_range: ${JLP_SUBNET_PREFIX:-172.28.5}.128/25

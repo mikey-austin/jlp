@@ -31,8 +31,21 @@ IMAGE     := $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
 
+# Third octet of this checkout's dev subnet, derived from its own path.
+# Deterministic, so the value is stable across runs, and different for a
+# second checkout — which is the point: the subnet is pinned (Caddy needs
+# a fixed address) and a pinned subnet can only be held by one compose
+# project at a time. Written into .env rather than exported here, so a
+# bare `docker compose` agrees with `make` instead of trying to recreate
+# the network on a different range.
+JLP_SUBNET_OCTET = $(shell printf '%d' 0x$$(printf '%s' '$(CURDIR)' | md5sum | cut -c1-2) | awk '{print $$1 % 240 + 5}')
+
 init: ## One-time setup: create .env from example, generate Authelia dev users
-	@test -f .env || cp .env.example .env
+	@if [ ! -f .env ]; then \
+	        cp .env.example .env; \
+	        sed -i "s|^JLP_SUBNET_PREFIX=.*|JLP_SUBNET_PREFIX=172.28.$(JLP_SUBNET_OCTET)|" .env; \
+	        echo "dev subnet for this checkout: 172.28.$(JLP_SUBNET_OCTET).0/24"; \
+	fi
 	@echo ".env ready — fill in secrets as needed"
 	@set -a; . ./.env; set +a; sh scripts/gen-authelia-users.sh
 
