@@ -232,6 +232,6 @@ func (panicVocabRepo) LatestExamples(context.Context, learner.IdentityID, []stri
 }
 
 // RecordExample stores a generated example sentence.
-func (panicVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, time.Time) error {
+func (panicVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, storage.ExampleOrigin, time.Time) error {
 	panic("not used by these tests")
 }

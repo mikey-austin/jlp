@@ -281,9 +281,11 @@ func (r *VocabularyRepository) GetByExpressions(ctx context.Context, identity le
 // RecordExample implements storage.VocabularyRepository.RecordExample.
 //
 // Its own event type, not "vocabulary.lookup": nobody looked anything
-// up, and a generated sentence borrowing the lookup type would inflate
-// the lookup counts every other reader trusts.
-func (r *VocabularyRepository) RecordExample(ctx context.Context, identity learner.IdentityID, itemID, sentence string, at time.Time) error {
+// up, and borrowing the lookup type would inflate the lookup counts
+// every other reader trusts. The origin is in the type AND the payload,
+// so neither a human reading the log nor a query filtering it has to
+// infer where a sentence came from.
+func (r *VocabularyRepository) RecordExample(ctx context.Context, identity learner.IdentityID, itemID, sentence string, origin storage.ExampleOrigin, at time.Time) error {
 	id, err := parseUUID(itemID)
 	if err != nil {
 		return fmt.Errorf("vocabulary: item id: %w", err)
@@ -292,7 +294,7 @@ func (r *VocabularyRepository) RecordExample(ctx context.Context, identity learn
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(map[string]any{"example": sentence, "generated": true})
+	payload, err := json.Marshal(map[string]any{"example": sentence, "origin": string(origin)})
 	if err != nil {
 		return fmt.Errorf("vocabulary: marshal example payload: %w", err)
 	}
@@ -300,7 +302,7 @@ func (r *VocabularyRepository) RecordExample(ctx context.Context, identity learn
 		ID:         pgtype.UUID{Bytes: eventID, Valid: true},
 		IdentityID: string(identity),
 		ItemID:     id,
-		Type:       "vocabulary.example-generated",
+		Type:       "vocabulary.example-" + string(origin),
 		Payload:    payload,
 		OccurredAt: pgtype.Timestamptz{Time: at, Valid: true},
 	})

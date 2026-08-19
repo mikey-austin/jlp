@@ -112,7 +112,10 @@ func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
 			v.Meaning = ex.Acceptable[0]
 		}
 	}
-	if ex.Type == exercise.TypeWordCloze {
+	// Only when there is something to type. A cloze with choices is
+	// answered by picking, and putting the answer in the DOM for a
+	// question that lists it would be pointless as well as revealing.
+	if ex.Type == exercise.TypeWordCloze && len(ex.Choices) == 0 {
 		v.LiveCheck = ex.Answer
 	}
 	// Only on the card: a cloze's whole question is the sentence with a

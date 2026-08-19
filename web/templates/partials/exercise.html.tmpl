@@ -88,7 +88,11 @@
          server — see exerciseView's own comment. */}}
     <input type="hidden" name="position" value="{{.Position}}">
     <input type="hidden" name="run_correct" value="{{.Streak}}">
-    {{if or (eq .Type "multiple-choice") .IsPassage}}
+    {{/* Driven by whether there ARE choices, not by type. A cloze has
+         them when the learner has enough vocabulary to build distractors
+         from and is typed otherwise, and keying on the type would mean
+         listing every type that might have them and forgetting one. */}}
+    {{if .Choices}}
     <div class="choices">
       {{range .Choices}}<label class="choice"><input type="radio" name="response" value="{{.}}" required> {{.}}</label>{{end}}
     </div>

@@ -405,7 +405,38 @@ func (s *Service) drillFor(ctx context.Context, identity learner.IdentityID, ite
 	if example == "" {
 		example = s.generateExample(ctx, identity, item)
 	}
-	return wordDrill(item, example)
+	return wordDrill(item, example, s.distractorsFor(ctx, identity, item))
+}
+
+// distractorsFor gathers other expressions from the learner's own
+// vocabulary, to serve as wrong options on a cloze.
+//
+// Their OWN words, not invented ones: the useful question is which of
+// the expressions they are currently trying to tell apart fits here, and
+// a plausible distractor is one they might genuinely confuse. It also
+// costs no model call, which is what keeps a word drill cheap.
+//
+// Best-effort throughout. No distractors simply means the cloze stays a
+// typed answer, which is what it was before.
+func (s *Service) distractorsFor(ctx context.Context, identity learner.IdentityID, exclude vocabulary.Item) []string {
+	items, err := s.vocab.ListRecentUnpracticed(ctx, identity, s.now().UTC().Add(-recentWordWindow), recentWordScanLimit)
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		if item.ID == exclude.ID {
+			continue
+		}
+		// The matchable form, because that is what the answer is: an
+		// option written 〜というわけではない beside an answer written
+		// というわけではない gives the answer away by its shape alone.
+		if form := item.MatchableForm(); form != "" {
+			out = append(out, form)
+		}
+	}
+	rand.Shuffle(len(out), func(i, j int) { out[i], out[j] = out[j], out[i] })
+	return out
 }
 
 // generateExample writes and stores a sentence for a word that has none,
@@ -435,7 +466,7 @@ func (s *Service) generateExample(ctx context.Context, identity learner.Identity
 			"identity", identity, "word", item.ID, "err", err)
 		return ""
 	}
-	if err := s.vocab.RecordExample(ctx, identity, item.ID, sentence, s.now().UTC()); err != nil {
+	if err := s.vocab.RecordExample(ctx, identity, item.ID, sentence, storage.ExampleGenerated, s.now().UTC()); err != nil {
 		// Usable now, just not remembered — better than discarding a
 		// sentence that was already paid for.
 		slog.Warn("practice: could not store a generated example",
@@ -541,14 +572,14 @@ const clozeBlank = "＿＿＿"
 // the expression — an example that mentions the word without using it,
 // or one recorded against a different surface form, would blank nothing
 // and leave the learner staring at an unmodified sentence.
-func wordDrill(item vocabulary.Item, example string) exercise.Exercise {
+func wordDrill(item vocabulary.Item, example string, distractors []string) exercise.Exercise {
 	example = strings.TrimSpace(example)
 	// MatchableForm, not Expression: a pattern entry is written
 	// 〜というわけではない and appears in a sentence without the tilde,
 	// so comparing the raw expression never matches and every pattern in
 	// the learner's vocabulary silently falls through to a bare card.
 	if form, ok := vocabulary.MatchIn(example, item.Expression); ok {
-		return wordCloze(item, example, form)
+		return wordCloze(item, example, form, distractors)
 	}
 	ex := wordRecall(item)
 	// Carried even though it cannot be blanked: a sentence that mentions
@@ -563,7 +594,19 @@ func wordDrill(item vocabulary.Item, example string) exercise.Exercise {
 // see vocabulary.MatchIn. Blanking anything else would remove text that
 // is not there and leave the real occurrence in place, handing over the
 // answer.
-func wordCloze(item vocabulary.Item, example, form string) exercise.Exercise {
+//
+// distractors are other expressions from the learner's own vocabulary.
+// Given at least clozeMinDistractors of them the drill becomes multiple
+// choice; otherwise it stays a typed answer.
+//
+// Choosing beats typing here. Producing a whole pattern from memory,
+// in Japanese, on a keyboard, is a much harder task than the one being
+// tested — recognising which expression the sentence wants — and the
+// typing was failing learners who knew the answer. Choosing between
+// their OWN words is also a better question than choosing between
+// invented ones: the distractors are things they are actually trying to
+// tell apart.
+func wordCloze(item vocabulary.Item, example, form string, distractors []string) exercise.Exercise {
 	meaning := strings.TrimSpace(item.Meaning)
 	if meaning == "" {
 		meaning = strings.TrimSpace(item.MeaningEN)
@@ -572,7 +615,7 @@ func wordCloze(item vocabulary.Item, example, form string) exercise.Exercise {
 	if meaning != "" {
 		instructionsJA = "空欄に入る語を入力してください。（意味：" + meaning + "）"
 	}
-	return exercise.Exercise{
+	ex := exercise.Exercise{
 		SubjectType:    exercise.SubjectWord,
 		SubjectRef:     item.ID,
 		Type:           exercise.TypeWordCloze,
@@ -592,6 +635,57 @@ func wordCloze(item vocabulary.Item, example, form string) exercise.Exercise {
 		// would test something the drill never asked about.
 		Acceptable: acceptableForms(item),
 	}
+	if choices := clozeChoices(form, distractors); len(choices) > 0 {
+		ex.Choices = choices
+		// A chosen answer is exact by construction, so the kana
+		// alternative has nothing to forgive and would only widen what
+		// counts as correct.
+		ex.Acceptable = nil
+		ex.InstructionsJA = "空欄に入る語を選んでください。"
+		if meaning != "" {
+			ex.InstructionsJA = "空欄に入る語を選んでください。（意味：" + meaning + "）"
+		}
+		ex.InstructionsEN = "Choose the word that belongs in the blank."
+	}
+	return ex
+}
+
+// clozeMinDistractors is how many wrong options a choice question needs
+// to be worth asking. Two: with one, a coin flip; with none, the answer
+// is simply displayed.
+const clozeMinDistractors = 2
+
+// clozeChoicesMax caps the options shown, answer included.
+const clozeChoicesMax = 4
+
+// clozeChoices builds the option list, or nil when there are too few
+// distractors to make one.
+//
+// Deduplicated against the answer, because an option list containing the
+// right answer twice has two right answers — and the grader would mark
+// the second one wrong.
+func clozeChoices(answer string, distractors []string) []string {
+	choices := make([]string, 0, clozeChoicesMax)
+	seen := map[string]bool{answer: true}
+	for _, d := range distractors {
+		d = strings.TrimSpace(d)
+		if d == "" || seen[d] {
+			continue
+		}
+		seen[d] = true
+		choices = append(choices, d)
+		if len(choices) == clozeChoicesMax-1 {
+			break
+		}
+	}
+	if len(choices) < clozeMinDistractors {
+		return nil
+	}
+	choices = append(choices, answer)
+	// Shuffled, or the answer is always last and the question tests
+	// nothing after the second one.
+	rand.Shuffle(len(choices), func(i, j int) { choices[i], choices[j] = choices[j], choices[i] })
+	return choices
 }
 
 // acceptableForms is the alternatives a cloze answer may take: the

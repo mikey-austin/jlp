@@ -3,6 +3,7 @@ package practice_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1169,10 +1170,95 @@ func TestExcludeSubjectSkipsADueWordToo(t *testing.T) {
 }
 
 // RecordExample stores a generated example sentence.
-func (r *fakeVocabRepo) RecordExample(_ context.Context, _ learner.IdentityID, itemID, sentence string, _ time.Time) error {
+func (r *fakeVocabRepo) RecordExample(_ context.Context, _ learner.IdentityID, itemID, sentence string, _ storage.ExampleOrigin, _ time.Time) error {
 	if r.examples == nil {
 		r.examples = map[string]string{}
 	}
 	r.examples[itemID] = sentence
 	return nil
+}
+
+// Typing a whole Japanese pattern from memory is a much harder task than
+// the one being tested — recognising which expression the sentence
+// wants — and it was failing learners who knew the answer.
+func TestAClozeOffersChoicesWhenThereAreEnoughOtherWords(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, vocab, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+		recentItem("w2", "曖昧", "あいまい", "vague"),
+		recentItem("w3", "微妙", "びみょう", "subtle"),
+		recentItem("w4", "厄介", "やっかい", "troublesome"),
+	}, now)
+	vocab.examples = map[string]string{"w1": "この二つの記号は紛らわしいので気をつけてください。"}
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.Type != exercise.TypeWordCloze {
+		t.Fatalf("type = %q, want %q", ex.Type, exercise.TypeWordCloze)
+	}
+	if len(ex.Choices) < 3 {
+		t.Fatalf("choices = %v, want the answer plus at least two distractors", ex.Choices)
+	}
+	if !slices.Contains(ex.Choices, ex.Answer) {
+		t.Errorf("the answer %q is not among the choices %v — unanswerable", ex.Answer, ex.Choices)
+	}
+	// An option list containing the answer twice has two right answers,
+	// and the grader marks the second one wrong.
+	seen := map[string]bool{}
+	for _, c := range ex.Choices {
+		if seen[c] {
+			t.Errorf("choice %q appears twice in %v", c, ex.Choices)
+		}
+		seen[c] = true
+	}
+}
+
+// A learner with almost no vocabulary has nothing to build distractors
+// from. Two options is a coin flip and one is just showing the answer,
+// so below the threshold the cloze stays typed rather than becoming a
+// question that asks nothing.
+func TestAClozeStaysTypedWithoutEnoughDistractors(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, vocab, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+		recentItem("w2", "曖昧", "あいまい", "vague"),
+	}, now)
+	vocab.examples = map[string]string{"w1": "この二つの記号は紛らわしいので気をつけてください。"}
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if len(ex.Choices) != 0 {
+		t.Errorf("choices = %v, want none — one distractor is not a question", ex.Choices)
+	}
+	if ex.Answer == "" {
+		t.Error("a typed cloze with no answer cannot be graded")
+	}
+}
+
+// Distractors are written in the same form as the answer. An option
+// written 〜というわけではない beside an answer written というわけではない
+// gives itself away by its shape alone.
+func TestClozeDistractorsUseTheSameFormAsTheAnswer(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, vocab, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+		recentItem("w2", "〜というわけではない", "", "not necessarily"),
+		recentItem("w3", "〜ざるを得ない", "", "have no choice"),
+		recentItem("w4", "〜きらいがある", "", "tends to"),
+	}, now)
+	vocab.examples = map[string]string{"w1": "この二つの記号は紛らわしいので気をつけてください。"}
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	for _, c := range ex.Choices {
+		if strings.ContainsAny(c, "〜～") {
+			t.Errorf("choice %q carries a pattern placeholder the answer would never have", c)
+		}
+	}
 }

@@ -51,8 +51,9 @@ type fakeVocabRepo struct {
 	// delete would let the Delete tests pass while the thing they are
 	// actually asserting — "it stops coming back from reads" — went
 	// untested.
-	deleted map[string]time.Time
-	nextID  int
+	deleted  map[string]time.Time
+	examples map[string]recordedExample
+	nextID   int
 
 	productions []productionCall
 	bulkUpserts []bulkUpsertCall
@@ -837,6 +838,70 @@ func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []st
 }
 
 // RecordExample stores a generated example sentence.
-func (r *fakeVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, time.Time) error {
-	panic("not used by these tests")
+// RecordExample IS exercised: an import that carries example sentences
+// must store them, and the origin must say they were imported rather
+// than generated.
+func (r *fakeVocabRepo) RecordExample(_ context.Context, _ learner.IdentityID, itemID, sentence string, origin storage.ExampleOrigin, _ time.Time) error {
+	if r.examples == nil {
+		r.examples = map[string]recordedExample{}
+	}
+	r.examples[itemID] = recordedExample{Sentence: sentence, Origin: origin}
+	return nil
+}
+
+// recordedExample is one stored sentence and where it came from.
+type recordedExample struct {
+	Sentence string
+	Origin   storage.ExampleOrigin
+}
+
+// The reason the field exists: 練習 drills a word in its own sentence
+// when it has one, and invents a synthetic sentence when it does not. A
+// real sentence from the learner's own reading is better than anything a
+// model writes, because it carries the context that made the word worth
+// keeping — and before this, a bulk import could not supply one at all.
+func TestIngestWordsStoresTheExampleSentencesItCarried(t *testing.T) {
+	h := newHarness()
+
+	_, err := h.svc.IngestWords(context.Background(), testIdentity, []storage.WordInput{
+		{Expression: "紛らわしい", Reading: "まぎらわしい", Meaning: "似ていて区別しにくい",
+			Example: "この二つの記号は紛らわしいので気をつけてください。"},
+		{Expression: "曖昧", Reading: "あいまい", Meaning: "はっきりしない"},
+	})
+	if err != nil {
+		t.Fatalf("IngestWords: %v", err)
+	}
+
+	var stored recordedExample
+	var found int
+	for _, e := range h.repo.examples {
+		stored = e
+		found++
+	}
+	if found != 1 {
+		t.Fatalf("stored %d examples, want 1 — only one word carried a sentence", found)
+	}
+	if stored.Sentence != "この二つの記号は紛らわしいので気をつけてください。" {
+		t.Errorf("sentence = %q", stored.Sentence)
+	}
+	// A sentence the learner actually read is a different thing from one
+	// a model wrote to fill a gap, and the log has to say which.
+	if stored.Origin != storage.ExampleImported {
+		t.Errorf("origin = %q, want %q", stored.Origin, storage.ExampleImported)
+	}
+}
+
+// An import with no examples must not do the extra work, and every
+// import predating this field has none.
+func TestIngestWordsWithNoExamplesStoresNothingExtra(t *testing.T) {
+	h := newHarness()
+
+	if _, err := h.svc.IngestWords(context.Background(), testIdentity, []storage.WordInput{
+		{Expression: "曖昧", Reading: "あいまい", Meaning: "はっきりしない"},
+	}); err != nil {
+		t.Fatalf("IngestWords: %v", err)
+	}
+	if len(h.repo.examples) != 0 {
+		t.Errorf("stored %d examples for an import that carried none", len(h.repo.examples))
+	}
 }

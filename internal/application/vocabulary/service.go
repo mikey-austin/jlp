@@ -170,6 +170,56 @@ func (s *Service) Ingest(ctx context.Context, identity learner.IdentityID, ev In
 // Ingest's is: by the time Record would run, the batch is already
 // durably upserted, so a lost event would silently desync the event
 // log from data that's visibly on the /vocabulary page.
+// recordImportedExamples stores the example sentences an import carried.
+//
+// Separate from the upsert because an example is not a column on the
+// item: it lands as a vocabulary event, the same place a single lookup's
+// sentence does, so 練習 finds imported and looked-up sentences through
+// one query without knowing which is which.
+//
+// Ids are resolved AFTER the upsert, in one bounded query, because
+// BulkUpsertWords reports how many rows it wrote and not which — and a
+// per-word round trip to learn that would make a 500-word import 500
+// queries deeper.
+//
+// A word with no example costs nothing here: the whole step is skipped
+// when an import carries none, which is every import that predates this
+// field.
+func (s *Service) recordImportedExamples(ctx context.Context, identity learner.IdentityID, words []storage.WordInput, at time.Time) error {
+	examples := make(map[string]string, len(words))
+	expressions := make([]string, 0, len(words))
+	for _, w := range words {
+		example := strings.TrimSpace(w.Example)
+		if example == "" {
+			continue
+		}
+		// Last one wins within a batch, matching the upsert's own
+		// behaviour for a repeated expression.
+		if _, seen := examples[w.Expression]; !seen {
+			expressions = append(expressions, w.Expression)
+		}
+		examples[w.Expression] = example
+	}
+	if len(expressions) == 0 {
+		return nil
+	}
+
+	items, err := s.repo.GetByExpressions(ctx, identity, expressions)
+	if err != nil {
+		return fmt.Errorf("vocabulary: resolve imported words: %w", err)
+	}
+	for _, item := range items {
+		example, ok := examples[item.Expression]
+		if !ok {
+			continue
+		}
+		if err := s.repo.RecordExample(ctx, identity, item.ID, example, storage.ExampleImported, at); err != nil {
+			return fmt.Errorf("vocabulary: record imported example for %q: %w", item.Expression, err)
+		}
+	}
+	return nil
+}
+
 func (s *Service) IngestWords(ctx context.Context, identity learner.IdentityID, words []storage.WordInput) (int, error) {
 	if len(words) == 0 {
 		return 0, ErrEmptyWordBatch
@@ -198,9 +248,14 @@ func (s *Service) IngestWords(ctx context.Context, identity learner.IdentityID, 
 		trimmed[i] = w
 	}
 
-	count, err := s.repo.BulkUpsertWords(ctx, identity, trimmed, time.Now().UTC())
+	now := time.Now().UTC()
+	count, err := s.repo.BulkUpsertWords(ctx, identity, trimmed, now)
 	if err != nil {
 		return 0, fmt.Errorf("vocabulary: bulk upsert words: %w", err)
+	}
+
+	if err := s.recordImportedExamples(ctx, identity, trimmed, now); err != nil {
+		return 0, err
 	}
 
 	source := "external"

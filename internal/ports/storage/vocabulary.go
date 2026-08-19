@@ -70,7 +70,8 @@ type VocabularyRepository interface {
 	// one indexed query regardless of how large a learner's vocabulary
 	// grows.
 	ListActivationCandidates(ctx context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error)
-	// RecordExample stores a generated example sentence for itemID.
+	// RecordExample stores an example sentence for itemID, tagged with
+	// where it came from.
 	//
 	// Written as a vocabulary event, the same place a looked-up word's
 	// own sentence lands, so LatestExamples finds both without knowing
@@ -78,7 +79,7 @@ type VocabularyRepository interface {
 	// came from. A real sentence from the learner's reading still wins,
 	// because LatestExamples takes the most recent and a lookup happens
 	// after an import.
-	RecordExample(ctx context.Context, identity learner.IdentityID, itemID, sentence string, at time.Time) error
+	RecordExample(ctx context.Context, identity learner.IdentityID, itemID, sentence string, origin ExampleOrigin, at time.Time) error
 	// LatestExamples returns, per vocabulary id, the most recent
 	// non-empty example sentence recorded for it — keyed by id, absent
 	// when the word has none.
@@ -206,7 +207,26 @@ type WordInput struct {
 	JLPTLevel  int // 0..5, 0 = unknown
 	Tags       []string
 	Source     string
+	// Example is the sentence the word was met in, if the source had
+	// one. Stored as a vocabulary event rather than a column on the
+	// item, the same place a single lookup's sentence lands — see
+	// RecordExample.
+	Example string
 }
+
+// ExampleOrigin says where an example sentence came from. It is written
+// into the event so the log does not have to be guessed at later: a
+// sentence the learner actually read is a different thing from one a
+// model wrote to fill a gap, even though 練習 shows them the same way.
+type ExampleOrigin string
+
+const (
+	// ExampleImported: carried by the source the word came from — the
+	// sentence the learner met it in.
+	ExampleImported ExampleOrigin = "imported"
+	// ExampleGenerated: written by a model because the word had none.
+	ExampleGenerated ExampleOrigin = "generated"
+)
 
 // VocabularyCursor names one exact position in the /vocabulary list:
 // the (last_event, id) of the last row already shown.

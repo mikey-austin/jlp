@@ -40,6 +40,14 @@ type wordInputDTO struct {
 	JLPTLevel int      `json:"jlpt_level"`
 	Tags      []string `json:"tags"`
 	Source    string   `json:"source"`
+	// Example is the sentence this word was met in — the reason the
+	// learner saved it. Optional, and the single most useful optional
+	// field here: 練習 drills a word in its own sentence when it has
+	// one, and generates a synthetic sentence when it does not. A real
+	// one from the learner's own reading is better than anything a model
+	// invents, because it carries the context that made the word worth
+	// keeping.
+	Example string `json:"example"`
 }
 
 // ingestWordsRequestDTO is POST /api/v1/words' body — Nihongo Daily's
@@ -59,6 +67,7 @@ func toWordInput(dto wordInputDTO) storage.WordInput {
 		JLPTLevel:  dto.JLPTLevel,
 		Tags:       dto.Tags,
 		Source:     dto.Source,
+		Example:    dto.Example,
 	}
 }
 

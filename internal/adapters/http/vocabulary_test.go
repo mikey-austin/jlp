@@ -529,6 +529,6 @@ func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []st
 }
 
 // RecordExample stores a generated example sentence.
-func (r *fakeVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, time.Time) error {
+func (r *fakeVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, storage.ExampleOrigin, time.Time) error {
 	panic("not used by these tests")
 }
