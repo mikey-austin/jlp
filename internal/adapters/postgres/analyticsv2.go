@@ -190,3 +190,36 @@ func (r *AnalyticsRepository) PracticeStats(ctx context.Context, identity learne
 		Concepts: int(row.Concepts),
 	}, nil
 }
+
+// RecentDrillAttempts implements
+// storage.AnalyticsRepository.RecentDrillAttempts.
+func (r *AnalyticsRepository) RecentDrillAttempts(ctx context.Context, identity learner.IdentityID, limit int) ([]storage.DrillAttempt, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.q.RecentDrillAttempts(ctx, sqlcgen.RecentDrillAttemptsParams{
+		IdentityID: string(identity),
+		LimitCount: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]storage.DrillAttempt, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, storage.DrillAttempt{
+			// jsonb ->> is typed interface{} by sqlc; anything that is
+			// not a string is a payload we did not write.
+			SubjectType: jsonbString(row.SubjectType),
+			SubjectRef:  jsonbString(row.SubjectRef),
+			Type:        jsonbString(row.ExerciseType),
+			Correct:     row.Correct,
+		})
+	}
+	return out, nil
+}
+
+// jsonbString reads a jsonb ->> projection as a string.
+func jsonbString(v any) string {
+	s, _ := v.(string)
+	return s
+}

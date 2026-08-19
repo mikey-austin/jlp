@@ -315,3 +315,9 @@ func (f *fakeAnalyticsRepo) PracticeStats(context.Context, learner.IdentityID) (
 func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []string) (map[string]string, error) {
 	panic("not used by these tests")
 }
+
+// RecentDrillAttempts backs 練習's end-of-set summary; no test here
+// asserts on it.
+func (f *fakeAnalyticsRepo) RecentDrillAttempts(context.Context, learner.IdentityID, int) ([]storage.DrillAttempt, error) {
+	return nil, nil
+}

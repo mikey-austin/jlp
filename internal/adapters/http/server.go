@@ -335,6 +335,7 @@ func (s *Server) routes() http.Handler {
 		// through the unchanged /sessions/{id}/conversation route just
 		// above — see speech.go's package doc comment for why.
 		r.Post("/speech/transcribe", s.speechTranscribe)
+		r.Post("/speech/say", s.speechSay)
 		r.Post("/corrections/{id}/status", s.correctionStatus)
 		// retry/reveal/confidence: Phase 2 Task 8's active recall +
 		// confidence tracking (PRD §9/§53) — see feedback.go's handler

@@ -69,6 +69,12 @@ type Exercise struct {
 	// except TypeFreeProduction, which has no single correct answer and
 	// is scored by internal/agent/drill.Agent.Evaluate instead.
 	Answer string
+	// Example is the sentence the learner met this word in, for a word
+	// drill — kept whole here even when the prompt shows it blanked, so
+	// the intact sentence can be shown once the answer is in.
+	//
+	// Empty for concept drills and for words with no recorded example.
+	Example string
 	// Acceptable holds extra correct answers besides Answer (e.g.
 	// orthographic variants) — application/practice.Service.Answer's
 	// deterministic check accepts a rune-equal match against ANY of

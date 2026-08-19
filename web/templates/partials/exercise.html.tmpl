@@ -1,3 +1,11 @@
+{{/* speak renders a "say this aloud" button for the text passed in.
+     data-speak is read by app.js, which POSTs it to /speech/say. Marked
+     aria-hidden-free and given a real label because it is a control, not
+     decoration; when TTS is not configured the button reports
+     unavailable on click rather than being absent, so the learner learns
+     the capability exists and is off. */}}
+{{define "speak"}}<button type="button" class="speak" data-speak="{{.}}" aria-label="読み上げる" title="読み上げる">🔊</button>{{end}}
+
 {{/* run_header is the progress bar and streak shared by the question
      and its result, so one run reads as one run rather than a series of
      unrelated cards. */}}
@@ -32,12 +40,20 @@
        never reveal the answer or grade themselves — and this has neither
        failure mode, plus keyboard and screen-reader behaviour for free. */}}
   <div class="flip-card">
-    <p class="flip-card__front" lang="ja">{{.Prompt}}</p>
+    <p class="flip-card__front" lang="ja">{{.Prompt}}{{template "speak" .Prompt}}</p>
     <details class="flip-card__reveal">
       <summary class="btn btn--ghost">めくる</summary>
       <div class="flip-card__back">
-      {{if .Reading}}<p class="flip-card__reading" lang="ja">{{.Reading}}</p>{{end}}
+      {{if .Reading}}<p class="flip-card__reading" lang="ja">{{.Reading}}{{template "speak" .Reading}}</p>{{end}}
       {{if .Meaning}}<p class="flip-card__meaning">{{.Meaning}}</p>{{end}}
+      {{/* The sentence the learner met this word in, with the word
+           itself emphasised — the context is what makes a word stick,
+           and it is exactly what a bare flip card throws away. Split
+           server-side into before/word/after so all three escape
+           normally; see sentenceHighlight. */}}
+      {{with .ExampleParts}}
+      <p class="flip-card__example" lang="ja">{{.Before}}<strong>{{.Word}}</strong>{{.After}}{{template "speak" .Whole}}</p>
+      {{end}}
       {{/* Self-graded, because only the learner knows whether they
            recalled it BEFORE turning the card over. Both buttons post
            the same route as a typed answer; the token is what differs. */}}
@@ -63,9 +79,9 @@
   {{/* The passage is something to READ, not the question — the question
        is the instruction above. Rendered as its own block so it does not
        look like a very long prompt. */}}
-  <div class="passage" lang="ja">{{.Prompt}}</div>
+  <div class="passage" lang="ja">{{.Prompt}}{{template "speak" .Prompt}}</div>
   {{else}}
-  <p class="prompt">{{.Prompt}}</p>
+  <p class="prompt" lang="ja">{{.Prompt}}{{template "speak" .Prompt}}</p>
   {{end}}
   <form class="exercise-form" hx-post="/practice/{{.ID}}/answer" hx-target="#exercise-area" hx-swap="innerHTML">
     {{/* The run travels with the exchange rather than living on the
@@ -120,11 +136,50 @@
   </div>
   {{end}}
 
-  <p class="feedback ja">{{.FeedbackJA}}</p>
+  {{/* The sentence restored, with the word emphasised. Shown only now:
+       while a cloze is open, this IS the answer. */}}
+  {{with .ExampleParts}}
+  <p class="answer-example" lang="ja">{{.Before}}<strong>{{.Word}}</strong>{{.After}}{{template "speak" .Whole}}</p>
+  {{end}}
+
+  <p class="feedback ja">{{.FeedbackJA}}{{template "speak" .FeedbackJA}}</p>
   <p class="feedback en">{{.FeedbackEN}}</p>
 
   {{if .Done}}
-  <p class="run-done">{{.Total}}問おつかれさまでした。</p>
+  {{/* The end of a set. Built from the same quiz.answered events the
+       review queue and the learner model read, so it cannot disagree
+       with the 学習 page it points at. */}}
+  <div class="run-summary">
+    <h2 class="run-summary__title">{{.Total}}問おつかれさまでした</h2>
+    {{with .Summary}}
+    <div class="stat-grid">
+      <div class="stat"><span class="stat__value">{{.Answered}}</span><span class="stat__label">解答</span></div>
+      <div class="stat"><span class="stat__value">{{.Correct}}</span><span class="stat__label">正解</span></div>
+      <div class="stat"><span class="stat__value">{{.Accuracy}}%</span><span class="stat__label">正答率</span></div>
+    </div>
+    {{if .Words}}
+    <h3 class="run-summary__heading">語彙</h3>
+    <ul class="run-summary__list">
+      {{range .Words}}<li class="run-summary__item{{if .Missed}} is-missed{{end}}">
+        <span lang="ja">{{.Label}}</span>{{template "speak" .Label}}
+        {{if .Missed}}<span class="run-summary__flag">もう一度</span>{{end}}
+      </li>{{end}}
+    </ul>
+    {{end}}
+    {{if .Concepts}}
+    <h3 class="run-summary__heading">文法</h3>
+    <ul class="run-summary__list">
+      {{range .Concepts}}<li class="run-summary__item{{if .Missed}} is-missed{{end}}">
+        <span>{{.Label}}</span>
+        {{if .Missed}}<span class="run-summary__flag">もう一度</span>{{end}}
+      </li>{{end}}
+    </ul>
+    {{end}}
+    <p class="run-summary__next">
+      間違えたものは<a href="/learner">学習</a>の復習キューに入っています。
+    </p>
+    {{end}}
+  </div>
   <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML"
           hx-vals="js:{provider_override: document.getElementById('provider-override').value, position: 1, run_correct: 0}"
           data-progress-into="#exercise-area"

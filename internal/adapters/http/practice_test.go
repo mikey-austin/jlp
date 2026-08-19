@@ -376,3 +376,69 @@ func TestPracticePageOffersAdapterChoiceAndProgress(t *testing.T) {
 		t.Error("the adapter select is inside #exercise-area, so the first swap will delete it")
 	}
 }
+
+// The sentence is split server-side into before/word/after so the
+// template escapes all three normally. Building "<strong>" in the
+// handler would mean handing the template pre-trusted HTML made from a
+// learner's own sentence — which is how an escaping bug becomes an
+// injection.
+func TestHighlightSplitsAroundTheWord(t *testing.T) {
+	got := highlight("この二つの記号は紛らわしいので注意", "紛らわしい")
+	if got == nil {
+		t.Fatal("no highlight for a sentence that contains the word")
+	}
+	if got.Before != "この二つの記号は" || got.Word != "紛らわしい" || got.After != "ので注意" {
+		t.Errorf("split = %q | %q | %q", got.Before, got.Word, got.After)
+	}
+	// Whole is what a speak button reads: the emphasis is visual and has
+	// no business in the audio.
+	if got.Whole != "この二つの記号は紛らわしいので注意" {
+		t.Errorf("Whole = %q, want the unsplit sentence", got.Whole)
+	}
+}
+
+// A highlight that highlights nothing is just a sentence, and the
+// template renders it only when there is something to emphasise.
+func TestHighlightIsAbsentWhenThereIsNothingToMark(t *testing.T) {
+	for _, tc := range []struct{ name, sentence, word string }{
+		{"no sentence", "", "紛らわしい"},
+		{"no word", "文があります", ""},
+		{"word not present", "この文には入っていません", "紛らわしい"},
+	} {
+		if got := highlight(tc.sentence, tc.word); got != nil {
+			t.Errorf("%s: got %+v, want nil", tc.name, got)
+		}
+	}
+}
+
+// A learner's sentence is data, never markup — pinned through the
+// RENDERED partial, because that is where it would actually go wrong.
+// The whole reason for splitting the sentence server-side is that the
+// alternative, building HTML in the handler, works silently until
+// someone's vocabulary contains a "<".
+func TestAnExampleSentenceIsEscapedNotInjected(t *testing.T) {
+	view := exerciseView{
+		ID: "ex-1", Type: exercise.TypeWordRecall, IsWord: true,
+		Prompt: "危ない", Reading: "あぶない",
+		Position: 1, Total: runLength, Percent: 10,
+		ExampleParts: highlight("<script>alert(1)</script>は危ないです", "危ない"),
+	}
+	if view.ExampleParts == nil {
+		t.Fatal("no highlight; the fixture does not exercise the path")
+	}
+
+	w := httptest.NewRecorder()
+	RenderPartial(w, httptest.NewRequest(http.MethodGet, "/practice", nil), "exercise", view)
+	body := w.Body.String()
+
+	if strings.Contains(body, "<script>alert(1)</script>") {
+		t.Errorf("a learner's sentence was rendered as live markup:\n%s", body)
+	}
+	if !strings.Contains(body, "&lt;script&gt;") {
+		t.Errorf("the sentence was not escaped into the output at all:\n%s", body)
+	}
+	// And the emphasis itself IS markup, deliberately.
+	if !strings.Contains(body, "<strong>危ない</strong>") {
+		t.Errorf("the target word was not emphasised:\n%s", body)
+	}
+}

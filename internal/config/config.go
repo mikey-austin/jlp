@@ -483,11 +483,15 @@ type Signal struct {
 // dormant-shell treatment WhatsApp got in Task 5: a working local
 // engine turned out to be available, so building a non-functional
 // stub instead would have been the dishonest choice). Task 8's own
-// HTTP route only ever calls STTURL's recognizer — TTSURL exists,
-// tested, and wireable, but nothing in this task's UI calls Speak yet.
+// Both halves are now wired: STTURL backs POST /speech/transcribe and
+// TTSURL backs POST /speech/say, each absent unless its URL is set.
 type Speech struct {
 	STTURL string
 	TTSURL string
+	// TTSSpeaker is the VOICEVOX style id to synthesize with. Defaults
+	// to 1; which voice that is depends on the engine's installed
+	// characters, so it is configurable rather than hardcoded.
+	TTSSpeaker int
 }
 
 // Channels configures the transport-agnostic channel port (Phase 4 Task
@@ -620,6 +624,7 @@ func Load() (Config, error) {
 	v.SetDefault("ai.gemini.timeout", 2*time.Minute)
 	v.SetDefault("ai.claudecli.bin", "claude")
 	v.SetDefault("ai.codexcli.bin", "codex")
+	v.SetDefault("speech.ttsspeaker", 1)
 	v.SetDefault("ai.agycli.bin", "agy")
 	v.SetDefault("ai.agycli.timeout", 3*time.Minute)
 	v.SetDefault("database.url", "")

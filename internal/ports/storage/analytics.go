@@ -119,6 +119,16 @@ type PracticeStats struct {
 	Concepts int
 }
 
+// DrillAttempt is one answered drill, as 練習's end-of-set summary reads
+// them back. SubjectRef is a concept slug or a vocabulary id depending
+// on SubjectType; the caller resolves ids to words for display.
+type DrillAttempt struct {
+	SubjectType string
+	SubjectRef  string
+	Type        string
+	Correct     bool
+}
+
 // AnalyticsRepository computes a learner's aggregate Statistics from
 // their documents, sessions, feedback requests, and corrections, plus
 // the richer Task 7 views: vocabulary funnel, weakness trends,
@@ -134,4 +144,7 @@ type AnalyticsRepository interface {
 	AgentUsage(ctx context.Context, identity learner.IdentityID) ([]AgentUsage, error)
 	SystemStats(ctx context.Context, identity learner.IdentityID) (SystemStats, error)
 	PracticeStats(ctx context.Context, identity learner.IdentityID) (PracticeStats, error)
+	// RecentDrillAttempts returns the last limit drills identity
+	// answered, newest first.
+	RecentDrillAttempts(ctx context.Context, identity learner.IdentityID, limit int) ([]DrillAttempt, error)
 }

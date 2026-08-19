@@ -439,3 +439,9 @@ func TestStaticServesDesignSystemAssets(t *testing.T) {
 func (f fakeAnalyticsRepo) PracticeStats(context.Context, learner.IdentityID) (storage.PracticeStats, error) {
 	return storage.PracticeStats{}, nil
 }
+
+// RecentDrillAttempts backs 練習's end-of-set summary; no test here
+// asserts on it.
+func (f fakeAnalyticsRepo) RecentDrillAttempts(context.Context, learner.IdentityID, int) ([]storage.DrillAttempt, error) {
+	return nil, nil
+}

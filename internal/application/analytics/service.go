@@ -107,3 +107,8 @@ func (s *Service) SystemStats(ctx context.Context, identity learner.IdentityID) 
 func (s *Service) PracticeStats(ctx context.Context, identity learner.IdentityID) (storage.PracticeStats, error) {
 	return s.repo.PracticeStats(ctx, identity)
 }
+
+// RecentDrillAttempts backs 練習's end-of-set summary.
+func (s *Service) RecentDrillAttempts(ctx context.Context, identity learner.IdentityID, limit int) ([]storage.DrillAttempt, error) {
+	return s.repo.RecentDrillAttempts(ctx, identity, limit)
+}

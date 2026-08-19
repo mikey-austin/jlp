@@ -299,10 +299,9 @@ services:
     # gave TTS a genuine, tested adapter rather than the dormant-shell
     # treatment WhatsApp got in Task 5 (a working local engine turned
     # out to be available). CPU image — no GPU assumed. Same
-    # in-network-only, `--profile speech` posture as whisper above;
-    # nothing in this task's HTTP surface calls it yet (see
-    # cmd/jlp/main.go's own comment on why main.go doesn't construct a
-    # Synthesizer from APP_SPEECH_TTSURL until a consumer exists).
+    # in-network-only, `--profile speech` posture as whisper above.
+    # Now consumed: POST /speech/say backs the 読み上げる buttons on
+    # 練習's words, example sentences and explanations.
     image: voicevox/voicevox_engine:cpu-ubuntu20.04-latest
     profiles: ["speech"]
 

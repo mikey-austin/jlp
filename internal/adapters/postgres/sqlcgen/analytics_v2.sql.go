@@ -192,6 +192,68 @@ func (q *Queries) PracticeStats(ctx context.Context, identityID string) (Practic
 	return i, err
 }
 
+const recentDrillAttempts = `-- name: RecentDrillAttempts :many
+SELECT
+    subject,
+    COALESCE(evidence->>'subject_type', 'concept') AS subject_type,
+    COALESCE(evidence->>'subject_ref', evidence->>'concept', '') AS subject_ref,
+    COALESCE(evidence->>'type', '') AS exercise_type,
+    (evidence->>'correct' = 'true') AS correct,
+    occurred_at
+FROM learning_events
+WHERE identity_id = $1 AND type = 'quiz.answered'
+ORDER BY occurred_at DESC
+LIMIT $2
+`
+
+type RecentDrillAttemptsParams struct {
+	IdentityID string
+	LimitCount int32
+}
+
+type RecentDrillAttemptsRow struct {
+	Subject      string
+	SubjectType  interface{}
+	SubjectRef   interface{}
+	ExerciseType interface{}
+	Correct      bool
+	OccurredAt   pgtype.Timestamptz
+}
+
+// The last N drills a learner answered, newest first — what 練習's
+// end-of-set summary is built from.
+//
+// learning_events, not exercise_attempts: the event is what the rest of
+// the loop consumes (the scheduler and the learner model both read
+// quiz.answered), so a summary derived from the same rows cannot
+// disagree with the review queue it sends the learner back to.
+func (q *Queries) RecentDrillAttempts(ctx context.Context, arg RecentDrillAttemptsParams) ([]RecentDrillAttemptsRow, error) {
+	rows, err := q.db.Query(ctx, recentDrillAttempts, arg.IdentityID, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []RecentDrillAttemptsRow
+	for rows.Next() {
+		var i RecentDrillAttemptsRow
+		if err := rows.Scan(
+			&i.Subject,
+			&i.SubjectType,
+			&i.SubjectRef,
+			&i.ExerciseType,
+			&i.Correct,
+			&i.OccurredAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const subjectOccurrencesByWeek = `-- name: SubjectOccurrencesByWeek :many
 SELECT date_trunc('week', occurred_at AT TIME ZONE 'UTC')::date AS week_start,
        COUNT(*)::int AS count

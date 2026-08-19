@@ -646,6 +646,92 @@ main p.description {
   margin: 0;
 }
 
+/* ---- speak buttons ---- */
+.speak {
+  margin-inline-start: var(--space-2);
+  padding: 0 var(--space-1);
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font-size: 0.85em;
+  line-height: 1;
+  opacity: 0.55;
+  transition: opacity 120ms ease-out;
+}
+.speak:hover,
+.speak:focus-visible {
+  opacity: 1;
+}
+.speak[data-speaking="loading"] {
+  opacity: 0.3;
+}
+.speak[data-speaking="playing"] {
+  opacity: 1;
+}
+/* Not configured is a state worth showing rather than hiding: the
+   learner learns the capability exists and is off. */
+.speak[data-speaking="unavailable"],
+.speak[data-speaking="error"] {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+/* ---- example sentence under a word ---- */
+.flip-card__example,
+.answer-example {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-3) var(--space-4);
+  border-left: 3px solid var(--border);
+  border-radius: 0 8px 8px 0;
+  color: var(--fg-muted);
+  line-height: 1.9;
+}
+.flip-card__example strong,
+.answer-example strong {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+/* ---- end-of-set summary ---- */
+.run-summary__title {
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-xl);
+}
+.run-summary__heading {
+  margin: var(--space-4) 0 var(--space-2);
+  font-size: var(--text-sm);
+  color: var(--fg-muted);
+}
+.run-summary__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.run-summary__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: var(--text-sm);
+}
+.run-summary__item.is-missed {
+  border-color: var(--danger);
+}
+.run-summary__flag {
+  color: var(--danger);
+  font-size: var(--text-xs, 0.75rem);
+}
+.run-summary__next {
+  margin: var(--space-4) 0 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
 /* ---- reading passage ---- */
 .passage {
   margin: var(--space-3) 0 var(--space-4);

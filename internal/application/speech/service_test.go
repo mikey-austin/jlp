@@ -97,7 +97,7 @@ const testSessionID session.ID = "sess-1"
 func TestTranscribeReturnsErrNotConfiguredWhenRecognizerNil(t *testing.T) {
 	store := &fakeEventStore{}
 	rec := learning.NewRecorder(store, fakeBus{})
-	svc := appspeech.NewService(nil, newFakeSessionRepo(), rec)
+	svc := appspeech.NewService(nil, nil, newFakeSessionRepo(), rec)
 
 	_, err := svc.Transcribe(context.Background(), testIdentity, "", []byte("audio"), "audio/wav")
 	if !errors.Is(err, appspeech.ErrNotConfigured) {
@@ -116,7 +116,7 @@ func TestTranscribeSessionLessWhenSIDEmpty(t *testing.T) {
 	store := &fakeEventStore{}
 	rec := learning.NewRecorder(store, fakeBus{})
 	fr := &fakeRecognizer{transcript: ai.Transcript{Text: "こんにちは", DurationMS: 1500}}
-	svc := appspeech.NewService(fr, newFakeSessionRepo(), rec)
+	svc := appspeech.NewService(fr, nil, newFakeSessionRepo(), rec)
 
 	tr, err := svc.Transcribe(context.Background(), testIdentity, "", []byte("x"), "audio/webm")
 	if err != nil {
@@ -155,7 +155,7 @@ func TestTranscribeSetsSessionIDAndJoinableEventID(t *testing.T) {
 	fr := &fakeRecognizer{transcript: ai.Transcript{Text: "こんにちは", DurationMS: 1500}}
 	sessions := newFakeSessionRepo()
 	sessions.seed(testIdentity, testSessionID)
-	svc := appspeech.NewService(fr, sessions, rec)
+	svc := appspeech.NewService(fr, nil, sessions, rec)
 
 	audio := []byte("raw webm bytes")
 	tr, err := svc.Transcribe(context.Background(), testIdentity, testSessionID, audio, "audio/webm")
@@ -209,7 +209,7 @@ func TestTranscribeRejectsSessionNotOwnedByIdentity(t *testing.T) {
 	fr := &fakeRecognizer{transcript: ai.Transcript{Text: "x", DurationMS: 100}}
 	sessions := newFakeSessionRepo()
 	sessions.seed("someone-else", testSessionID)
-	svc := appspeech.NewService(fr, sessions, rec)
+	svc := appspeech.NewService(fr, nil, sessions, rec)
 
 	_, err := svc.Transcribe(context.Background(), testIdentity, testSessionID, []byte("x"), "audio/wav")
 	if !errors.Is(err, storage.ErrNotFound) {
@@ -231,7 +231,7 @@ func TestTranscribeWrapsRecognizerErrorAndRecordsNothing(t *testing.T) {
 	store := &fakeEventStore{}
 	rec := learning.NewRecorder(store, fakeBus{})
 	fr := &fakeRecognizer{err: errors.New("whisper: inference: status 500")}
-	svc := appspeech.NewService(fr, newFakeSessionRepo(), rec)
+	svc := appspeech.NewService(fr, nil, newFakeSessionRepo(), rec)
 
 	_, err := svc.Transcribe(context.Background(), testIdentity, "", []byte("x"), "audio/wav")
 	if err == nil {

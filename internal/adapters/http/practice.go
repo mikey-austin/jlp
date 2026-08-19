@@ -1,9 +1,11 @@
 package httpx
 
 import (
+	"context"
 	"errors"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -12,6 +14,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/application/practice"
 	"github.com/mikeyaustin/jlp/internal/domain/diff"
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
+	"github.com/mikeyaustin/jlp/internal/domain/learner"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
@@ -44,6 +47,12 @@ type exerciseView struct {
 	// Answer stays server-side, and never for anything under the
 	// socratic gate.
 	LiveCheck string
+	// ExampleParts is the example sentence split around the target word,
+	// so the template can bold the word without the handler building
+	// HTML — three fields, not a marked-up string, because a template
+	// that receives HTML has to be trusted not to escape it and the
+	// sentence is learner data.
+	ExampleParts *sentenceHighlight
 	// Reading/Meaning are the back of the flip card, and are sent ONLY
 	// for a word drill. They are the learner's own stored vocabulary, so
 	// putting them in the DOM reveals nothing they did not write — unlike
@@ -105,6 +114,11 @@ func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
 	if ex.Type == exercise.TypeWordCloze {
 		v.LiveCheck = ex.Answer
 	}
+	// Only on the card: a cloze's whole question is the sentence with a
+	// hole in it, and showing the intact one beside it would answer it.
+	if v.IsWord {
+		v.ExampleParts = highlight(ex.Example, ex.Prompt)
+	}
 	return v
 }
 
@@ -127,10 +141,17 @@ type exerciseResultView struct {
 	// Answer is the canonical answer, shown alongside the diff. Only ever
 	// set once the attempt is over, never while the question is open.
 	Answer string
+	// ExampleParts is the intact example sentence with the target word
+	// emphasised — shown only now, once the attempt is over. For a cloze
+	// this is the sentence the question was made from, with the hole
+	// filled back in, which is the moment it teaches most.
+	ExampleParts *sentenceHighlight
 	// Position/Total/Streak/Percent carry the run forward — see
 	// exerciseView. Done marks the end of a run.
 	Position, Total, Streak, Percent int
 	Done                             bool
+	// Summary is set only on the last question of a set.
+	Summary *runSummaryView
 	// NextPosition is where 次の問題へ resumes. Computed here because
 	// html/template cannot add.
 	NextPosition int
@@ -149,6 +170,12 @@ func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, respon
 		Done:         position >= runLength,
 		NextPosition: position + 1,
 	}
+	// The word's own sentence, restored. Not shown while the question is
+	// open — for a cloze it IS the answer.
+	if ex.SubjectType == exercise.SubjectWord {
+		v.ExampleParts = highlight(ex.Example, ex.Answer)
+	}
+
 	// A diff only means something when there is one canonical answer the
 	// learner tried to type. Free production has none, and a flip card
 	// was never typed at all.
@@ -333,5 +360,149 @@ func (s *Server) practiceAnswer(w http.ResponseWriter, r *http.Request) {
 	} else {
 		streak = 0
 	}
-	RenderPartial(w, r, "exercise_result", toExerciseResultView(eval, ex, r.FormValue("response"), position, streak))
+
+	view := toExerciseResultView(eval, ex, r.FormValue("response"), position, streak)
+	if view.Done {
+		view.Summary = s.runSummary(r.Context(), ident.ID)
+	}
+	RenderPartial(w, r, "exercise_result", view)
+}
+
+// sentenceHighlight is one sentence split around a word: the text
+// before, the word itself, and the text after.
+//
+// Split rather than marked up, so the template escapes all three
+// normally. Building "<strong>" here would mean handing the template
+// pre-trusted HTML made from a learner's own sentence, which is how an
+// escaping bug becomes an injection.
+type sentenceHighlight struct {
+	Before, Word, After string
+	// Whole is the sentence unsplit — what a speak button reads, since
+	// the emphasis is visual and has no business in the audio.
+	Whole string
+}
+
+// highlight splits sentence around the first occurrence of word.
+//
+// nil when there is no sentence, no word, or the word does not appear:
+// a "highlight" that highlights nothing is just a sentence, and the
+// template renders it only when there is something to emphasise.
+func highlight(sentence, word string) *sentenceHighlight {
+	sentence = strings.TrimSpace(sentence)
+	if sentence == "" || word == "" {
+		return nil
+	}
+	i := strings.Index(sentence, word)
+	if i < 0 {
+		return nil
+	}
+	return &sentenceHighlight{
+		Before: sentence[:i],
+		Word:   word,
+		After:  sentence[i+len(word):],
+		Whole:  sentence,
+	}
+}
+
+// runSummaryView is what the end of a set shows: how it went, and what
+// was actually covered.
+type runSummaryView struct {
+	Answered, Correct, Accuracy int
+	// Words/Concepts are the SUBJECTS covered, deduplicated and
+	// labelled — the same word drilled twice is one thing learned, not
+	// two, and a learner reading a summary wants to know what they
+	// worked on, not how many rows were written.
+	Words    []runSubjectView
+	Concepts []runSubjectView
+}
+
+// runSubjectView is one subject covered, with how it went. Missed is
+// true when the learner got it wrong at any point in the set — that is
+// the one thing worth carrying forward, and averaging it away would
+// hide it.
+type runSubjectView struct {
+	Label  string
+	Missed bool
+}
+
+// runSummary reads the set back out of the events it recorded.
+//
+// From learning_events rather than from anything carried through the
+// exchange: the client would have to round-trip a growing list, and the
+// events are already the authority every other consumer reads. A
+// summary that disagreed with 学習 would be worse than none.
+//
+// Returns nil on failure. The set is over either way, and losing the
+// summary is a smaller harm than replacing the learner's last screen
+// with an error about a report.
+func (s *Server) runSummary(ctx context.Context, identity learner.IdentityID) *runSummaryView {
+	if s.opts.Analytics == nil {
+		return nil
+	}
+	attempts, err := s.opts.Analytics.RecentDrillAttempts(ctx, identity, runLength)
+	if err != nil || len(attempts) == 0 {
+		if err != nil {
+			slog.Warn("practice: could not build run summary", "identity", identity, "err", err)
+		}
+		return nil
+	}
+
+	view := &runSummaryView{Answered: len(attempts)}
+	// Deduplicated by subject, keeping "was it ever missed": one word
+	// answered right then wrong is a word to revisit.
+	type agg struct {
+		order  int
+		missed bool
+		word   bool
+	}
+	seen := map[string]*agg{}
+	var order []string
+	for _, a := range attempts {
+		if a.Correct {
+			view.Correct++
+		}
+		if a.SubjectRef == "" {
+			continue
+		}
+		key := a.SubjectType + "\x00" + a.SubjectRef
+		e, ok := seen[key]
+		if !ok {
+			e = &agg{order: len(order), word: a.SubjectType == exercise.SubjectWord}
+			seen[key] = e
+			order = append(order, a.SubjectRef)
+		}
+		if !a.Correct {
+			e.missed = true
+		}
+	}
+	view.Accuracy = view.Correct * 100 / view.Answered
+
+	// Word ids mean nothing to a learner; resolved in one query, as
+	// everywhere else that shows a vocabulary subject.
+	var ids []string
+	for key, e := range seen {
+		if e.word {
+			ids = append(ids, key[len(exercise.SubjectWord)+1:])
+		}
+	}
+	var vocab vocabularyByIDs
+	if s.opts.Vocabulary != nil {
+		vocab = s.opts.Vocabulary
+	}
+	labels := resolveWordLabels(ctx, vocab, identity, ids)
+
+	for key, e := range seen {
+		ref := key[strings.Index(key, "\x00")+1:]
+		row := runSubjectView{Label: labelFor(labels, ref), Missed: e.missed}
+		if e.word {
+			view.Words = append(view.Words, row)
+		} else {
+			view.Concepts = append(view.Concepts, row)
+		}
+	}
+	// Stable output: a map has no order, and a summary that reshuffles
+	// itself on every render reads as a different summary.
+	sort.Slice(view.Words, func(i, j int) bool { return view.Words[i].Label < view.Words[j].Label })
+	sort.Slice(view.Concepts, func(i, j int) bool { return view.Concepts[i].Label < view.Concepts[j].Label })
+	return view
 }

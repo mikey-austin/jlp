@@ -73,7 +73,7 @@ func postSpeechTranscribe(h http.Handler, body *bytes.Buffer, contentType string
 func TestSpeechTranscribeDormantReturns503(t *testing.T) {
 	opts := testOptions()
 	events := newFakeEventRepo()
-	opts.Speech = appspeech.NewService(nil, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
+	opts.Speech = appspeech.NewService(nil, nil, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
 	h := NewServer(opts).HandlerForTest()
 
 	body, ct := buildMultipartAudio(t, 100, "")
@@ -119,7 +119,7 @@ func TestSpeechTranscribeSuccessReturnsTextAndDuration(t *testing.T) {
 	opts := testOptions()
 	events := newFakeEventRepo()
 	fr := &fakeRecognizer{transcript: ai.Transcript{Text: "こんにちは", DurationMS: 1200}}
-	opts.Speech = appspeech.NewService(fr, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
+	opts.Speech = appspeech.NewService(fr, nil, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
 	h := NewServer(opts).HandlerForTest()
 
 	body, ct := buildMultipartAudio(t, 100, "")
@@ -165,7 +165,7 @@ func TestSpeechTranscribeWithSessionIDSetsEventSessionID(t *testing.T) {
 		t.Fatal(err)
 	}
 	fr := &fakeRecognizer{transcript: ai.Transcript{Text: "こんにちは", DurationMS: 1200}}
-	opts.Speech = appspeech.NewService(fr, sessions, learning.NewRecorder(events, inprocbus.New()))
+	opts.Speech = appspeech.NewService(fr, nil, sessions, learning.NewRecorder(events, inprocbus.New()))
 	h := NewServer(opts).HandlerForTest()
 
 	body, ct := buildMultipartAudio(t, 100, string(sid))
@@ -188,7 +188,7 @@ func TestSpeechTranscribeUnknownSessionIDReturns404(t *testing.T) {
 	opts := testOptions()
 	events := newFakeEventRepo()
 	fr := &fakeRecognizer{transcript: ai.Transcript{Text: "should not be reached"}}
-	opts.Speech = appspeech.NewService(fr, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
+	opts.Speech = appspeech.NewService(fr, nil, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
 	h := NewServer(opts).HandlerForTest()
 
 	body, ct := buildMultipartAudio(t, 100, "nonexistent-session")
@@ -208,7 +208,7 @@ func TestSpeechTranscribeUnknownSessionIDReturns404(t *testing.T) {
 func TestSpeechTranscribeOversizedBodyReturns413(t *testing.T) {
 	opts := testOptions()
 	events := newFakeEventRepo()
-	opts.Speech = appspeech.NewService(&fakeRecognizer{}, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
+	opts.Speech = appspeech.NewService(&fakeRecognizer{}, nil, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
 	h := NewServer(opts).HandlerForTest()
 
 	body, ct := buildMultipartAudio(t, 11<<20, "") // 11 MiB > the 10 MiB cap
@@ -225,7 +225,7 @@ func TestSpeechTranscribeOversizedBodyReturns413(t *testing.T) {
 func TestSpeechTranscribeMissingFileReturns400(t *testing.T) {
 	opts := testOptions()
 	events := newFakeEventRepo()
-	opts.Speech = appspeech.NewService(&fakeRecognizer{}, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
+	opts.Speech = appspeech.NewService(&fakeRecognizer{}, nil, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
 	h := NewServer(opts).HandlerForTest()
 
 	buf := &bytes.Buffer{}
@@ -250,7 +250,7 @@ func TestSpeechTranscribeRecognizerErrorReturns502(t *testing.T) {
 	opts := testOptions()
 	events := newFakeEventRepo()
 	fr := &fakeRecognizer{err: context.DeadlineExceeded}
-	opts.Speech = appspeech.NewService(fr, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
+	opts.Speech = appspeech.NewService(fr, nil, newFakeSessionRepo(), learning.NewRecorder(events, inprocbus.New()))
 	h := NewServer(opts).HandlerForTest()
 
 	body, ct := buildMultipartAudio(t, 100, "")

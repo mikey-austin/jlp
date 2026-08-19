@@ -39,6 +39,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -58,6 +59,12 @@ import (
 // this, specifically, to a 503 with a clear message, never a panic or
 // a silent no-op (the task brief's explicit requirement).
 var ErrNotConfigured = errors.New("speech: recognition is not configured")
+
+// ErrEmptyText / ErrTextTooLong are Say's input guards — see sayMaxRunes.
+var (
+	ErrEmptyText   = errors.New("speech: nothing to say")
+	ErrTextTooLong = errors.New("speech: text is too long to synthesize")
+)
 
 // Transcript is what Transcribe returns — a package-local copy of
 // ports/ai.Transcript's two fields plus EventID (this package's own
@@ -85,16 +92,47 @@ type Transcript struct {
 // SetConnector is called; here there's no setter, since main.go always
 // knows at construction time whether config.Speech.STTURL was set.
 type Service struct {
-	recognizer ai.SpeechRecognizer
-	sessions   storage.SessionRepository
-	rec        *learning.Recorder
+	recognizer  ai.SpeechRecognizer
+	synthesizer ai.SpeechSynthesizer
+	sessions    storage.SessionRepository
+	rec         *learning.Recorder
 }
 
 // NewService wires the speech pipeline. recognizer nil means STT is
 // dormant — every Transcribe call returns ErrNotConfigured and nothing
 // is ever recorded.
-func NewService(recognizer ai.SpeechRecognizer, sessions storage.SessionRepository, rec *learning.Recorder) *Service {
-	return &Service{recognizer: recognizer, sessions: sessions, rec: rec}
+func NewService(recognizer ai.SpeechRecognizer, synthesizer ai.SpeechSynthesizer, sessions storage.SessionRepository, rec *learning.Recorder) *Service {
+	return &Service{recognizer: recognizer, synthesizer: synthesizer, sessions: sessions, rec: rec}
+}
+
+// sayMaxRunes caps what Say will synthesize. A drill's word, sentence or
+// explanation is short; anything longer is a caller mistake or an
+// attempt to make the TTS engine do a lot of work on request, and both
+// are better refused than queued.
+const sayMaxRunes = 400
+
+// Say turns text into audio, returning the bytes and their MIME type.
+//
+// Records nothing. A transcription is evidence about the learner — they
+// produced that speech — while playback is a UI affordance the learner
+// invoked, and logging every tap of a speaker button would bury the
+// events that mean something under ones that do not.
+//
+// Returns ErrNotConfigured when no synthesizer is wired, which is the
+// default: APP_SPEECH_TTSURL empty means the whole capability is
+// absent, exactly as it does for transcription.
+func (s *Service) Say(ctx context.Context, text string) (audio []byte, mime string, err error) {
+	if s.synthesizer == nil {
+		return nil, "", ErrNotConfigured
+	}
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil, "", ErrEmptyText
+	}
+	if len([]rune(text)) > sayMaxRunes {
+		return nil, "", ErrTextTooLong
+	}
+	return s.synthesizer.Speak(ctx, text)
 }
 
 // Transcribe runs audio (mime is its declared Content-Type) through

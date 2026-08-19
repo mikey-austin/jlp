@@ -117,3 +117,23 @@ SELECT
     COUNT(*) FILTER (WHERE COALESCE(evidence->>'subject_type', 'concept') = 'concept')::int AS concepts
 FROM learning_events
 WHERE identity_id = $1 AND type = 'quiz.answered';
+
+-- name: RecentDrillAttempts :many
+-- The last N drills a learner answered, newest first — what 練習's
+-- end-of-set summary is built from.
+--
+-- learning_events, not exercise_attempts: the event is what the rest of
+-- the loop consumes (the scheduler and the learner model both read
+-- quiz.answered), so a summary derived from the same rows cannot
+-- disagree with the review queue it sends the learner back to.
+SELECT
+    subject,
+    COALESCE(evidence->>'subject_type', 'concept') AS subject_type,
+    COALESCE(evidence->>'subject_ref', evidence->>'concept', '') AS subject_ref,
+    COALESCE(evidence->>'type', '') AS exercise_type,
+    (evidence->>'correct' = 'true') AS correct,
+    occurred_at
+FROM learning_events
+WHERE identity_id = $1 AND type = 'quiz.answered'
+ORDER BY occurred_at DESC
+LIMIT sqlc.arg(limit_count);

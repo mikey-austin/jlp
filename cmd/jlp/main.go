@@ -27,6 +27,8 @@ import (
 	smtpadapter "github.com/mikeyaustin/jlp/internal/adapters/smtp"
 	"github.com/mikeyaustin/jlp/internal/adapters/staticauth"
 	whisperadapter "github.com/mikeyaustin/jlp/internal/adapters/whisper"
+
+	ttsadapter "github.com/mikeyaustin/jlp/internal/adapters/tts"
 	agentanki "github.com/mikeyaustin/jlp/internal/agent/anki"
 	agentconversation "github.com/mikeyaustin/jlp/internal/agent/conversation"
 	"github.com/mikeyaustin/jlp/internal/agent/drill"
@@ -385,19 +387,14 @@ func main() {
 		// service" choice conversationSvc's own construction above makes
 		// — Transcribe only needs Get for authorization (code review
 		// Important I1), never the rest of sessions.Service's surface.
-		speechSvc := appspeech.NewService(recognizer, postgres.NewSessionRepository(pool), recorder)
-		// Deliberately NOT constructing an internal/adapters/tts.
-		// Synthesizer here even when APP_SPEECH_TTSURL is set: nothing in
-		// this task's HTTP surface calls ai.SpeechSynthesizer.Speak yet
-		// (only POST /speech/transcribe is wired — see server.go's
-		// routes()), so building one now would be main.go wiring dead
-		// code, not "dormant unless configured" like recognizer above.
-		// The adapter itself is real and tested (internal/adapters/tts,
-		// against a genuine local VOICEVOX Engine — see that package's
-		// doc comment for why this differs from a stub), and
-		// ttsadapter.New(cfg.Speech.TTSURL, speaker) is exactly what a
-		// future task wires in the moment it adds a consumer.
-
+		// Dormant unless configured, exactly like recognizer above: with
+		// APP_SPEECH_TTSURL unset there is no synthesizer, and Say answers
+		// ErrNotConfigured rather than the UI offering a button that 503s.
+		var synthesizer ai.SpeechSynthesizer
+		if cfg.Speech.TTSURL != "" {
+			synthesizer = ttsadapter.New(cfg.Speech.TTSURL, cfg.Speech.TTSSpeaker)
+		}
+		speechSvc := appspeech.NewService(recognizer, synthesizer, postgres.NewSessionRepository(pool), recorder)
 		// Channel port + Slack Socket Mode adapter (Phase 4 Task 4, PRD
 		// §20/§20.1): channelSvc composes the SAME sessions/feedback/
 		// practice services every other JLP surface already uses — a

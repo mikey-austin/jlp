@@ -506,7 +506,12 @@ func wordDrill(item vocabulary.Item, example string) exercise.Exercise {
 	if example != "" && strings.Contains(example, item.Expression) {
 		return wordCloze(item, example)
 	}
-	return wordRecall(item)
+	ex := wordRecall(item)
+	// Carried even though it cannot be blanked: a sentence that mentions
+	// the word without using it is still context worth reading, and the
+	// card's back is exactly where context belongs.
+	ex.Example = example
+	return ex
 }
 
 // wordCloze blanks the target word out of the sentence it came from.
@@ -528,7 +533,10 @@ func wordCloze(item vocabulary.Item, example string) exercise.Exercise {
 		// Replaced everywhere it occurs: leaving a second, unblanked copy
 		// in the sentence would hand over the answer.
 		Prompt: strings.ReplaceAll(example, item.Expression, clozeBlank),
-		Answer: item.Expression,
+		// The intact sentence travels alongside the blanked one, so the
+		// result can show what it actually said.
+		Example: example,
+		Answer:  item.Expression,
 		// The reading is accepted too. A learner who recalls the word but
 		// types it in kana has produced it; failing them on orthography
 		// would test something the drill never asked about.

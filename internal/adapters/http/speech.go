@@ -14,7 +14,9 @@ package httpx
 import (
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
+	"strconv"
 
 	appspeech "github.com/mikeyaustin/jlp/internal/application/speech"
 	"github.com/mikeyaustin/jlp/internal/domain/session"
@@ -116,4 +118,47 @@ func (s *Server) speechTranscribe(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, speechTranscribeResponse{Text: t.Text, DurationMS: t.DurationMS, EventID: t.EventID})
+}
+
+// speechSay handles POST /speech/say: form field `text` is the Japanese
+// to speak, and the response body is the audio itself.
+//
+// Audio bytes rather than a URL to fetch: the text is generated per
+// request (a word, an example sentence, an explanation), so there is no
+// stable resource to name, and a two-step fetch would double the round
+// trips for a button whose whole value is being instant.
+//
+// Cacheable, privately and briefly. The same word is often replayed a
+// few times while a learner practises it, and re-synthesizing identical
+// text is pure engine load — but the text is a learner's own vocabulary,
+// so it must never enter a shared cache.
+func (s *Server) speechSay(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Error(w, "bad form", http.StatusBadRequest)
+		return
+	}
+	text := r.FormValue("text")
+
+	audio, mime, err := s.opts.Speech.Say(r.Context(), text)
+	switch {
+	case errors.Is(err, appspeech.ErrNotConfigured):
+		// 503, matching /speech/transcribe: the capability is absent, not
+		// the request wrong.
+		http.Error(w, "speech synthesis is not configured", http.StatusServiceUnavailable)
+		return
+	case errors.Is(err, appspeech.ErrEmptyText), errors.Is(err, appspeech.ErrTextTooLong):
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	case err != nil:
+		slog.Error("speech: could not synthesize", "runes", len([]rune(text)), "err", err)
+		http.Error(w, "could not synthesize speech", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", mime)
+	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("Content-Length", strconv.Itoa(len(audio)))
+	if _, err := w.Write(audio); err != nil {
+		slog.Warn("speech: could not write audio", "err", err)
+	}
 }

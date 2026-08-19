@@ -413,3 +413,62 @@ document.addEventListener("click", function (evt) {
     }
   });
 })();
+
+// Speak-this-aloud buttons.
+//
+// Any element carrying data-speak is clickable to hear its text: the
+// word on a flip card, the example sentence beneath it, the explanation
+// on a result. One delegated listener rather than a listener per button,
+// because these arrive by htmx swap and re-binding after every swap is
+// how one gets missed.
+//
+// The audio is fetched per click and played immediately — POST /speech/say
+// returns the bytes. Nothing is preloaded: most buttons are never
+// pressed, and synthesizing every word of every drill in advance would
+// be a lot of engine time spent on silence.
+(function () {
+  "use strict";
+  let current = null;
+
+  function stop() {
+    if (current) { current.pause(); current = null; }
+  }
+
+  document.addEventListener("click", async function (evt) {
+    const btn = evt.target.closest("[data-speak]");
+    if (!btn) return;
+    evt.preventDefault();
+
+    const text = btn.dataset.speak;
+    if (!text) return;
+
+    // One at a time. Tapping a word and then its sentence should replace
+    // the first, not talk over it.
+    stop();
+    btn.dataset.speaking = "loading";
+
+    try {
+      const body = new URLSearchParams({ text });
+      const res = await fetch("/speech/say", { method: "POST", body });
+      if (!res.ok) {
+        // 503 is the honest common case: TTS is dormant unless
+        // APP_SPEECH_TTSURL is set. Marked on the button rather than
+        // announced, since the learner asked for sound, not an essay.
+        btn.dataset.speaking = res.status === 503 ? "unavailable" : "error";
+        return;
+      }
+      const url = URL.createObjectURL(await res.blob());
+      const audio = new Audio(url);
+      current = audio;
+      audio.addEventListener("ended", function () {
+        URL.revokeObjectURL(url);
+        btn.dataset.speaking = "";
+        if (current === audio) current = null;
+      });
+      btn.dataset.speaking = "playing";
+      await audio.play();
+    } catch {
+      btn.dataset.speaking = "error";
+    }
+  });
+})();
