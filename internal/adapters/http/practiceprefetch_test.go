@@ -175,7 +175,7 @@ func TestAPreparedDrillIsServedEvenThoughItExcludedSomething(t *testing.T) {
 	p := newDrillPrefetcher()
 
 	started := opts(3)
-	started.ExcludeSubject = "the-card-just-shown"
+	started.ExcludeSubjects = []string{"the-card-just-shown"}
 	p.start(context.Background(), b, prefetchIdentity, 3, started)
 
 	// The collecting request knows the slot, not what was excluded.

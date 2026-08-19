@@ -646,6 +646,15 @@ main p.description {
   margin: 0;
 }
 
+/* Mid-round the start controls are noise: the choices they carry apply
+   to the NEXT round, not this one, and a learner answering a question
+   does not need the adapter picker in their eyeline. Hidden rather than
+   removed — every request still reads them. */
+.practice.is-running .practice-controls,
+.practice.is-running .drill-kinds {
+  display: none;
+}
+
 /* ---- drill type checkboxes ---- */
 .drill-kinds {
   display: flex;

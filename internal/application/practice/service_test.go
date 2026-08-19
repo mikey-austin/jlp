@@ -1131,7 +1131,7 @@ func TestExcludeSubjectSkipsTheCardJustShown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
-	second, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{ExcludeSubject: first.SubjectRef})
+	second, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{ExcludeSubjects: []string{first.SubjectRef}})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -1160,7 +1160,7 @@ func TestExcludeSubjectSkipsADueWordToo(t *testing.T) {
 	svc := apppractice.NewService(newFakeExerciseRepo(), drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, sched, vocab,
 		func() time.Time { return now })
 
-	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{ExcludeSubject: "w1"})
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{ExcludeSubjects: []string{"w1"}})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -1260,5 +1260,34 @@ func TestClozeDistractorsUseTheSameFormAsTheAnswer(t *testing.T) {
 		if strings.ContainsAny(c, "〜～") {
 			t.Errorf("choice %q carries a pattern placeholder the answer would never have", c)
 		}
+	}
+}
+
+// A word leaves the recent queue when it is answered CORRECTLY. So a
+// learner getting them wrong keeps every word queued, and with only the
+// previous subject excluded a set of ten alternates between the same two
+// cards — measured over a real run before this was widened.
+func TestARunDoesNotRepeatTheWordsItAlreadyCovered(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+		recentItem("w2", "曖昧", "あいまい", "vague"),
+		recentItem("w3", "微妙", "びみょう", "subtle"),
+		recentItem("w4", "厄介", "やっかい", "troublesome"),
+	}, now)
+
+	var covered []string
+	for i := 0; i < 4; i++ {
+		ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{
+			Want:            apppractice.KindWord,
+			ExcludeSubjects: covered,
+		})
+		if err != nil {
+			t.Fatalf("start %d: %v", i, err)
+		}
+		if slices.Contains(covered, ex.SubjectRef) {
+			t.Fatalf("question %d repeated %q; the run so far was %v", i+1, ex.SubjectRef, covered)
+		}
+		covered = append(covered, ex.SubjectRef)
 	}
 }

@@ -541,11 +541,45 @@ document.addEventListener("click", function (evt) {
   window.jlp.practiceVals = function () {
     const provider = document.getElementById("provider-override");
     const boxes = document.querySelectorAll('#drill-kinds input[name="kind"]:checked');
+    // The run's covered words, read from the DOM rather than baked into
+    // each hx-vals: a bare id interpolated into a JS expression is a
+    // syntax error, and hx-vals failing to parse means the request never
+    // goes out at all.
+    const drilled = document.getElementById("run-drilled");
     return {
       provider_override: provider ? provider.value : "",
       // htmx serialises an array into repeated parameters, which is what
       // r.Form["kind"] reads on the other side.
       kind: Array.from(boxes, (b) => b.value),
+      drilled: drilled ? drilled.dataset.drilled || "" : "",
     };
   };
+})();
+
+// Hide the start controls once a round is underway.
+//
+// The adapter select and the drill-type checkboxes have to STAY in the
+// DOM — every request reads them (see practiceVals) — so they are
+// hidden, never removed. They come back at the end of a set, which is
+// the moment changing them is useful again.
+//
+// Driven by what is actually on screen rather than by a counter: the
+// page is mid-round when it is showing a question or an answer, and back
+// at the start when it is showing the summary or nothing.
+(function () {
+  "use strict";
+  const practice = document.querySelector(".practice");
+  if (!practice) return;
+
+  function sync() {
+    const area = document.getElementById("exercise-area");
+    if (!area) return;
+    const running =
+      (area.querySelector(".exercise") || area.querySelector(".exercise-result")) &&
+      !area.querySelector(".run-summary");
+    practice.classList.toggle("is-running", Boolean(running));
+  }
+
+  document.addEventListener("htmx:afterSwap", sync);
+  sync();
 })();

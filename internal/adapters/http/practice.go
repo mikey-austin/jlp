@@ -397,6 +397,8 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	allowed := allowedKinds(r)
 	drilled := drilledSubjectsFrom(r)
 	opts, forced := drillOptionsFor(position, override, allowed, drilled)
+	// The run's covered words are also the ones not to repeat.
+	opts.ExcludeSubjects = drilled
 
 	// Already built while the learner was answering the previous
 	// question, in the common case — see practiceprefetch.go. A miss just
@@ -455,7 +457,10 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 			nextDrilled = append(append([]string{}, drilled...), ex.SubjectRef)
 		}
 		nextOpts, _ := drillOptionsFor(next, override, allowed, nextDrilled)
-		nextOpts.ExcludeSubject = ex.SubjectRef
+		// Everything this run has covered, including what was just
+		// served: with only the last one excluded, a learner answering
+		// wrongly sees the same two cards alternate for the whole set.
+		nextOpts.ExcludeSubjects = nextDrilled
 		s.prefetch.start(r.Context(), s.opts.Practice, ident.ID, next, nextOpts)
 	}
 
