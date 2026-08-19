@@ -422,16 +422,86 @@ document.addEventListener("click", function (evt) {
 // because these arrive by htmx swap and re-binding after every swap is
 // how one gets missed.
 //
-// The audio is fetched per click and played immediately — POST /speech/say
-// returns the bytes. Nothing is preloaded: most buttons are never
-// pressed, and synthesizing every word of every drill in advance would
-// be a lot of engine time spent on silence.
+// TWO voices, in preference order:
+//
+//   1. POST /speech/say — the VOICEVOX engine, when one is configured.
+//      A purpose-built Japanese synthesizer; pitch accent and rhythm are
+//      the things a learner is trying to acquire, and it gets them right.
+//   2. window.speechSynthesis — the browser's own voice. No server, no
+//      sidecar, no network. Lower quality, and worth having anyway:
+//      without it the whole feature is dark wherever the engine is not
+//      deployed, which today is production.
+//
+// The server is tried first and its absence is remembered, so a
+// deployment without TTS pays one 503 per page load rather than one per
+// click. Only when BOTH are unavailable does a button say so.
 (function () {
   "use strict";
-  let current = null;
+  let current = null;          // the <audio> element currently playing
+  let serverMute = false;      // /speech/say answered 503 — stop asking
 
-  function stop() {
+  function stopAll() {
     if (current) { current.pause(); current = null; }
+    // Cancels a browser utterance too: tapping a word and then its
+    // sentence should replace the first, whichever voice said it.
+    if (window.speechSynthesis) window.speechSynthesis.cancel();
+  }
+
+  // A Japanese voice, or null. Reading Japanese aloud with an English
+  // voice is worse than silence — it teaches the wrong pronunciation —
+  // so a browser with no ja voice counts as having no browser TTS.
+  function japaneseVoice() {
+    if (!window.speechSynthesis) return null;
+    const voices = window.speechSynthesis.getVoices() || [];
+    return voices.find((v) => (v.lang || "").toLowerCase().startsWith("ja")) || null;
+  }
+
+  // getVoices() is empty until the list loads on some browsers; asking
+  // again after voiceschanged is the documented way round it.
+  if (window.speechSynthesis) {
+    window.speechSynthesis.addEventListener?.("voiceschanged", function () {});
+  }
+
+  async function speakViaServer(text, btn) {
+    if (serverMute) return false;
+    const res = await fetch("/speech/say", {
+      method: "POST",
+      body: new URLSearchParams({ text }),
+    });
+    if (res.status === 503) {
+      // Not configured. Remembered for the life of the page.
+      serverMute = true;
+      return false;
+    }
+    if (!res.ok) return false;
+
+    const url = URL.createObjectURL(await res.blob());
+    const audio = new Audio(url);
+    current = audio;
+    audio.addEventListener("ended", function () {
+      URL.revokeObjectURL(url);
+      btn.dataset.speaking = "";
+      if (current === audio) current = null;
+    });
+    btn.dataset.speaking = "playing";
+    await audio.play();
+    return true;
+  }
+
+  function speakViaBrowser(text, btn) {
+    const voice = japaneseVoice();
+    if (!voice) return false;
+
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.voice = voice;
+    utter.lang = voice.lang;
+    // Slightly under natural pace: this is being replayed to be copied,
+    // not listened to.
+    utter.rate = 0.9;
+    utter.addEventListener("end", function () { btn.dataset.speaking = ""; });
+    btn.dataset.speaking = "playing";
+    window.speechSynthesis.speak(utter);
+    return true;
   }
 
   document.addEventListener("click", async function (evt) {
@@ -442,33 +512,17 @@ document.addEventListener("click", function (evt) {
     const text = btn.dataset.speak;
     if (!text) return;
 
-    // One at a time. Tapping a word and then its sentence should replace
-    // the first, not talk over it.
-    stop();
+    stopAll();
     btn.dataset.speaking = "loading";
 
     try {
-      const body = new URLSearchParams({ text });
-      const res = await fetch("/speech/say", { method: "POST", body });
-      if (!res.ok) {
-        // 503 is the honest common case: TTS is dormant unless
-        // APP_SPEECH_TTSURL is set. Marked on the button rather than
-        // announced, since the learner asked for sound, not an essay.
-        btn.dataset.speaking = res.status === 503 ? "unavailable" : "error";
-        return;
-      }
-      const url = URL.createObjectURL(await res.blob());
-      const audio = new Audio(url);
-      current = audio;
-      audio.addEventListener("ended", function () {
-        URL.revokeObjectURL(url);
-        btn.dataset.speaking = "";
-        if (current === audio) current = null;
-      });
-      btn.dataset.speaking = "playing";
-      await audio.play();
+      if (await speakViaServer(text, btn)) return;
     } catch {
-      btn.dataset.speaking = "error";
+      // Network failure reaching our own server; the browser voice may
+      // still work, so fall through rather than giving up.
     }
+    if (speakViaBrowser(text, btn)) return;
+
+    btn.dataset.speaking = "unavailable";
   });
 })();
