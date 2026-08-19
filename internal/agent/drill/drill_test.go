@@ -316,3 +316,59 @@ func TestGeneratePassageShapesAChoiceExercise(t *testing.T) {
 		t.Errorf("answer %q is not among choices %v", ex.Answer, ex.Choices)
 	}
 }
+
+// Models routinely answer "B" or "2" for a list they were never given
+// labels for, because that is how multiple choice looks in their
+// training data. Refusing those throws away a passage where the model
+// picked the RIGHT option and merely named it the way it had seen
+// options named — observed on a local model, which answered "B".
+func TestGeneratePassageResolvesALabelledAnswer(t *testing.T) {
+	for _, tc := range []struct{ name, answer, want string }{
+		{"letter", `"B"`, "楽しかった"},
+		{"lowercase letter", `"c"`, "疲れた"},
+		{"index", `"1"`, "ひまだった"},
+		{"exact text", `"疲れた"`, "疲れた"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			gen := &flakyGen{payloads: [][]byte{[]byte(`{
+			  "passage": "きのうは忙しかったです。",
+			  "question": {"ja": "どうでしたか。", "en": "How was it?"},
+			  "choices": ["ひまだった", "楽しかった", "疲れた"],
+			  "answer": ` + tc.answer + `
+			}`)}}
+
+			ex, _, err := drill.New(gen).GeneratePassage(context.Background(), drill.PassageInput{
+				Identity: "learner-a",
+				Words:    []drill.WordRef{{Expression: "忙しい"}},
+			})
+			if err != nil {
+				t.Fatalf("GeneratePassage: %v", err)
+			}
+			if ex.Answer != tc.want {
+				t.Errorf("answer = %q, want %q", ex.Answer, tc.want)
+			}
+			if !slices.Contains(ex.Choices, ex.Answer) {
+				t.Errorf("resolved answer %q is still not among choices %v", ex.Answer, ex.Choices)
+			}
+		})
+	}
+}
+
+// A label out of range is a genuine mismatch, not something to guess at:
+// grading against the wrong option is worse than refusing the passage.
+func TestGeneratePassageStillRejectsAnUnresolvableAnswer(t *testing.T) {
+	for _, answer := range []string{`"Z"`, `"9"`, `"まったく別の答え"`} {
+		gen := &flakyGen{payloads: [][]byte{[]byte(`{
+		  "passage": "きのうは忙しかったです。",
+		  "question": {"ja": "どうでしたか。", "en": "How was it?"},
+		  "choices": ["ひまだった", "楽しかった", "疲れた"],
+		  "answer": ` + answer + `
+		}`)}}
+		if _, _, err := drill.New(gen).GeneratePassage(context.Background(), drill.PassageInput{
+			Identity: "learner-a",
+			Words:    []drill.WordRef{{Expression: "忙しい"}},
+		}); err == nil {
+			t.Errorf("accepted unresolvable answer %s", answer)
+		}
+	}
+}

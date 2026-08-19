@@ -15,5 +15,8 @@ feeling, or intent — not about which word appeared where. Give three or four
 must be plausible readings of the same passage, wrong on the detail rather
 than obviously absurd.
 
+"answer" must be the FULL TEXT of the correct choice, copied exactly — not a
+letter, not a number, not a label of any kind. The choices carry no labels.
+
 Output strictly per schema: no commentary, no markdown fences, no fields
 beyond what the schema defines.

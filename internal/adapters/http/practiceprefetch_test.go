@@ -162,3 +162,41 @@ func TestAPrefetchSurvivesTheRequestThatStartedIt(t *testing.T) {
 		t.Errorf("prompt = %q", ex.Prompt)
 	}
 }
+
+// ExcludeSubject is known only to the request that STARTS a prefetch,
+// never to the one that collects it. Comparing it would make every
+// prefetch miss — the whole file silently doing nothing while looking
+// like it worked.
+func TestAPreparedDrillIsServedEvenThoughItExcludedSomething(t *testing.T) {
+	b := &slowBuilder{made: exercise.Exercise{Prompt: "prepared"}}
+	p := newDrillPrefetcher()
+
+	started := opts(3)
+	started.ExcludeSubject = "the-card-just-shown"
+	p.start(context.Background(), b, prefetchIdentity, 3, started)
+
+	// The collecting request knows the slot, not what was excluded.
+	if _, ok := p.take(prefetchIdentity, 3, opts(3)); !ok {
+		t.Fatal("a prepared drill was rejected because it had excluded a subject")
+	}
+}
+
+// A build that is still running must not hold the learner indefinitely:
+// the whole point of the prefetch is that nobody waits on a model.
+func TestARequestGivesUpOnASlowBuild(t *testing.T) {
+	b := &slowBuilder{release: make(chan struct{})} // never released
+	p := newDrillPrefetcher()
+	p.start(context.Background(), b, prefetchIdentity, 3, opts(3))
+
+	start := time.Now()
+	_, ok := p.take(prefetchIdentity, 3, opts(3))
+	waited := time.Since(start)
+
+	if ok {
+		t.Fatal("take returned a drill that was never built")
+	}
+	if waited > prefetchGrace+2*time.Second {
+		t.Errorf("waited %v for a stalled build, want to give up around %v", waited, prefetchGrace)
+	}
+	close(b.release)
+}

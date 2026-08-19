@@ -1114,3 +1114,56 @@ func TestAPassageFallsThroughWhenThereAreTooFewWords(t *testing.T) {
 		t.Errorf("fell through to %q, want the single available word", ex.SubjectRef)
 	}
 }
+
+// A word leaves the recent queue when it is ANSWERED, not when it is
+// shown. So a drill prepared while the previous one is still unanswered
+// sees the same word queued and picks it again — the learner gets the
+// same card twice in a row, which is what prefetching introduced.
+func TestExcludeSubjectSkipsTheCardJustShown(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+		recentItem("w2", "曖昧", "あいまい", "vague"),
+	}, now)
+
+	first, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	second, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{ExcludeSubject: first.SubjectRef})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if second.SubjectRef == first.SubjectRef {
+		t.Errorf("drilled %q twice in a row despite excluding it", first.SubjectRef)
+	}
+}
+
+// The exclusion must also apply to the review queue, or the same card
+// repeats there instead.
+func TestExcludeSubjectSkipsADueWordToo(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	grammarRepo := &fakeGrammarRepo{bySlug: map[string]grammar.Concept{}}
+	retrievalRepo := &fakeRetrievalRepoForPractice{due: []storage.RetrievalItem{
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "w1"},
+		{IdentityID: testIdentity, SubjectType: "expression", Subject: "w2"},
+	}}
+	sched := appretrieval.NewScheduler(retrievalRepo, func() time.Time { return now })
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, &fakePriorityRepo{}, &fakeVocabRepo{}, func() time.Time { return now })
+	vocab := &fakeVocabRepo{byID: map[string]vocabulary.Item{
+		"w1": recentItem("w1", "一番", "いちばん", "first"),
+		"w2": recentItem("w2", "二番", "にばん", "second"),
+	}}
+	svc := apppractice.NewService(newFakeExerciseRepo(), drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, sched, vocab,
+		func() time.Time { return now })
+
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{ExcludeSubject: "w1"})
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.SubjectRef == "w1" {
+		t.Error("the excluded word was drilled from the due queue")
+	}
+}

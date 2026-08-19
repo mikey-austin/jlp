@@ -40,6 +40,17 @@ const (
 	// a goroutine and its model call indefinitely.
 	prefetchTimeout = 3 * time.Minute
 
+	// prefetchGrace is how long a request will wait for a prepared drill
+	// that is still building before giving up on it.
+	//
+	// The wait exists because a build that is nearly done is worth a
+	// moment; the BOUND exists because it is the learner sitting there.
+	// Without one, a request inherits the whole prefetchTimeout — a
+	// provider having a bad day turns into a page that appears to hang
+	// for minutes, which is exactly what this file was meant to prevent
+	// and briefly made worse instead.
+	prefetchGrace = 4 * time.Second
+
 	// prefetchMaxLearners caps how many learners may hold a prepared
 	// drill at once, so this cannot grow without bound in a long-running
 	// process. JLP is a single-learner deployment; the cap exists so that
@@ -53,14 +64,30 @@ type preparedDrill struct {
 	// that arrives mid-build shares the work rather than starting a
 	// second identical one.
 	done chan struct{}
-	// position/opts are what this drill was built FOR. A request for
-	// anything else cannot use it — the selection depends on both (a
-	// concept slot and a word slot are different questions).
+	// position/opts are what this drill was built FOR. A request for a
+	// different SLOT cannot use it — a concept slot and a word slot are
+	// different questions.
 	position int
 	opts     practice.StartOptions
 
 	ex  exercise.Exercise
 	err error
+}
+
+// matchesSlot reports whether this prepared drill answers the question
+// being asked for.
+//
+// ExcludeSubject is deliberately NOT compared. It is an input to
+// selection — "not the card you just saw" — known only to the request
+// that STARTED the prefetch, never to the one that collects it. Treating
+// it as part of the slot's identity would make every single prefetch
+// miss, silently turning this whole file into dead weight while looking
+// like it worked.
+func (d *preparedDrill) matchesSlot(position int, opts practice.StartOptions) bool {
+	return d.position == position &&
+		d.opts.ProviderOverride == opts.ProviderOverride &&
+		d.opts.SkipWords == opts.SkipWords &&
+		d.opts.WantPassage == opts.WantPassage
 }
 
 // drillPrefetcher holds at most one prepared drill per learner.
@@ -88,10 +115,18 @@ func (p *drillPrefetcher) take(identity learner.IdentityID, position int, opts p
 	}
 	p.mu.Unlock()
 
-	if !ok || prepared.position != position || prepared.opts != opts {
+	if !ok || !prepared.matchesSlot(position, opts) {
 		return exercise.Exercise{}, false
 	}
-	<-prepared.done
+	select {
+	case <-prepared.done:
+	case <-time.After(prefetchGrace):
+		// Still building. Reported as a miss so the caller serves
+		// something else NOW; the goroutine finishes on its own and its
+		// result is dropped, which costs one model call and saves the
+		// learner from staring at a spinner.
+		return exercise.Exercise{}, false
+	}
 	if prepared.err != nil {
 		// The background build failed. Reported as "nothing prepared" so
 		// the caller builds synchronously and the learner gets a real

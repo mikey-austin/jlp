@@ -16,6 +16,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strconv"
+	"strings"
+	"unicode"
 
 	"github.com/mikeyaustin/jlp/internal/agent/aiutil"
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
@@ -337,7 +340,8 @@ func (a *Agent) GeneratePassage(ctx context.Context, in PassageInput) (exercise.
 	// The answer must be one of the choices, or the learner cannot pick
 	// it and the deterministic grader can never return correct. The
 	// schema cannot express that relationship, so it is checked here.
-	if !slices.Contains(dto.Choices, dto.Answer) {
+	answer, ok := resolveChoice(dto.Choices, dto.Answer)
+	if !ok {
 		return exercise.Exercise{}, resp, fmt.Errorf("drill: passage answer %q is not among its choices", dto.Answer)
 	}
 
@@ -348,6 +352,38 @@ func (a *Agent) GeneratePassage(ctx context.Context, in PassageInput) (exercise.
 		InstructionsEN: dto.Question.EN,
 		Prompt:         dto.Passage,
 		Choices:        dto.Choices,
-		Answer:         dto.Answer,
+		Answer:         answer,
 	}, resp, nil
+}
+
+// resolveChoice maps a model's stated answer onto one of the choices.
+//
+// Exact text first, then a LABEL: models routinely answer "B" or "2" for
+// a list they were never given labels for, because multiple-choice
+// questions in their training data have them. Refusing those outright
+// throws away a passage that is otherwise correct — the model picked the
+// right option and merely named it the way it had seen options named.
+//
+// Only unambiguous labels are accepted: a single letter within range, or
+// a 1-based index. Anything else is a genuine mismatch and fails, because
+// guessing at what a model meant is how an exercise ends up graded
+// against the wrong option.
+func resolveChoice(choices []string, answer string) (string, bool) {
+	answer = strings.TrimSpace(answer)
+	if slices.Contains(choices, answer) {
+		return answer, true
+	}
+	// A letter: A/B/C/D, either case. Skipped when a choice is literally
+	// that letter, which the exact match above would already have taken.
+	if len([]rune(answer)) == 1 {
+		r := unicode.ToUpper([]rune(answer)[0])
+		if i := int(r - 'A'); r >= 'A' && i < len(choices) {
+			return choices[i], true
+		}
+	}
+	// A 1-based index.
+	if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(choices) {
+		return choices[n-1], true
+	}
+	return "", false
 }

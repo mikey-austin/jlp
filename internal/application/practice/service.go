@@ -44,6 +44,17 @@ type StartOptions struct {
 	// decides the rhythm — see the HTTP layer's conceptEvery — because
 	// only it knows where in a run this drill sits.
 	SkipWords bool
+	// ExcludeSubject is a subject this drill must NOT be about, named by
+	// the caller because only it knows what it just served.
+	//
+	// A word leaves the recent queue when it is ANSWERED, not when it is
+	// shown — successful_productions is what the query filters on. So a
+	// drill prepared while the previous one is still unanswered sees the
+	// same word still queued and picks it again, and the learner gets the
+	// same card twice in a row. A single subject is enough: the problem
+	// is adjacency, and a word that comes back later because it was
+	// answered wrong is the scheduler working, not a bug.
+	ExcludeSubject string
 	// WantPassage asks for a reading passage over several words the
 	// learner is revising, rather than a single-word drill. Honoured only
 	// when enough words are actually available (passageWordCount); a run
@@ -182,7 +193,7 @@ func (s *Service) Build(ctx context.Context, identity learner.IdentityID, opts S
 		}
 	}
 
-	if item, ok, err := s.recentWord(ctx, identity); opts.SkipWords {
+	if item, ok, err := s.recentWord(ctx, identity, opts.ExcludeSubject); opts.SkipWords {
 		_ = item
 	} else if err != nil {
 		return exercise.Exercise{}, fmt.Errorf("practice: recent word: %w", err)
@@ -195,7 +206,7 @@ func (s *Service) Build(ctx context.Context, identity learner.IdentityID, opts S
 	// how overdue each item is. Skipped under SkipWords for the same
 	// reason the recent queue is.
 	if !opts.SkipWords {
-		if item, ok, err := s.dueWord(ctx, identity); err != nil {
+		if item, ok, err := s.dueWord(ctx, identity, opts.ExcludeSubject); err != nil {
 			return exercise.Exercise{}, fmt.Errorf("practice: due word: %w", err)
 		} else if ok {
 			return s.drillFor(ctx, identity, item), nil
@@ -399,7 +410,7 @@ func (s *Service) drillFor(ctx context.Context, identity learner.IdentityID, ite
 // ok is false — with no error — when vocab is nil (a caller that hasn't
 // wired it) or nothing qualifies, exactly as dueConcept reports "nothing
 // due".
-func (s *Service) recentWord(ctx context.Context, identity learner.IdentityID) (vocabulary.Item, bool, error) {
+func (s *Service) recentWord(ctx context.Context, identity learner.IdentityID, exclude string) (vocabulary.Item, bool, error) {
 	if s.vocab == nil {
 		return vocabulary.Item{}, false, nil
 	}
@@ -408,7 +419,7 @@ func (s *Service) recentWord(ctx context.Context, identity learner.IdentityID) (
 		return vocabulary.Item{}, false, err
 	}
 	for _, item := range items {
-		if hasCardBack(item) {
+		if item.ID != exclude && hasCardBack(item) {
 			return item, true, nil
 		}
 	}
@@ -436,7 +447,7 @@ func hasCardBack(item vocabulary.Item) bool {
 //
 // ok is false — with no error — when retrieval or vocab is nil, nothing
 // is due, or no due expression still resolves to a word worth showing.
-func (s *Service) dueWord(ctx context.Context, identity learner.IdentityID) (vocabulary.Item, bool, error) {
+func (s *Service) dueWord(ctx context.Context, identity learner.IdentityID, exclude string) (vocabulary.Item, bool, error) {
 	if s.retrieval == nil || s.vocab == nil {
 		return vocabulary.Item{}, false, nil
 	}
@@ -465,6 +476,9 @@ func (s *Service) dueWord(ctx context.Context, identity learner.IdentityID) (voc
 	// map has none. A due word whose row is gone (deleted since it was
 	// scheduled) simply falls through, like a stale concept slug does.
 	for _, id := range ids {
+		if id == exclude {
+			continue
+		}
 		if item, found := byID[id]; found && hasCardBack(item) {
 			return item, true, nil
 		}

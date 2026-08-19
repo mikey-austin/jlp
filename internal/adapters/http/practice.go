@@ -239,7 +239,19 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	ex, ok := s.prefetch.take(ident.ID, position, opts)
 	var err error
 	if !ok {
-		ex, err = s.opts.Practice.Build(r.Context(), ident.ID, opts)
+		// Nothing prepared, or it was still building when the learner
+		// arrived. Build now — but WITHOUT the slots that need a model:
+		// a word drill is instant and always available, and the whole
+		// reason this path is being taken is that generation is being
+		// slow. Falling back to a grammar drill here would reproduce the
+		// stall the prefetch exists to remove.
+		//
+		// The model is still reached when there is no vocabulary to draw
+		// on, which is the only case where waiting is the only option.
+		ex, err = s.opts.Practice.Build(r.Context(), ident.ID, practice.StartOptions{
+			ProviderOverride: opts.ProviderOverride,
+			ExcludeSubject:   opts.ExcludeSubject,
+		})
 	}
 	if err == nil {
 		ex, err = s.opts.Practice.Serve(r.Context(), ident.ID, ex)
@@ -259,7 +271,12 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	// than that to generate — this is the whole reason question three
 	// used to stall while one and two were instant.
 	if next := position + 1; next <= runLength {
-		s.prefetch.start(r.Context(), s.opts.Practice, ident.ID, next, drillOptionsFor(next, override))
+		// Excluding what was just served: a word leaves the recent queue
+		// when it is ANSWERED, and this drill has only been shown, so
+		// without this the next one is very often the same card again.
+		nextOpts := drillOptionsFor(next, override)
+		nextOpts.ExcludeSubject = ex.SubjectRef
+		s.prefetch.start(r.Context(), s.opts.Practice, ident.ID, next, nextOpts)
 	}
 
 	RenderPartial(w, r, "exercise", toExerciseView(ex, position, streak))
