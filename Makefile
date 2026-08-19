@@ -1,5 +1,12 @@
 COMPOSE := docker compose
 TOOLS   := $(COMPOSE) run --rm tools
+# Same container, running as the invoking user. For targets whose output
+# is a file the HOST then has to manage: the tools service has no `user:`
+# in docker-compose.yml, so it runs as root and everything it writes into
+# the bind mount lands root-owned. That is harmless for build caches, and
+# not harmless for dist/ — `rm -rf dist` fails with permission denied and
+# a second `make ext-build` cannot replace its own artifact.
+TOOLS_AS_ME := $(COMPOSE) run --rm --user $(shell id -u):$(shell id -g) tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 # Registry image for the LAN deployment (see the jlp-playbook in
@@ -94,7 +101,7 @@ tidy: ## go mod tidy inside the container
 
 clean: ## Stop stack and remove volumes + build artifacts
 	$(COMPOSE) down -v
-	rm -rf tmp
+	rm -rf tmp dist
 
 migrate: ## Apply database migrations
 	$(TOOLS) go run ./cmd/jlp migrate
@@ -149,7 +156,9 @@ vendor-fonts: ## Vendor pinned Instrument Sans + JetBrains Mono woff2 into web/s
 	@echo "vendored $$(du -ch web/static/fonts/*.woff2 | tail -1 | cut -f1) of woff2 into web/static/fonts/ — fonts.css is committed by hand, not generated"
 
 ext-build: ## Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
-	$(TOOLS) sh -c "mkdir -p dist && rm -f dist/jlp-extension.zip && cd chrome-extension && zip -r ../dist/jlp-extension.zip . -x 'shim/*' -x 'README.md'"
+	@mkdir -p dist
+	$(TOOLS_AS_ME) sh -c "rm -f dist/jlp-extension.zip && cd chrome-extension && zip -r ../dist/jlp-extension.zip . -x 'shim/*' -x 'README.md'"
+	@echo "wrote dist/jlp-extension.zip — for distribution; chrome://extensions wants the unpacked chrome-extension/ directory (see its README)"
 
 send-summary: up-mail ## Trigger one weekly summary send immediately (needs APP_SUMMARY_TO set; brings up Mailpit + postgres first)
 	$(TOOLS) go run ./cmd/jlp send-summary
