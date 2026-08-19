@@ -1,12 +1,18 @@
 COMPOSE := docker compose
-TOOLS   := $(COMPOSE) run --rm tools
+# --build, because `run` alone reuses whatever image exists and never
+# notices the Dockerfile moved on. An image built before `zip` was added
+# to the dev stage fails `make ext-build` with "sh: zip: not found", which
+# names the symptom and not the cause; the same trap waits behind every
+# other tool the dev stage installs. Cheap to avoid: the dev stage has no
+# COPY, so a cached rebuild is near-instant.
+TOOLS   := $(COMPOSE) run --rm --build tools
 # Same container, running as the invoking user. For targets whose output
 # is a file the HOST then has to manage: the tools service has no `user:`
 # in docker-compose.yml, so it runs as root and everything it writes into
 # the bind mount lands root-owned. That is harmless for build caches, and
 # not harmless for dist/ — `rm -rf dist` fails with permission denied and
 # a second `make ext-build` cannot replace its own artifact.
-TOOLS_AS_ME := $(COMPOSE) run --rm --user $(shell id -u):$(shell id -g) tools
+TOOLS_AS_ME := $(COMPOSE) run --rm --build --user $(shell id -u):$(shell id -g) tools
 PROD_COMPOSE := docker compose -f deploy/compose.prod.yml --env-file deploy/.env.prod
 
 # Registry image for the LAN deployment (see the jlp-playbook in
