@@ -94,24 +94,26 @@ you ever copy the `ClientFactory` snippet elsewhere, keep the slash.
 ## What to expect when the agent is slow
 
 JLP's card advertises `capabilities: {streaming: false}`, and means
-it — this client does not pretend otherwise. `SendMessage` blocks
-until the task reaches a terminal state, and JLP behind a local Ollama
-model can genuinely take **5–30 seconds**. While a message is in
-flight the UI shows a progress bubble with a spinner and a **Cancel**
-button; there's no partial/streaming output to show in the meantime,
-because the agent has none to give.
+it — this client does not pretend otherwise. A reply behind a local
+Ollama model takes **5–30 seconds**, and a `coordinate` run that hands
+off to specialists takes **minutes**. There's no partial output to show
+in the meantime, because the agent has none to give.
 
-**Cancel**, honestly: while waiting for `SendMessage` to return, there
-is no task id yet — JLP does not hand one out until the run is
-finished — so there is nothing to hand `CancelTask`. What "Cancel"
-actually does in that window is abort the outbound request (browser
-→ this server → agent) and give up on waiting; the agent may still be
-mid-run when you do this. Once a task **does** come back in a
-non-terminal state (`SUBMITTED`/`WORKING`/`INPUT_REQUIRED` — something
-JLP's own synchronous adapter never returns, since it always waits for
-a terminal state, but another A2A agent legitimately might), the UI
-shows a real **Cancel task** button next to it that calls `CancelTask`
-with the actual task id.
+So this client sends `configuration: {returnImmediately: true}` and
+**polls**. `SendMessage` comes back in milliseconds with a
+`TASK_STATE_WORKING` task; the browser then asks `/api/task` every
+second, easing off to every five, until the state is terminal — at
+which point the working bubble is replaced in place by the answer.
+Nothing holds an HTTP connection open for the length of a run, which is
+the whole point: waiting inline used to die at the agent's write
+timeout, and then at undici's 300s header timeout.
+
+**Cancel** is therefore real. The task id exists while the work is still
+going, so the **Cancel task** button next to a working task calls
+`CancelTask`, which stops the run server-side and leaves the task in
+`TASK_STATE_CANCELED`. (The header **Cancel** button, shown during the
+send itself, still only aborts that outbound request — a window now
+milliseconds wide.)
 
 ## Debugging: where to see the request/response
 

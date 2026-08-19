@@ -257,17 +257,47 @@ function replaceRow(row, newBubbleEl, metaEls) {
   scrollToBottom();
 }
 
+// A task in one of these states is still moving, so there is more to
+// wait for. Everything else — completed, failed, cancelled, rejected —
+// is the last word.
+const NON_TERMINAL_STATES = ['TASK_STATE_SUBMITTED', 'TASK_STATE_WORKING', 'TASK_STATE_INPUT_REQUIRED'];
+
+function isTerminalState(state) {
+  return !NON_TERMINAL_STATES.includes(state);
+}
+
 function renderTaskResult(progressRow, task) {
   const stateName = task.status.state;
   const isFailed = stateName === 'TASK_STATE_FAILED' || stateName === 'TASK_STATE_REJECTED';
-  const isTerminal = !['TASK_STATE_SUBMITTED', 'TASK_STATE_WORKING', 'TASK_STATE_INPUT_REQUIRED'].includes(
-    stateName,
-  );
+  const isTerminal = isTerminalState(stateName);
+
+  // Re-rendered on every poll, so clear the meta row the previous
+  // render appended — otherwise a long run stacks one badge per tick.
+  if (progressRow.nextElementSibling?.classList.contains('meta-row')) {
+    progressRow.nextElementSibling.remove();
+  }
 
   const bubble = document.createElement('div');
   bubble.className = `bubble agent${isFailed ? ' error' : ''}`;
 
-  if (isFailed) {
+  if (!isTerminal && !task.artifacts?.length) {
+    // Still running. Keep the spinner rather than printing the state as
+    // prose: a coordinate run sits here for minutes, and a static line
+    // reading "task is working" looks identical to a hung page.
+    bubble.className = 'bubble progress';
+    const spinner = document.createElement('span');
+    spinner.className = 'spinner';
+    const label = document.createElement('span');
+    label.textContent =
+      stateName === 'TASK_STATE_INPUT_REQUIRED'
+        ? 'The agent is waiting for more input.'
+        : 'Working — the agent is running. Specialist hand-offs can take a few minutes.';
+    bubble.append(spinner, label);
+  } else if (stateName === 'TASK_STATE_CANCELED') {
+    // Not "no output yet": the run was stopped on purpose and there is
+    // never going to be any.
+    bubble.textContent = 'Cancelled. The agent stopped this run — nothing was produced.';
+  } else if (isFailed) {
     const reason =
       (task.status.message && partsToText(task.status.message.parts)) || 'The agent reported a failure with no message.';
     bubble.textContent = `Task failed.\n\n${reason}`;
@@ -301,7 +331,7 @@ function renderTaskResult(progressRow, task) {
     cancelLink.type = 'button';
     cancelLink.className = 'inline-cancel';
     cancelLink.textContent = 'Cancel task';
-    cancelLink.addEventListener('click', () => cancelTaskById(task.id, meta, bubble));
+    cancelLink.addEventListener('click', () => cancelTaskById(task.id, progressRow, bubble));
     meta.appendChild(cancelLink);
   }
 
@@ -317,7 +347,62 @@ function renderTaskResult(progressRow, task) {
   }
 }
 
-async function cancelTaskById(taskId, metaEl, bubbleEl) {
+// Poll GetTask until the task stops moving.
+//
+// SendMessage now returns as soon as the run is registered, so the
+// answer arrives here rather than in the reply to the send. Polling
+// rather than a push: the agent's card advertises no push
+// notifications and no streaming, so asking is the only channel there
+// is. The interval eases off because most runs finish in seconds while
+// a coordinate run takes minutes — a fixed 1s would mean hundreds of
+// requests for the long ones.
+const POLL_MIN_MS = 1000;
+const POLL_MAX_MS = 5000;
+
+async function followTask(progressRow, task) {
+  let delay = POLL_MIN_MS;
+  while (!isTerminalState(task.status.state)) {
+    if (abandonedTasks.has(task.id)) return;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+    delay = Math.min(Math.round(delay * 1.5), POLL_MAX_MS);
+    if (abandonedTasks.has(task.id)) return;
+
+    let data;
+    try {
+      const res = await fetch(`/api/task?id=${encodeURIComponent(task.id)}`);
+      data = await res.json();
+    } catch (err) {
+      // A dropped poll is not a dropped run: the agent is still working
+      // and the next tick may well reach it. Only a refused task lookup
+      // (below) is fatal.
+      continue;
+    }
+    // Checked again after the await: a cancel that landed while this
+    // request was in flight has already drawn the final state, and
+    // painting a stale "working" over it would undo that.
+    if (abandonedTasks.has(task.id)) return;
+    if (!data.ok) {
+      renderErrorResult(progressRow, data.error);
+      return;
+    }
+    // Only redraw when the task actually moved. Re-rendering on every
+    // tick would destroy and rebuild the Cancel button underneath the
+    // user's cursor — a click landing on the old node does nothing.
+    if (JSON.stringify(data.task) !== JSON.stringify(task)) {
+      renderTaskResult(progressRow, data.task);
+    }
+    task = data.task;
+  }
+}
+
+// Task ids the user cancelled or walked away from, so followTask stops
+// asking. A Set rather than a flag because nothing stops two runs
+// overlapping once sending no longer blocks.
+const abandonedTasks = new Set();
+
+// rowEl, not the bubble the button was drawn next to: every poll
+// replaces that bubble, so patching it would write into a detached node.
+async function cancelTaskById(taskId, rowEl, bubbleEl) {
   try {
     const res = await fetch('/api/cancel', {
       method: 'POST',
@@ -326,14 +411,21 @@ async function cancelTaskById(taskId, metaEl, bubbleEl) {
     });
     const data = await res.json();
     if (data.ok) {
-      bubbleEl.textContent += `\n\n(cancelled: ${STATE_LABELS[data.task.status.state] || data.task.status.state})`;
-    } else {
-      bubbleEl.textContent += `\n\n(cancel failed — ${data.error.kind}: ${data.error.message})`;
+      // Stop the poller BEFORE drawing, so a tick already in flight
+      // cannot paint "working" back over the cancelled state.
+      abandonedTasks.add(taskId);
+      renderTaskResult(rowEl, data.task);
+      return;
     }
+    // "Not cancelable" means the cancel lost a race with the run
+    // finishing — there IS an answer, and the poll (still running,
+    // deliberately) is about to show it. Reporting a failure here would
+    // put an error over a successful reply.
+    if (/NotCancelable/.test(data.error.kind)) return;
+    bubbleEl.textContent += `\n\n(cancel failed — ${data.error.kind}: ${data.error.message})`;
   } catch (err) {
     bubbleEl.textContent += `\n\n(cancel request failed: ${err})`;
   }
-  metaEl.querySelector('.inline-cancel')?.remove();
 }
 
 function renderErrorResult(progressRow, error) {
@@ -349,9 +441,9 @@ function renderCancelledResult(progressRow) {
   const bubble = document.createElement('div');
   bubble.className = 'bubble cancelled';
   bubble.textContent =
-    'Cancelled before the agent replied. This agent runs SendMessage synchronously, so no task id ' +
-    'was available yet to cancel server-side — this only gave up on waiting for the response; the ' +
-    "agent may still be finishing the run (check the agent's own trace/log).";
+    'Cancelled before the agent acknowledged the message, so there was no task id yet to cancel ' +
+    'server-side. This only gave up on waiting for the acknowledgement; if the agent did register ' +
+    "the run, it is still going — check the agent's own trace/log.";
   progressRow.innerHTML = '';
   progressRow.appendChild(bubble);
   scrollToBottom();
@@ -386,6 +478,10 @@ els.composer.addEventListener('submit', async (ev) => {
     const data = await res.json();
     if (data.ok && data.task) {
       renderTaskResult(progressRow, data.task);
+      // The send only registered the run; the answer arrives by polling.
+      // Awaited, so the composer stays disabled until the task settles —
+      // one conversation, one turn at a time.
+      await followTask(progressRow, data.task);
     } else if (data.ok && data.message) {
       // Some agents may reply with a bare Message instead of a Task.
       const bubble = document.createElement('div');

@@ -47,15 +47,30 @@ const protocolVersion = "1.0"
 const protocolBindingJSONRPC = "JSONRPC"
 
 // TaskState values, verbatim from the spec's TaskState enum. Only the
-// three terminal ones this adapter can ever reach are named: task
-// execution here is synchronous (see task.go's handleSendMessage), so a
-// Task is already in a terminal state by the time any client can
-// observe it — there is deliberately no constant for SUBMITTED/WORKING/
-// INPUT_REQUIRED/AUTH_REQUIRED/REJECTED, because emitting one would be
-// a claim this adapter cannot back up.
+// states this adapter can actually reach are named — emitting one it
+// cannot back up would be a claim, not a status. There is deliberately
+// no constant for SUBMITTED, AUTH_REQUIRED, or INPUT_REQUIRED: nothing
+// here queues work before starting it, authentication is settled before
+// a request reaches this package at all, and no skill ever asks a
+// question back.
 const (
 	taskStateCompleted = "TASK_STATE_COMPLETED"
 	taskStateFailed    = "TASK_STATE_FAILED"
+	// taskStateWorking is what a returnImmediately caller gets back
+	// while its run is still going. The client polls GetTask until the
+	// state is terminal.
+	taskStateWorking = "TASK_STATE_WORKING"
+	// taskStateCanceled is where CancelTask puts a background run it
+	// stopped. Reachable only for those: a blocking send has already
+	// finished before its caller learns the id.
+	// One L: that is the proto enum's own spelling, and the SDK maps any
+	// string it does not recognise to UNSPECIFIED — so "CANCELLED" would
+	// have reached the UI as a blank state rather than an error.
+	taskStateCanceled = "TASK_STATE_CANCELED"
+	// taskStateRejected is never emitted here, and is named only so
+	// isTerminalState can classify it if a future skill starts refusing
+	// work outright.
+	taskStateRejected = "TASK_STATE_REJECTED"
 )
 
 // Role values, verbatim from the spec's Role enum.
@@ -283,6 +298,11 @@ type sendMessageParams struct {
 // the data instead of restating it. See outputModes below.
 type sendMessageConfiguration struct {
 	AcceptedOutputModes []string `json:"acceptedOutputModes,omitempty"`
+	// ReturnImmediately asks for the task id now and the answer later,
+	// via GetTask. Absent (the default) keeps the blocking behaviour
+	// every caller had before: simpler, and better for a reply that
+	// takes seconds.
+	ReturnImmediately bool `json:"returnImmediately,omitempty"`
 }
 
 // accepted reports whether the client will render mediaType.

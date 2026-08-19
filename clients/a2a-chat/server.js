@@ -359,11 +359,13 @@ const server = createServer(async (req, res) => {
 
       // Propagate a browser-side cancel into the outbound call: if the
       // client disconnects (fetch aborted) before we've written a
-      // response, abort the in-flight request to the agent too. This is
-      // the only real "cancel while in flight" available for an agent
-      // like JLP whose SendMessage blocks until the task is terminal —
-      // there is no task id to hand CancelTask until the call returns.
-      // See README's "Cancel" section for the honest version of this.
+      // response, abort the in-flight request to the agent too.
+      //
+      // This window is now milliseconds wide — SendMessage returns as
+      // soon as the task is registered — so it only covers a cancel
+      // during the send itself. Cancelling the *run* is CancelTask,
+      // which the browser can now reach because it has the task id
+      // while the work is still going.
       const controller = new AbortController();
       let clientGone = false;
       res.on('close', () => {
@@ -393,7 +395,13 @@ const server = createServer(async (req, res) => {
               acceptedOutputModes: ['text/plain', ...Object.values(MEDIA_TYPES)],
               taskPushNotificationConfig: undefined,
               historyLength: undefined,
-              returnImmediately: false,
+              // Take the task id and poll, rather than holding this
+              // connection open for the whole run. A coordinate run is
+              // two full agent runs and takes minutes; waiting for it
+              // inline died twice, at the agent's write timeout and
+              // then at undici's 300s header timeout. The browser polls
+              // /api/task from here on — see public/app.js followTask.
+              returnImmediately: true,
             },
             metadata: undefined,
           },

@@ -272,6 +272,25 @@ func withRenderingNote(system string, cfg *sendMessageConfiguration) string {
 type taskRecord struct {
 	Identity learner.IdentityID
 	Task     Task
+
+	// cancel stops a background run (async.go), and is nil for every
+	// task that is already finished — which is every task the blocking
+	// path produces. Lowercase because it is process state, not part of
+	// the cached response: it must never be serialised to a client.
+	cancel context.CancelFunc
+}
+
+// isTerminalState reports whether a task has stopped moving.
+//
+// Named states rather than "not one of the running ones", because the
+// spec's list can grow and a new state defaulting to "finished" would
+// have GetTask callers stop polling a task that is still working.
+func isTerminalState(state string) bool {
+	switch state {
+	case taskStateCompleted, taskStateFailed, taskStateCanceled, taskStateRejected:
+		return true
+	}
+	return false
 }
 
 // stringFromMetadata reads key out of a metadata map as a non-empty
@@ -328,20 +347,23 @@ func sessionFrom(p sendMessageParams) *session.ID {
 	return nil
 }
 
-// handleSendMessage serves the SendMessage method: it runs the selected
-// skill's underlying agent through runner.Run, SYNCHRONOUSLY, and
-// returns the finished Task. By the time this responds the run has
-// already completed (or failed) and the Task's state is already
-// TASK_STATE_COMPLETED/TASK_STATE_FAILED — never SUBMITTED or WORKING.
+// handleSendMessage serves the SendMessage method, blocking by default
+// and returning early when the caller asks.
 //
-// That is allowed, and is in fact the protocol's default: v1.0's
+// Blocking is the protocol's default: v1.0's
 // SendMessageConfiguration.returnImmediately defaults to false, meaning
 // "the operation MUST wait until the task reaches a terminal or
-// interrupted state before returning". It is also the honest shape for
-// what's underneath — JLP's agent-run loop is already a single bounded
-// (MaxTurns-capped) synchronous call, so there is no long-running work
-// to hand a task id back early for. GetTask still exists, for clients
-// that always poll after sending; it just always finds the task done.
+// interrupted state before returning". For a one-turn chat reply that is
+// also the better experience — a task id you then have to poll for is
+// worse than an answer.
+//
+// It stopped being the honest shape for everything the moment agents
+// grew tools. A coordinate run is two full agent runs and takes minutes,
+// and holding a connection open for it cost us twice: the server hung up
+// at its 60s WriteTimeout while the run completed anyway, and raising
+// that only moved the wall to the client's own 300s header timeout. With
+// returnImmediately the caller gets a task id in milliseconds and polls
+// GetTask, which this adapter already serves.
 func (s *Server) handleSendMessage(ctx context.Context, identity learner.IdentityID, params json.RawMessage) (any, *rpcError) {
 	var p sendMessageParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -364,7 +386,7 @@ func (s *Server) handleSendMessage(ctx context.Context, identity learner.Identit
 		contextID = uuid.NewString()
 	}
 
-	out, runErr := s.runner.Run(ctx, agentrun.RunInput{
+	run := agentrun.RunInput{
 		Agent:         def.Agent,
 		PromptName:    def.PromptName,
 		PromptVersion: def.PromptVersion,
@@ -372,7 +394,13 @@ func (s *Server) handleSendMessage(ctx context.Context, identity learner.Identit
 		Messages:      []ai.ToolMessage{{Role: "user", Text: input}},
 		Identity:      identity,
 		SessionID:     sessionFrom(p),
-	})
+	}
+
+	if p.Configuration != nil && p.Configuration.ReturnImmediately {
+		return s.startAsync(ctx, identity, p, skillID, def, run, contextID)
+	}
+
+	out, runErr := s.runner.Run(ctx, run)
 
 	// The run is over, so its consultation record is dead weight.
 	s.forgetConsultations(out.RunID)
@@ -413,40 +441,7 @@ func (s *Server) handleSendMessage(ctx context.Context, identity learner.Identit
 		Metadata: map[string]any{"skill": skillID},
 	}
 
-	agentMsg := Message{
-		MessageID: uuid.NewString(),
-		ContextID: contextID,
-		TaskID:    taskID,
-		Role:      roleAgent,
-	}
-	if runErr != nil {
-		task.Status.State = taskStateFailed
-		// A Task has no error field; the spec's place for "why" is the
-		// status message, so that is where a failed run's error goes
-		// rather than being dropped or smuggled into an artifact that
-		// would read as a successful answer.
-		agentMsg.Parts = []Part{textPart(runErr.Error())}
-		task.Status.Message = &agentMsg
-	} else {
-		task.Status.State = taskStateCompleted
-		agentMsg.Parts = []Part{textPart(out.Text)}
-		// The prose part comes FIRST and always. Widgets are enrichment
-		// on top of a complete answer: any A2A client may ignore parts it
-		// does not understand, and other clients will — so nothing a
-		// reader needs may exist only inside a data part. See widgets.go.
-		//
-		// The status message deliberately keeps prose alone: it is the
-		// short "here is what happened" summary, while the artifact is
-		// the result being handed over.
-		artifactParts := append([]Part{textPart(out.Text)}, widgetParts(out.ToolCalls, p.Configuration)...)
-		task.Artifacts = []Artifact{{
-			ArtifactID:  uuid.NewString(),
-			Name:        skillID,
-			Description: def.Name + " result",
-			Parts:       artifactParts,
-		}}
-	}
-	task.History = append(task.History, agentMsg)
+	task = applyOutcome(task, skillID, def, p.Configuration, out, runErr)
 
 	s.remember(taskID, taskRecord{Identity: identity, Task: task})
 
@@ -493,13 +488,12 @@ func (s *Server) handleGetTask(identity learner.IdentityID, params json.RawMessa
 
 // handleCancelTask serves the CancelTask method.
 //
-// Every task this adapter has ever created is already in a terminal
-// state before the caller could learn its id (handleSendMessage runs
-// the whole agent-run loop before responding), so there is nothing here
-// that can be cancelled and -32002 TASK_NOT_CANCELABLE is the correct,
-// spec-named answer — not a stub, and not a silently successful no-op
-// that would tell a client it had stopped work that in fact already
-// finished.
+// Only a background run (async.go) can be cancelled, and that is not a
+// limitation so much as a definition: a blocking send has already
+// finished by the time its caller learns the task id, so there is
+// nothing left to stop. For those, -32002 TASK_NOT_CANCELABLE is the
+// spec-named answer — not a silently successful no-op that would tell a
+// client it had stopped work that in fact already completed.
 //
 // The identity check runs FIRST and answers -32001 for a task belonging
 // to someone else, exactly as GetTask does. Answering "not cancelable"
@@ -512,5 +506,83 @@ func (s *Server) handleCancelTask(identity learner.IdentityID, params json.RawMe
 	if _, rpcErr := s.lookup(identity, p.ID); rpcErr != nil {
 		return nil, rpcErr
 	}
-	return nil, rpcErrf(errTaskNotCancelable, "task has already reached a terminal state and cannot be canceled")
+
+	task, cancel, ok := s.markCanceled(p.ID)
+	if !ok {
+		return nil, rpcErrf(errTaskNotCancelable, "task has already reached a terminal state and cannot be canceled")
+	}
+	// Outside the lock, and after the state is already CANCELED: the run
+	// goroutine wakes on this and calls settle, which finds a terminal
+	// task and leaves the user's answer standing.
+	cancel()
+	return task, nil
+}
+
+// markCanceled flips a running task to CANCELED and hands back its
+// cancel func, or reports false if there was nothing to stop.
+//
+// One critical section, because "is it still running" and "claim it"
+// have to be the same decision — otherwise two concurrent CancelTasks
+// both believe they stopped it, or one races the run's own completion.
+func (s *Server) markCanceled(id string) (Task, context.CancelFunc, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, found := s.tasks[id]
+	if !found || rec.cancel == nil || isTerminalState(rec.Task.Status.State) {
+		return Task{}, nil, false
+	}
+	cancel := rec.cancel
+	rec.cancel = nil
+	rec.Task.Status.State = taskStateCanceled
+	rec.Task.Status.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	// No status message: the state IS the explanation, and inventing
+	// prose here would put words in the agent's mouth about a run it
+	// never got to finish.
+	rec.Task.Status.Message = nil
+	s.tasks[id] = rec
+	return rec.Task, cancel, true
+}
+
+// applyOutcome turns a finished run into the task's terminal state.
+//
+// Shared by the blocking path and the background one, because two copies
+// of "what a finished run looks like" would drift — and the async copy
+// is the one nobody reads.
+func applyOutcome(task Task, skillID string, def skillDef, cfg *sendMessageConfiguration, out agentrun.RunOutput, runErr error) Task {
+	agentMsg := Message{
+		MessageID: uuid.NewString(),
+		ContextID: task.ContextID,
+		TaskID:    task.ID,
+		Role:      roleAgent,
+	}
+	if runErr != nil {
+		task.Status.State = taskStateFailed
+		// A Task has no error field; the spec's place for "why" is the
+		// status message, so that is where a failed run's error goes
+		// rather than being dropped or smuggled into an artifact that
+		// would read as a successful answer.
+		agentMsg.Parts = []Part{textPart(runErr.Error())}
+		task.Status.Message = &agentMsg
+	} else {
+		task.Status.State = taskStateCompleted
+		agentMsg.Parts = []Part{textPart(out.Text)}
+		// The prose part comes FIRST and always. Widgets are enrichment
+		// on top of a complete answer: any A2A client may ignore parts it
+		// does not understand, and other clients will — so nothing a
+		// reader needs may exist only inside a data part. See widgets.go.
+		//
+		// The status message deliberately keeps prose alone: it is the
+		// short "here is what happened" summary, while the artifact is
+		// the result being handed over.
+		artifactParts := append([]Part{textPart(out.Text)}, widgetParts(out.ToolCalls, cfg)...)
+		task.Artifacts = []Artifact{{
+			ArtifactID:  uuid.NewString(),
+			Name:        skillID,
+			Description: def.Name + " result",
+			Parts:       artifactParts,
+		}}
+	}
+	task.Status.Timestamp = time.Now().UTC().Format(time.RFC3339)
+	task.History = append(task.History, agentMsg)
+	return task
 }

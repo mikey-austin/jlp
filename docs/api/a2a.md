@@ -175,8 +175,9 @@ authentication failure and answers `401`.
 
 ### `SendMessage`
 
-Runs the selected skill, **synchronously**, and returns the finished
-`Task`.
+Runs the selected skill and returns a `Task`. Blocking by default;
+set `configuration.returnImmediately` to get the task id straight away
+and poll `GetTask` for the answer. See "Blocking and background runs".
 
 ```sh
 curl -s -X POST http://localhost:28080/a2a/v1 \
@@ -209,8 +210,9 @@ curl -s -X POST http://localhost:28080/a2a/v1 \
 }
 ```
 
-- `state` is always `TASK_STATE_COMPLETED` or `TASK_STATE_FAILED` —
-  never `SUBMITTED` or `WORKING`. See "Why synchronous".
+- Blocking (the default): `state` is already `TASK_STATE_COMPLETED` or
+  `TASK_STATE_FAILED`. With `returnImmediately`: `TASK_STATE_WORKING`,
+  and the artifacts arrive later under the same task id.
 - A **failed run is not an RPC error**. It returns a `Task` in
   `TASK_STATE_FAILED` whose `status.message` carries the reason, so the
   caller still gets a task id — and with it the `/ai/agents` trace row.
@@ -232,10 +234,16 @@ to another identity — deliberately the same answer.
 
 ### `CancelTask`
 
-Always `-32002 TASK_NOT_CANCELABLE` for a task you own: every task this
-adapter creates is already terminal before you could learn its id, so
-there is nothing to cancel and saying otherwise would be a lie. `-32001`
-for a task you don't own or that doesn't exist.
+Stops a background run and answers with the `Task` in
+`TASK_STATE_CANCELED`. The run's goroutine unwinds with a
+context-cancelled error, which is discarded rather than written over the
+state you asked for.
+
+`-32002 TASK_NOT_CANCELABLE` for a task that has already finished —
+which is every task a blocking `SendMessage` produces, since it is done
+before you learn its id. `-32001` for a task you don't own or that
+doesn't exist, deliberately the same answer for both: "not cancelable"
+would confirm the existence of a task you cannot read.
 
 ## Skills
 
@@ -285,18 +293,45 @@ trace to a real JLP session, pass it explicitly:
 {"message": {"…": "…", "metadata": {"session_id": "<a real sessions.id>"}}}
 ```
 
-## Why synchronous
+## Blocking and background runs
 
-`SendMessage` runs the whole agent-run loop before responding — the
-`state` in that response is already final. This is not a shortcut around
-the protocol: v1.0's `SendMessageConfiguration.returnImmediately`
-defaults to **false**, meaning "the operation MUST wait until the task
-reaches a terminal or interrupted state before returning". It is also
-the honest shape for what's underneath — JLP's agent-run loop is already
-one bounded, `MaxTurns`-capped, synchronous call, so there is no
-genuinely long-running work that would justify a queue-and-poll design.
-`GetTask` exists so a client that always polls after sending still gets
-the shape it expects; it will simply always find the task already done.
+`SendMessage` blocks by default, running the whole agent-run loop before
+responding, so the `state` in that response is already final. That is
+the protocol's default too: v1.0's
+`SendMessageConfiguration.returnImmediately` defaults to **false**,
+meaning "the operation MUST wait until the task reaches a terminal or
+interrupted state before returning". For a one-turn reply it is also the
+better answer — a task id you then have to poll for is worse than the
+reply itself.
+
+It stops being the right shape once a run takes minutes. `coordinate`
+delegates to specialists, which means two or more full agent runs, and
+holding an HTTP connection open across that failed twice: the server hung
+up at its write timeout while the run completed anyway, and raising that
+only moved the wall to the client's own header timeout. Send
+`"configuration": {"returnImmediately": true}` and you get a
+`TASK_STATE_WORKING` task back in milliseconds:
+
+```sh
+curl -s -X POST http://localhost:28080/a2a/v1 -H 'Content-Type: application/json' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"SendMessage","params":{
+        "message":{"messageId":"m1","role":"ROLE_USER",
+                   "parts":[{"text":"..."}],
+                   "metadata":{"skill":"coordinate"}},
+        "configuration":{"returnImmediately":true}}}' | jq -r .result.task.id
+```
+
+Then poll `GetTask` with that id until `status.state` is terminal. The
+completed task replaces the working one **under the same id**, so a
+poller sees its state change rather than having to discover a new task.
+
+Background runs are capped at 4 in flight and 15 minutes each. A blocking
+caller is self-limiting — it waits, so it cannot start a second — and
+`returnImmediately` removes that brake, so a client in a loop could
+otherwise start unbounded agent runs, each costing real money. Past the
+cap you get a `TASK_STATE_FAILED` task saying so, not an RPC error:
+being at capacity is an answer about the work, and a task is a shape
+every client already handles.
 
 The task `id` is the underlying `agent_runs.id` (the same identifier the
 `/ai/agents` trace viewer uses) when the run got far enough to be

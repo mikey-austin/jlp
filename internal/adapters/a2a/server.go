@@ -71,16 +71,24 @@ type Server struct {
 	// mu, and cleared by handleSendMessage when the run it belongs to
 	// ends — see forgetConsultations.
 	consulted map[string]map[string]bool
-	reg       *tools.Registry
-	cfg       config.A2A
+	// asyncSlots caps background runs in flight — see async.go. Buffered
+	// to maxConcurrentAsyncRuns; a send that would block means we are at
+	// the cap.
+	asyncSlots chan struct{}
+	reg        *tools.Registry
+	cfg        config.A2A
 
-	// mu/tasks/order back the GetTask method: since task execution is
-	// synchronous (see task.go's handleSendMessage doc comment), this is
-	// nothing more than a small response cache of tasks THIS process
-	// already computed — never a second source of truth for the run
+	// mu/tasks/order back the GetTask method: a small cache of tasks THIS
+	// process produced — never a second source of truth for the run
 	// itself, which remains the agent_runs row application/agentrun.Runner
 	// already persisted (viewable at /ai/agents). A process restart
 	// loses this cache; the underlying agent_runs row does not.
+	//
+	// A background run (async.go) additionally lives here while it is
+	// still going, which is what a returnImmediately caller polls. That
+	// makes the map process state as well as a cache — but not a source
+	// of truth even then: losing it to a restart loses the ability to
+	// poll a run, not the run's own record.
 	//
 	// order is the insertion order of the ids in tasks, so the cache can
 	// be capped at maxCachedTasks: every Task holds a full model
@@ -123,11 +131,12 @@ type agentRunner interface {
 
 func New(runner agentRunner, reg *tools.Registry, cfg config.A2A) *Server {
 	return &Server{
-		runner:    runner,
-		reg:       reg,
-		cfg:       cfg,
-		tasks:     make(map[string]taskRecord),
-		consulted: make(map[string]map[string]bool),
+		runner:     runner,
+		reg:        reg,
+		cfg:        cfg,
+		tasks:      make(map[string]taskRecord),
+		consulted:  make(map[string]map[string]bool),
+		asyncSlots: make(chan struct{}, maxConcurrentAsyncRuns),
 	}
 }
 
@@ -144,6 +153,28 @@ func (s *Server) remember(id string, rec taskRecord) {
 		delete(s.tasks, s.order[0])
 		s.order = s.order[1:]
 	}
+}
+
+// settle records a background run's terminal task, unless the task has
+// already reached a terminal state — which means CancelTask got there
+// first, and the run's own answer (a context-cancelled error) is a
+// consequence of that cancel rather than news about the work.
+//
+// The check and the write are one critical section: a cancel arriving
+// between a read and a write would otherwise be silently overwritten.
+func (s *Server) settle(id string, task Task) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, found := s.tasks[id]
+	if !found {
+		return // evicted mid-run; nothing left to update
+	}
+	if isTerminalState(rec.Task.Status.State) {
+		return
+	}
+	rec.Task = task
+	rec.cancel = nil // the run is over; nothing left to cancel
+	s.tasks[id] = rec
 }
 
 // rpcRoute is the JSON-RPC endpoint's path, relative to the adapter's
