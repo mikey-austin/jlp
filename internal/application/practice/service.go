@@ -39,11 +39,23 @@ type StartOptions struct {
 	// Empty means "route normally", which is what every non-interactive
 	// caller (the channel adapters) wants: nobody is there to pick.
 	ProviderOverride string
-	// SkipWords passes over the recent-word queue for this drill, so a
-	// large vocabulary cannot crowd grammar out entirely. The caller
-	// decides the rhythm — see the HTTP layer's conceptEvery — because
-	// only it knows where in a run this drill sits.
-	SkipWords bool
+	// Want is the KIND of drill this slot should be. The caller decides,
+	// because only it knows which kinds the learner asked for and where
+	// in a run this drill sits.
+	//
+	// Every kind is a preference, not a demand: a slot that cannot be
+	// filled as asked falls through to whatever IS available, because a
+	// learner pressing 練習する wants a question more than they want a
+	// particular sort of question.
+	Want Kind
+	// PassageSubjects are vocabulary ids a passage should be built from,
+	// ahead of whatever the queues offer.
+	//
+	// This is what makes "drill some words, then read a paragraph using
+	// them" one coherent exercise rather than two unrelated ones: the
+	// caller knows which words this run has covered, and a passage over
+	// exactly those is a comprehension check on work just done.
+	PassageSubjects []string
 	// ExcludeSubject is a subject this drill must NOT be about, named by
 	// the caller because only it knows what it just served.
 	//
@@ -55,13 +67,23 @@ type StartOptions struct {
 	// is adjacency, and a word that comes back later because it was
 	// answered wrong is the scheduler working, not a bug.
 	ExcludeSubject string
-	// WantPassage asks for a reading passage over several words the
-	// learner is revising, rather than a single-word drill. Honoured only
-	// when enough words are actually available (passageWordCount); a run
-	// slot that cannot be filled this way falls through to the ordinary
-	// order rather than failing.
-	WantPassage bool
 }
+
+// Kind names a shape of drill.
+type Kind string
+
+const (
+	// KindAny lets Build choose by its own priority order.
+	KindAny Kind = ""
+	// KindWord is one vocabulary item — a cloze over its own sentence,
+	// or a flip card when it has none.
+	KindWord Kind = "word"
+	// KindGrammar is a generated exercise for a grammar concept.
+	KindGrammar Kind = "grammar"
+	// KindPassage is a short passage reusing several words, with a
+	// comprehension question about it.
+	KindPassage Kind = "passage"
+)
 
 // ErrInvalidConfidence is returned when Answer is asked to record a
 // confidence outside the documented 0 (not given) / 1..5 (valid) range.
@@ -175,15 +197,15 @@ func (s *Service) Build(ctx context.Context, identity learner.IdentityID, opts S
 	// A recent word short-circuits everything below, including the model
 	// call: nothing to generate, so nothing to wait for or pay for.
 	//
-	// SkipWords is what stops that from becoming a monopoly. A learner
-	// who imports 500 words has 500 recent ones, and pure recency would
-	// mean 500 word drills before a single grammar question — the
+	// Want == KindGrammar is what stops that from becoming a monopoly. A
+	// learner who imports 500 words has 500 recent ones, and pure recency
+	// would mean 500 word drills before a single grammar question — the
 	// ordering the caller asked for, taken to a place nobody wants.
 	// A passage reuses SEVERAL words at once, so it is tried before the
 	// single-word branches — otherwise the first of those words would be
 	// drilled alone and the slot spent.
-	if opts.WantPassage && !opts.SkipWords {
-		if ex, ok, err := s.passageDrill(ctx, identity, opts.ProviderOverride); err != nil {
+	if opts.Want == KindPassage {
+		if ex, ok, err := s.passageDrill(ctx, identity, opts); err != nil {
 			// Not fatal: a passage is the richest shape available, not a
 			// required one, and a learner is better served by an ordinary
 			// drill than by 練習 refusing to produce anything.
@@ -193,19 +215,19 @@ func (s *Service) Build(ctx context.Context, identity learner.IdentityID, opts S
 		}
 	}
 
-	if item, ok, err := s.recentWord(ctx, identity, opts.ExcludeSubject); opts.SkipWords {
+	if item, ok, err := s.recentWord(ctx, identity, opts.ExcludeSubject); opts.Want == KindGrammar {
 		_ = item
 	} else if err != nil {
 		return exercise.Exercise{}, fmt.Errorf("practice: recent word: %w", err)
 	} else if ok {
-		return s.persist(ctx, identity, s.drillFor(ctx, identity, item))
+		return s.drillFor(ctx, identity, item), nil
 	}
 
 	// A due WORD is drilled before a due concept is looked for, because
 	// both come from the same queue and the queue is already ordered by
-	// how overdue each item is. Skipped under SkipWords for the same
-	// reason the recent queue is.
-	if !opts.SkipWords {
+	// how overdue each item is. Skipped for a grammar slot, same as the
+	// recent queue is.
+	if opts.Want != KindGrammar {
 		if item, ok, err := s.dueWord(ctx, identity, opts.ExcludeSubject); err != nil {
 			return exercise.Exercise{}, fmt.Errorf("practice: due word: %w", err)
 		} else if ok {
@@ -293,8 +315,8 @@ const passageWordCount = 3
 // ok is false — with no error — when there are not enough words to make
 // a passage worth writing. That is the common case for a new learner,
 // and it is a fall-through, not a failure.
-func (s *Service) passageDrill(ctx context.Context, identity learner.IdentityID, providerOverride string) (exercise.Exercise, bool, error) {
-	items, err := s.passageCandidates(ctx, identity)
+func (s *Service) passageDrill(ctx context.Context, identity learner.IdentityID, opts StartOptions) (exercise.Exercise, bool, error) {
+	items, err := s.passageCandidates(ctx, identity, opts.PassageSubjects)
 	if err != nil {
 		return exercise.Exercise{}, false, err
 	}
@@ -315,7 +337,7 @@ func (s *Service) passageDrill(ctx context.Context, identity learner.IdentityID,
 	ex, _, err := s.agent.GeneratePassage(ctx, drill.PassageInput{
 		Identity:         identity,
 		Words:            words,
-		ProviderOverride: providerOverride,
+		ProviderOverride: opts.ProviderOverride,
 	})
 	if err != nil {
 		return exercise.Exercise{}, false, err
@@ -331,17 +353,42 @@ func (s *Service) passageDrill(ctx context.Context, identity learner.IdentityID,
 
 // passageCandidates gathers words worth revisiting, recent before due,
 // without repeats.
-func (s *Service) passageCandidates(ctx context.Context, identity learner.IdentityID) ([]vocabulary.Item, error) {
+func (s *Service) passageCandidates(ctx context.Context, identity learner.IdentityID, prefer []string) ([]vocabulary.Item, error) {
 	if s.vocab == nil {
 		return nil, nil
 	}
+
+	seen := map[string]bool{}
+	out := make([]vocabulary.Item, 0, passageWordCount)
+
+	// The words this run already drilled come first, so the passage
+	// reads as a comprehension check on work just done rather than as an
+	// unrelated paragraph. Walked in the order given, because that is
+	// the order they were drilled in.
+	if len(prefer) > 0 {
+		preferred, err := s.vocab.GetByIDs(ctx, identity, prefer)
+		if err != nil {
+			return nil, err
+		}
+		byID := make(map[string]vocabulary.Item, len(preferred))
+		for _, item := range preferred {
+			byID[item.ID] = item
+		}
+		for _, id := range prefer {
+			if item, found := byID[id]; found && !seen[id] && hasCardBack(item) {
+				seen[id] = true
+				out = append(out, item)
+			}
+		}
+		if len(out) >= passageWordCount {
+			return out[:passageWordCount], nil
+		}
+	}
+
 	recent, err := s.vocab.ListRecentUnpracticed(ctx, identity, s.now().UTC().Add(-recentWordWindow), recentWordScanLimit)
 	if err != nil {
 		return nil, err
 	}
-
-	seen := make(map[string]bool, len(recent))
-	out := make([]vocabulary.Item, 0, passageWordCount)
 	add := func(item vocabulary.Item) {
 		if seen[item.ID] || !hasCardBack(item) {
 			return
@@ -619,6 +666,7 @@ func wordCloze(item vocabulary.Item, example, form string, distractors []string)
 		SubjectType:    exercise.SubjectWord,
 		SubjectRef:     item.ID,
 		Type:           exercise.TypeWordCloze,
+		Definition:     meaning,
 		InstructionsJA: instructionsJA,
 		InstructionsEN: "Type the word that belongs in the blank.",
 		// Replaced everywhere it occurs: leaving a second, unblanked copy
@@ -714,6 +762,7 @@ func wordRecall(item vocabulary.Item) exercise.Exercise {
 		SubjectType:    exercise.SubjectWord,
 		SubjectRef:     item.ID,
 		Type:           exercise.TypeWordRecall,
+		Definition:     back,
 		InstructionsJA: "この語の読みと意味を思い出してください。",
 		InstructionsEN: "Recall this word's reading and meaning, then check yourself.",
 		Prompt:         item.Expression,

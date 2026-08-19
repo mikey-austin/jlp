@@ -62,12 +62,14 @@
           <input type="hidden" name="response" value="again">
           <input type="hidden" name="position" value="{{.Position}}">
           <input type="hidden" name="run_correct" value="{{.Streak}}">
+          <input type="hidden" name="drilled" value="{{.Drilled}}">
           <button type="submit" class="btn btn--ghost">もう一度</button>
         </form>
         <form hx-post="/practice/{{.ID}}/answer" hx-target="#exercise-area" hx-swap="innerHTML">
           <input type="hidden" name="response" value="knew">
           <input type="hidden" name="position" value="{{.Position}}">
           <input type="hidden" name="run_correct" value="{{.Streak}}">
+          <input type="hidden" name="drilled" value="{{.Drilled}}">
           <button type="submit" class="btn">できた</button>
         </form>
         </div>
@@ -140,6 +142,11 @@
   </div>
   {{end}}
 
+  {{/* Always shown once the answer is in: getting a word right without
+       recalling what it means is not knowing the word, and a choice
+       question makes that especially easy to do by elimination. */}}
+  {{if .Definition}}<p class="answer-definition">{{.Definition}}{{template "speak" .Definition}}</p>{{end}}
+
   {{/* The sentence restored, with the word emphasised. Shown only now:
        while a cloze is open, this IS the answer. */}}
   {{with .ExampleParts}}
@@ -185,7 +192,7 @@
     {{end}}
   </div>
   <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML"
-          hx-vals="js:{provider_override: document.getElementById('provider-override').value, position: 1, run_correct: 0}"
+          hx-vals="js:{...window.jlp.practiceVals(), position: 1, run_correct: 0, drilled: ''}"
           data-progress-into="#exercise-area"
           data-progress-label-from="#provider-override"
           data-progress-verb="が問題を作成中">もう一度やる</button>
@@ -193,7 +200,7 @@
   {{/* Reads the SAME #provider-override the page bar owns — it lives
        outside #exercise-area precisely so it survives this swap. */}}
   <button class="btn" hx-post="/practice/start" hx-target="#exercise-area" hx-swap="innerHTML"
-          hx-vals="js:{provider_override: document.getElementById('provider-override').value, position: {{.NextPosition}}, run_correct: {{.Streak}}}"
+          hx-vals="js:{...window.jlp.practiceVals(), position: {{.NextPosition}}, run_correct: {{.Streak}}, drilled: {{.Drilled}}}"
           data-progress-into="#exercise-area"
           data-progress-label-from="#provider-override"
           data-progress-verb="が問題を作成中">次の問題へ</button>

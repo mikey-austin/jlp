@@ -877,19 +877,19 @@ func TestAServiceWithNoVocabularyStillDrillsConcepts(t *testing.T) {
 // the caller asked for, taken somewhere nobody wants. SkipWords is the
 // caller's way out, and it has to actually bypass the queue rather than
 // merely reorder it.
-func TestSkipWordsPassesOverAFullWordQueue(t *testing.T) {
+func TestAGrammarSlotPassesOverAFullWordQueue(t *testing.T) {
 	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
 	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
 		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
 		recentItem("w2", "曖昧", "あいまい", "vague"),
 	}, now)
 
-	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{SkipWords: true})
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{Want: apppractice.KindGrammar})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	if ex.SubjectType != exercise.SubjectConcept {
-		t.Errorf("subject type = %q, want %q — SkipWords did not bypass the word queue",
+		t.Errorf("subject type = %q, want %q — a grammar slot did not bypass the word queue",
 			ex.SubjectType, exercise.SubjectConcept)
 	}
 }
@@ -1083,7 +1083,7 @@ func TestAPassageIsPreferredWhenAskedForAndEnoughWordsExist(t *testing.T) {
 		recentItem("w3", "微妙", "びみょう", "subtle"),
 	}, now)
 
-	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{WantPassage: true})
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{Want: apppractice.KindPassage})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
@@ -1104,7 +1104,7 @@ func TestAPassageFallsThroughWhenThereAreTooFewWords(t *testing.T) {
 		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
 	}, now)
 
-	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{WantPassage: true})
+	ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{Want: apppractice.KindPassage})
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}

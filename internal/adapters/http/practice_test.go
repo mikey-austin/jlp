@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -20,6 +22,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/exercise"
 	"github.com/mikeyaustin/jlp/internal/domain/grammar"
 	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	"github.com/mikeyaustin/jlp/internal/domain/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
@@ -440,5 +443,211 @@ func TestAnExampleSentenceIsEscapedNotInjected(t *testing.T) {
 	// And the emphasis itself IS markup, deliberately.
 	if !strings.Contains(body, "<strong>危ない</strong>") {
 		t.Errorf("the target word was not emphasised:\n%s", body)
+	}
+}
+
+// A fixed rhythm is learnable: with every third question grammar, a
+// learner stops reading the question and starts counting. The mix is
+// weighted and random, and these pin the parts that are NOT random.
+func TestThePickedKindIsAlwaysOneTheLearnerAllowed(t *testing.T) {
+	for _, allowed := range [][]apppractice.Kind{
+		{apppractice.KindWord},
+		{apppractice.KindGrammar},
+		{apppractice.KindWord, apppractice.KindGrammar},
+		{apppractice.KindWord, apppractice.KindGrammar, apppractice.KindPassage},
+	} {
+		for i := 0; i < 200; i++ {
+			got, _ := pickKind(passageAfter+1+i%3, allowed)
+			if got == apppractice.KindAny {
+				t.Fatalf("allowed %v produced KindAny", allowed)
+			}
+			if !slices.Contains(allowed, got) {
+				t.Fatalf("allowed %v produced %q", allowed, got)
+			}
+		}
+	}
+}
+
+// A comprehension check over words the learner has not met yet is just a
+// reading test. Over words they drilled two minutes ago it is the point
+// of the exercise.
+func TestNoPassageBeforeTheRunHasCoveredSomething(t *testing.T) {
+	all := []apppractice.Kind{apppractice.KindWord, apppractice.KindGrammar, apppractice.KindPassage}
+	for position := 1; position <= passageAfter; position++ {
+		for i := 0; i < 200; i++ {
+			if got, _ := pickKind(position, all); got == apppractice.KindPassage {
+				t.Fatalf("position %d produced a passage before any word was drilled", position)
+			}
+		}
+	}
+	// And it does become possible afterwards, or the shape is unreachable.
+	seen := false
+	for i := 0; i < 500 && !seen; i++ {
+		k, _ := pickKind(passageAfter+1, all)
+		seen = k == apppractice.KindPassage
+	}
+	if !seen {
+		t.Error("a passage never came up after the threshold")
+	}
+}
+
+// A learner who ticks only 読解 still gets questions: words, so the
+// passage they asked for has something to be about.
+func TestAskingOnlyForPassagesStillProducesEarlyQuestions(t *testing.T) {
+	got, _ := pickKind(1, []apppractice.Kind{apppractice.KindPassage})
+	if got != apppractice.KindWord {
+		t.Errorf("got %q, want %q — a passage-only run must still start somewhere", got, apppractice.KindWord)
+	}
+}
+
+// An absent selection means ALL kinds, not none: a bookmark or a cached
+// page that has never heard of these boxes should get the full mix
+// rather than nothing.
+func TestNoCheckboxesMeansEveryKind(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPost, "/practice/start", nil)
+	if err := r.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	got := allowedKinds(r)
+	for _, want := range []apppractice.Kind{apppractice.KindWord, apppractice.KindGrammar, apppractice.KindPassage} {
+		if !slices.Contains(got, want) {
+			t.Errorf("allowedKinds = %v, missing %q", got, want)
+		}
+	}
+}
+
+// The run's covered words travel with it so a passage can be about them.
+// Deduplicated and capped, because a round trip must not grow without
+// bound.
+func TestDrilledSubjectsRoundTripCleanly(t *testing.T) {
+	form := url.Values{"drilled": {"a,b,,a, c ,b"}}
+	r := httptest.NewRequest(http.MethodPost, "/practice/start", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	if err := r.ParseForm(); err != nil {
+		t.Fatal(err)
+	}
+	got := drilledSubjectsFrom(r)
+	want := []string{"a", "b", "c"}
+	if !slices.Equal(got, want) {
+		t.Errorf("drilledSubjectsFrom = %v, want %v", got, want)
+	}
+}
+
+// The arc the passage exists for: drill the words, then read a paragraph
+// using them. Leaving it to a 1-in-9 draw meant twenty questions could
+// go by without one — measured, not assumed.
+func TestARunEndsWithAPassageWhenOneWasAskedFor(t *testing.T) {
+	all := []apppractice.Kind{apppractice.KindWord, apppractice.KindGrammar, apppractice.KindPassage}
+	for i := 0; i < 50; i++ {
+		if got, _ := pickKind(runLength, all); got != apppractice.KindPassage {
+			t.Fatalf("the last question of a run was %q, want %q", got, apppractice.KindPassage)
+		}
+	}
+}
+
+// Not when it was unticked, and not when the run is too short to have
+// covered anything.
+func TestTheClosingPassageRespectsTheSelectionAndTheThreshold(t *testing.T) {
+	withoutPassage := []apppractice.Kind{apppractice.KindWord, apppractice.KindGrammar}
+	for i := 0; i < 50; i++ {
+		if got, _ := pickKind(runLength, withoutPassage); got == apppractice.KindPassage {
+			t.Fatal("closed with a passage the learner had unticked")
+		}
+	}
+}
+
+// A prefetch miss falls back to a word drill because words are instant
+// and the reason for the miss is that generation is slow. That
+// substitution must NOT happen when the learner unticked 語彙: a
+// fallback that serves the one shape they excluded is not a fallback,
+// it is ignoring what they asked for. Caught in the browser, pinned
+// here.
+func TestAGrammarOnlyRunNeverServesAWordDrill(t *testing.T) {
+	opts := testOptions()
+	exerciseRepo := newPracticeExerciseRepo()
+	events := newFakeEventRepo()
+	rec := learning.NewRecorder(events, inprocbus.New())
+	grammarRepo := &practiceGrammarRepo{
+		concepts: []grammar.Concept{practiceTestConcept},
+		bySlug:   map[string]grammar.Concept{practiceTestConcept.Slug: practiceTestConcept},
+	}
+	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, grammarRepo, practicePriorityRepo{}, &fakeVocabRepo{}, time.Now)
+	// Vocabulary IS wired, and offers a drillable word. Without this the
+	// assertion below passes because no word drill was possible, not
+	// because none was chosen — which is exactly how the first version of
+	// this test proved nothing.
+	vocab := &fakeVocabRepo{recent: []vocabulary.Item{
+		{ID: "w1", Expression: "紛らわしい", Reading: "まぎらわしい", Meaning: "似ていて区別しにくい"},
+	}}
+	opts.Practice = apppractice.NewService(exerciseRepo, drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, nil, vocab, time.Now)
+	h := NewServer(opts).HandlerForTest()
+
+	// Sanity: with 語彙 allowed, this setup really does serve word drills.
+	form := url.Values{"position": {"1"}, "kind": {"word"}}
+	req := httptest.NewRequest(http.MethodPost, "/practice/start", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+	if !strings.Contains(w.Body.String(), `data-type="`+exercise.TypeWordRecall+`"`) {
+		t.Fatalf("the fixture cannot produce word drills at all, so the real assertion would be vacuous:\n%s", w.Body.String())
+	}
+
+	// No prefetch has run, so every one of these takes the fallback path.
+	for i := 0; i < 3; i++ {
+		form := url.Values{"position": {"1"}, "kind": {"grammar"}}
+		req := httptest.NewRequest(http.MethodPost, "/practice/start", strings.NewReader(form.Encode()))
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+		}
+		body := w.Body.String()
+		for _, wordShape := range []string{
+			`data-type="` + exercise.TypeWordRecall + `"`,
+			`data-type="` + exercise.TypeWordCloze + `"`,
+		} {
+			if strings.Contains(body, wordShape) {
+				t.Fatalf("a run with only 文法 ticked served %s", wordShape)
+			}
+		}
+	}
+}
+
+// The closing passage is a DECISION, not a draw, so the prefetch-miss
+// fallback must not quietly serve a word instead — otherwise the arc the
+// learner asked for never arrives. Caught in the browser: position 10
+// with everything ticked returned a word drill.
+func TestTheClosingPassageSurvivesAPrefetchMiss(t *testing.T) {
+	opts := testOptions()
+	events := newFakeEventRepo()
+	rec := learning.NewRecorder(events, inprocbus.New())
+	grammarRepo := &practiceGrammarRepo{
+		concepts: []grammar.Concept{practiceTestConcept},
+		bySlug:   map[string]grammar.Concept{practiceTestConcept.Slug: practiceTestConcept},
+	}
+	teachingPlanner := planner.NewPlanner(&fakeObservationRepo{}, events, grammarRepo, practicePriorityRepo{}, &fakeVocabRepo{}, time.Now)
+	// Words ARE available, so a fallback to one is possible — which is
+	// what makes this assertion mean something.
+	vocab := &fakeVocabRepo{recent: []vocabulary.Item{
+		{ID: "w1", Expression: "紛らわしい", Reading: "まぎらわしい", Meaning: "confusing"},
+		{ID: "w2", Expression: "曖昧", Reading: "あいまい", Meaning: "vague"},
+		{ID: "w3", Expression: "微妙", Reading: "びみょう", Meaning: "subtle"},
+	}}
+	opts.Practice = apppractice.NewService(newPracticeExerciseRepo(), drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, nil, vocab, time.Now)
+	h := NewServer(opts).HandlerForTest()
+
+	form := url.Values{"position": {strconv.Itoa(runLength)}, "kind": {"word", "grammar", "passage"}}
+	req := httptest.NewRequest(http.MethodPost, "/practice/start", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", w.Code, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), `data-type="`+exercise.TypePassageChoice+`"`) {
+		t.Errorf("the closing question was not a passage:\n%s", w.Body.String())
 	}
 }

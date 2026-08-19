@@ -3,6 +3,7 @@ package httpx
 import (
 	"context"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -77,17 +78,51 @@ type preparedDrill struct {
 // matchesSlot reports whether this prepared drill answers the question
 // being asked for.
 //
-// ExcludeSubject is deliberately NOT compared. It is an input to
-// selection — "not the card you just saw" — known only to the request
-// that STARTED the prefetch, never to the one that collects it. Treating
-// it as part of the slot's identity would make every single prefetch
-// miss, silently turning this whole file into dead weight while looking
-// like it worked.
+// Only the position and the adapter define the slot. Everything else in
+// StartOptions is an INPUT to selection, known to the request that
+// started the prefetch and not to the one collecting it:
+//
+//   - ExcludeSubject is "not the card you just saw".
+//   - PassageSubjects is what this run has covered.
+//   - Want is a random draw from the allowed mix, so the two requests
+//     would essentially never agree on it.
+//
+// Comparing any of them would make every prefetch miss, silently turning
+// this whole file into dead weight while looking like it worked. What
+// the collector cares about is answered instead by allows() below: not
+// "was this the drill I would have chosen" but "is this a drill I am
+// willing to show".
 func (d *preparedDrill) matchesSlot(position int, opts practice.StartOptions) bool {
-	return d.position == position &&
-		d.opts.ProviderOverride == opts.ProviderOverride &&
-		d.opts.SkipWords == opts.SkipWords &&
-		d.opts.WantPassage == opts.WantPassage
+	return d.position == position && d.opts.ProviderOverride == opts.ProviderOverride
+}
+
+// allows reports whether a prepared exercise is one of the kinds the
+// learner currently has selected.
+//
+// Checked on the built exercise rather than on the request that asked
+// for it, because a prefetch chooses a kind and the build may deliver a
+// different one — every kind is a preference, and an unfillable slot
+// falls through. It also catches the learner unticking a box mid-run:
+// the drill already prepared under the old selection is dropped rather
+// than shown.
+func allows(allowed []practice.Kind, ex exercise.Exercise) bool {
+	if len(allowed) == 0 {
+		return true
+	}
+	return slices.Contains(allowed, kindOf(ex))
+}
+
+// kindOf maps a built exercise back to the kind that would have asked
+// for it.
+func kindOf(ex exercise.Exercise) practice.Kind {
+	switch ex.Type {
+	case exercise.TypeWordRecall, exercise.TypeWordCloze:
+		return practice.KindWord
+	case exercise.TypePassageChoice:
+		return practice.KindPassage
+	default:
+		return practice.KindGrammar
+	}
 }
 
 // drillPrefetcher holds at most one prepared drill per learner.
@@ -107,7 +142,7 @@ func newDrillPrefetcher() *drillPrefetcher {
 // It blocks until the build finishes when one is in flight, which is the
 // case this exists for — the learner arriving while the model is still
 // answering. That wait is bounded by prefetchTimeout inside the build.
-func (p *drillPrefetcher) take(identity learner.IdentityID, position int, opts practice.StartOptions) (exercise.Exercise, bool) {
+func (p *drillPrefetcher) take(identity learner.IdentityID, position int, opts practice.StartOptions, allowed []practice.Kind) (exercise.Exercise, bool) {
 	p.mu.Lock()
 	prepared, ok := p.pending[identity]
 	if ok {
@@ -125,6 +160,10 @@ func (p *drillPrefetcher) take(identity learner.IdentityID, position int, opts p
 		// something else NOW; the goroutine finishes on its own and its
 		// result is dropped, which costs one model call and saves the
 		// learner from staring at a spinner.
+		return exercise.Exercise{}, false
+	}
+	if prepared.err == nil && !allows(allowed, prepared.ex) {
+		// Prepared under a selection the learner has since changed.
 		return exercise.Exercise{}, false
 	}
 	if prepared.err != nil {

@@ -69,6 +69,12 @@ type Exercise struct {
 	// except TypeFreeProduction, which has no single correct answer and
 	// is scored by internal/agent/drill.Agent.Evaluate instead.
 	Answer string
+	// Definition is the word's meaning, for a word drill. Carried
+	// separately from Acceptable because a cloze with choices has no
+	// acceptable alternatives to hide it in, and the answer card shows
+	// it either way: getting a word right without recalling what it
+	// means is not knowing the word.
+	Definition string
 	// Example is the sentence the learner met this word in, for a word
 	// drill — kept whole here even when the prompt shows it blanked, so
 	// the intact sentence can be shown once the answer is in.

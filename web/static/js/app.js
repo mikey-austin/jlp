@@ -526,3 +526,26 @@ document.addEventListener("click", function (evt) {
     btn.dataset.speaking = "unavailable";
   });
 })();
+
+// The 練習 controls that must travel with every request.
+//
+// The adapter select and the drill-type checkboxes live OUTSIDE
+// #exercise-area so a choice made once survives every swap — which means
+// each request has to go and read them. Collected here rather than
+// spelled out in each hx-vals, because there are four call sites and a
+// fifth that forgets one is how a setting silently stops applying.
+(function () {
+  "use strict";
+  window.jlp = window.jlp || {};
+
+  window.jlp.practiceVals = function () {
+    const provider = document.getElementById("provider-override");
+    const boxes = document.querySelectorAll('#drill-kinds input[name="kind"]:checked');
+    return {
+      provider_override: provider ? provider.value : "",
+      // htmx serialises an array into repeated parameters, which is what
+      // r.Form["kind"] reads on the other side.
+      kind: Array.from(boxes, (b) => b.value),
+    };
+  };
+})();

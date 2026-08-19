@@ -23,6 +23,8 @@ import (
 // (Phase 3 Task 8) tests — the same role fakeLearnerPriorityRepo/
 // fakeObservationRepo play for /learner.
 type fakeVocabRepo struct {
+	// recent is what ListRecentUnpracticed offers 練習.
+	recent       []vocabulary.Item
 	items        map[string]*vocabulary.Item
 	byID         map[string]*vocabulary.Item
 	clientEvents map[string]string
@@ -513,8 +515,12 @@ func TestAPIVocabularyIngestUnsupportedTypeReturnsBadRequest(t *testing.T) {
 
 // ListRecentUnpracticed is 練習's word-drill source; no test in this
 // package drills words, so reaching it means a wiring mistake.
+// ListRecentUnpracticed drives 練習's word drills. Returns whatever
+// `recent` holds, so a test that needs word drills to be POSSIBLE can
+// make them so — without that, a test asserting "no word drill was
+// served" passes because none could have been.
 func (r *fakeVocabRepo) ListRecentUnpracticed(context.Context, learner.IdentityID, time.Time, int) ([]vocabulary.Item, error) {
-	panic("not used by these tests")
+	return r.recent, nil
 }
 
 // GetByIDs resolves due words for 練習; the practice double below is the
@@ -525,7 +531,7 @@ func (r *fakeVocabRepo) GetByIDs(context.Context, learner.IdentityID, []string) 
 
 // LatestExamples backs 練習's cloze drills.
 func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []string) (map[string]string, error) {
-	panic("not used by these tests")
+	return nil, nil
 }
 
 // RecordExample stores a generated example sentence.

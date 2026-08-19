@@ -39,8 +39,11 @@ func (b *slowBuilder) Build(ctx context.Context, _ learner.IdentityID, _ practic
 
 const prefetchIdentity = learner.IdentityID("learner-a")
 
+// opts is one slot's options. The KIND is irrelevant to these tests —
+// the prefetcher deliberately does not treat it as part of the slot's
+// identity (see matchesSlot) — so they pin position and adapter only.
 func opts(position int) practice.StartOptions {
-	return drillOptionsFor(position, "")
+	return practice.StartOptions{}
 }
 
 // The point of the whole file: a drill asked for after being prepared
@@ -51,7 +54,7 @@ func TestAPreparedDrillIsServedWithoutRebuilding(t *testing.T) {
 	p := newDrillPrefetcher()
 
 	p.start(context.Background(), b, prefetchIdentity, 3, opts(3))
-	ex, ok := p.take(prefetchIdentity, 3, opts(3))
+	ex, ok := p.take(prefetchIdentity, 3, opts(3), nil)
 
 	if !ok {
 		t.Fatal("a drill prepared for position 3 was not served for position 3")
@@ -73,12 +76,12 @@ func TestAPreparedDrillIsNotServedForADifferentPosition(t *testing.T) {
 	p := newDrillPrefetcher()
 
 	p.start(context.Background(), b, prefetchIdentity, 3, opts(3))
-	if _, ok := p.take(prefetchIdentity, 4, opts(4)); ok {
+	if _, ok := p.take(prefetchIdentity, 4, opts(4), nil); ok {
 		t.Fatal("a drill prepared for position 3 was served for position 4")
 	}
 	// And it is gone: a stale prepared drill must not linger to be
 	// mistakenly matched later.
-	if _, ok := p.take(prefetchIdentity, 3, opts(3)); ok {
+	if _, ok := p.take(prefetchIdentity, 3, opts(3), nil); ok {
 		t.Error("a rejected prepared drill was still held")
 	}
 }
@@ -90,7 +93,7 @@ func TestAPreparedDrillIsNotSharedBetweenLearners(t *testing.T) {
 	p := newDrillPrefetcher()
 
 	p.start(context.Background(), b, prefetchIdentity, 3, opts(3))
-	if _, ok := p.take(learner.IdentityID("learner-b"), 3, opts(3)); ok {
+	if _, ok := p.take(learner.IdentityID("learner-b"), 3, opts(3), nil); ok {
 		t.Fatal("one learner was served another's prepared drill")
 	}
 }
@@ -105,7 +108,7 @@ func TestARequestArrivingMidBuildWaitsRatherThanRebuilding(t *testing.T) {
 
 	done := make(chan exercise.Exercise, 1)
 	go func() {
-		ex, _ := p.take(prefetchIdentity, 3, opts(3))
+		ex, _ := p.take(prefetchIdentity, 3, opts(3), nil)
 		done <- ex
 	}()
 
@@ -137,7 +140,7 @@ func TestAFailedPrefetchLooksLikeNothingPrepared(t *testing.T) {
 	p := newDrillPrefetcher()
 
 	p.start(context.Background(), b, prefetchIdentity, 3, opts(3))
-	if _, ok := p.take(prefetchIdentity, 3, opts(3)); ok {
+	if _, ok := p.take(prefetchIdentity, 3, opts(3), nil); ok {
 		t.Fatal("a failed prefetch was served as a drill")
 	}
 }
@@ -154,7 +157,7 @@ func TestAPrefetchSurvivesTheRequestThatStartedIt(t *testing.T) {
 	cancel() // exactly what the HTTP server does once the response is written
 	close(b.release)
 
-	ex, ok := p.take(prefetchIdentity, 3, opts(3))
+	ex, ok := p.take(prefetchIdentity, 3, opts(3), nil)
 	if !ok {
 		t.Fatal("the prefetch died with the request that started it")
 	}
@@ -176,7 +179,7 @@ func TestAPreparedDrillIsServedEvenThoughItExcludedSomething(t *testing.T) {
 	p.start(context.Background(), b, prefetchIdentity, 3, started)
 
 	// The collecting request knows the slot, not what was excluded.
-	if _, ok := p.take(prefetchIdentity, 3, opts(3)); !ok {
+	if _, ok := p.take(prefetchIdentity, 3, opts(3), nil); !ok {
 		t.Fatal("a prepared drill was rejected because it had excluded a subject")
 	}
 }
@@ -189,7 +192,7 @@ func TestARequestGivesUpOnASlowBuild(t *testing.T) {
 	p.start(context.Background(), b, prefetchIdentity, 3, opts(3))
 
 	start := time.Now()
-	_, ok := p.take(prefetchIdentity, 3, opts(3))
+	_, ok := p.take(prefetchIdentity, 3, opts(3), nil)
 	waited := time.Since(start)
 
 	if ok {

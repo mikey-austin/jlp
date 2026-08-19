@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,28 +69,44 @@ type exerciseView struct {
 	// Percent is Position/Total as a whole number, computed here because
 	// html/template cannot divide.
 	Percent int
+	// Drilled is the comma-separated vocabulary ids this run has covered,
+	// travelling back out the way it came in. A passage later in the run
+	// is built from them — see StartOptions.PassageSubjects.
+	Drilled string
 }
 
 // runLength is how many questions one practice run is. Ten is long
 // enough to feel like a session and short enough to finish in a sitting.
 const runLength = 10
 
-// conceptEvery is how often a run insists on a grammar drill regardless
-// of how many fresh words are queued. Every third: words still lead, and
-// still come freshest-first, but a 500-word import no longer means 500
-// drills before a single grammar question.
-const conceptEvery = 3
-
-// passageEvery is how often a run asks for a reading passage instead of
-// a single-word drill. Every fifth, so a ten-question run gets two —
-// enough to be a change of pace, rare enough that a run is still mostly
-// quick questions. Falls through when there are not enough words.
+// The mix of a run, when the learner has asked for everything.
 //
-// Chosen not to collide with conceptEvery: positions 3/6/9 are grammar,
-// 5/10 are passages, the rest are single words.
-const passageEvery = 5
+// Words lead: they are the material the learner actually collected, and
+// a word drill is instant. Grammar is the regular change of pace. A
+// passage is rare and comes last — it reuses several words at once, so
+// it is worth most AFTER some have been drilled, and it is the only
+// shape that always costs a model call.
+//
+// Weights rather than a fixed rhythm, because a fixed rhythm is
+// learnable: with every third question grammar, a learner stops reading
+// the question and starts counting. Randomness inside a bounded mix
+// keeps each slot a small surprise while keeping the proportions honest.
+var drillMix = []struct {
+	kind   practice.Kind
+	weight int
+}{
+	{practice.KindWord, 5},
+	{practice.KindGrammar, 3},
+	{practice.KindPassage, 1},
+}
 
-func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
+// passageAfter is how many questions a run asks before a passage becomes
+// possible. A comprehension check over words the learner has not met yet
+// is just a reading test; over words they drilled two minutes ago it is
+// the point of the exercise.
+const passageAfter = 3
+
+func toExerciseView(ex exercise.Exercise, position, streak int, drilled []string) exerciseView {
 	if position < 1 {
 		position = 1
 	}
@@ -105,6 +123,7 @@ func toExerciseView(ex exercise.Exercise, position, streak int) exerciseView {
 		Total:          runLength,
 		Streak:         streak,
 		Percent:        position * 100 / runLength,
+		Drilled:        strings.Join(drilled, ","),
 	}
 	if v.IsWord {
 		v.Reading = ex.Answer
@@ -149,6 +168,11 @@ type exerciseResultView struct {
 	// Answer is the canonical answer, shown alongside the diff. Only ever
 	// set once the attempt is over, never while the question is open.
 	Answer string
+	// Definition is the word's meaning, always shown once the answer is
+	// in. Getting a word right without recalling what it means is not
+	// knowing the word, and a choice question makes that especially easy
+	// to do by elimination.
+	Definition string
 	// ExampleParts is the intact example sentence with the target word
 	// emphasised — shown only now, once the attempt is over. For a cloze
 	// this is the sentence the question was made from, with the hole
@@ -160,12 +184,14 @@ type exerciseResultView struct {
 	Done                             bool
 	// Summary is set only on the last question of a set.
 	Summary *runSummaryView
+	// Drilled carries this run's covered words to the next question.
+	Drilled string
 	// NextPosition is where 次の問題へ resumes. Computed here because
 	// html/template cannot add.
 	NextPosition int
 }
 
-func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, response string, position, streak int) exerciseResultView {
+func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, response string, position, streak int, drilled []string) exerciseResultView {
 	v := exerciseResultView{
 		Correct:      eval.Correct,
 		Score:        eval.Score,
@@ -177,10 +203,12 @@ func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, respon
 		Percent:      position * 100 / runLength,
 		Done:         position >= runLength,
 		NextPosition: position + 1,
+		Drilled:      strings.Join(drilled, ","),
 	}
 	// The word's own sentence, restored. Not shown while the question is
 	// open — for a cloze it IS the answer.
 	if ex.SubjectType == exercise.SubjectWord {
+		v.Definition = ex.Definition
 		v.ExampleParts = highlight(ex.Example, ex.Answer)
 	}
 
@@ -245,12 +273,112 @@ func runStateFrom(r *http.Request) (position, streak int) {
 // the HTTP layer knows where in a run a drill sits — and it is one
 // function so that serving position N and PREPARING position N choose
 // identically. Two spellings of this would mean every prefetch missed.
-func drillOptionsFor(position int, override string) practice.StartOptions {
+func drillOptionsFor(position int, override string, allowed []practice.Kind, drilled []string) (practice.StartOptions, bool) {
+	kind, forced := pickKind(position, allowed)
 	return practice.StartOptions{
 		ProviderOverride: override,
-		SkipWords:        position%conceptEvery == 0,
-		WantPassage:      position%passageEvery == 0,
+		Want:             kind,
+		PassageSubjects:  drilled,
+	}, forced
+}
+
+// pickKind chooses this slot's shape from the kinds the learner allowed,
+// weighted by drillMix.
+//
+// A passage is excluded until passageAfter questions have been asked, so
+// it lands on words the run has already covered. With nothing allowed —
+// every box unchecked — the answer is KindAny, which lets the service
+// pick by its own priority order: refusing to produce a question would
+// be a worse reading of "none of these" than ignoring it.
+func pickKind(position int, allowed []practice.Kind) (kind practice.Kind, forced bool) {
+	// The last question of a run is a passage, when one was asked for and
+	// the run has had time to cover some words. That is the arc the
+	// shape exists for — drill the words, then read a paragraph using
+	// them and say what it means — and leaving it to a 1-in-9 draw meant
+	// twenty questions could go by without one.
+	if position >= runLength && position > passageAfter && slices.Contains(allowed, practice.KindPassage) {
+		return practice.KindPassage, true
 	}
+
+	type entry struct {
+		kind   practice.Kind
+		weight int
+	}
+	var eligible []entry
+	total := 0
+	for _, m := range drillMix {
+		if !slices.Contains(allowed, m.kind) {
+			continue
+		}
+		if m.kind == practice.KindPassage && position <= passageAfter {
+			continue
+		}
+		eligible = append(eligible, entry{m.kind, m.weight})
+		total += m.weight
+	}
+	if total == 0 {
+		// Either nothing was allowed, or the only allowed kind was a
+		// passage and it is too early for one. A learner who asked for
+		// passages only still gets a question — words, so the passage
+		// they asked for has something to be about.
+		if slices.Contains(allowed, practice.KindPassage) {
+			return practice.KindWord, false
+		}
+		return practice.KindAny, false
+	}
+
+	roll := rand.IntN(total)
+	for _, e := range eligible {
+		roll -= e.weight
+		if roll < 0 {
+			return e.kind, false
+		}
+	}
+	return eligible[len(eligible)-1].kind, false
+}
+
+// allowedKinds reads the start form's checkboxes.
+//
+// An absent parameter means ALL of them, not none: a caller that has
+// never heard of these boxes — a bookmark, an old cached page — should
+// get the full mix rather than nothing.
+func allowedKinds(r *http.Request) []practice.Kind {
+	values := r.Form["kind"]
+	if len(values) == 0 {
+		return []practice.Kind{practice.KindWord, practice.KindGrammar, practice.KindPassage}
+	}
+	out := make([]practice.Kind, 0, len(values))
+	for _, v := range values {
+		switch k := practice.Kind(v); k {
+		case practice.KindWord, practice.KindGrammar, practice.KindPassage:
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
+// drilledSubjectsFrom reads the vocabulary ids this run has covered,
+// which the previous question sent back.
+//
+// Carried through the exchange like the position and the streak, for the
+// same reason: it is a property of this run, not of the learner, and
+// storing it would mean deciding when an abandoned run expires. Capped,
+// because a round trip should not grow without bound.
+func drilledSubjectsFrom(r *http.Request) []string {
+	out := make([]string, 0, runLength)
+	seen := map[string]bool{}
+	for _, id := range strings.Split(r.FormValue("drilled"), ",") {
+		id = strings.TrimSpace(id)
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		out = append(out, id)
+		if len(out) == runLength {
+			break
+		}
+	}
+	return out
 }
 
 func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
@@ -266,27 +394,38 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	position, streak := runStateFrom(r)
-	opts := drillOptionsFor(position, override)
+	allowed := allowedKinds(r)
+	drilled := drilledSubjectsFrom(r)
+	opts, forced := drillOptionsFor(position, override, allowed, drilled)
 
 	// Already built while the learner was answering the previous
 	// question, in the common case — see practiceprefetch.go. A miss just
 	// means building it now.
-	ex, ok := s.prefetch.take(ident.ID, position, opts)
+	ex, ok := s.prefetch.take(ident.ID, position, opts, allowed)
 	var err error
 	if !ok {
 		// Nothing prepared, or it was still building when the learner
-		// arrived. Build now — but WITHOUT the slots that need a model:
-		// a word drill is instant and always available, and the whole
-		// reason this path is being taken is that generation is being
-		// slow. Falling back to a grammar drill here would reproduce the
-		// stall the prefetch exists to remove.
+		// arrived. Prefer a word drill: it is instant and always
+		// available, and the reason this path is being taken is that
+		// generation is being slow — falling back to a model call would
+		// reproduce the stall the prefetch exists to remove.
 		//
-		// The model is still reached when there is no vocabulary to draw
-		// on, which is the only case where waiting is the only option.
-		ex, err = s.opts.Practice.Build(r.Context(), ident.ID, practice.StartOptions{
-			ProviderOverride: opts.ProviderOverride,
-			ExcludeSubject:   opts.ExcludeSubject,
-		})
+		// Only when the learner ALLOWS words, though. Dropping the kind
+		// unconditionally meant a run with 語彙 unticked quietly served
+		// word drills anyway, which is not a fallback, it is ignoring
+		// what was asked for. With words excluded the wait is the honest
+		// cost of the selection.
+		fallback := opts
+		// Substituting only when the kind was a random DRAW. A forced
+		// kind is a decision — the run's closing passage, which is the
+		// whole arc of "drill the words, then read a paragraph using
+		// them" — and quietly serving a word instead of it means the
+		// shape the learner asked for never arrives. Then the wait is
+		// the honest cost of the decision.
+		if !forced && slices.Contains(allowed, practice.KindWord) {
+			fallback.Want = practice.KindWord
+		}
+		ex, err = s.opts.Practice.Build(r.Context(), ident.ID, fallback)
 	}
 	if err == nil {
 		ex, err = s.opts.Practice.Serve(r.Context(), ident.ID, ex)
@@ -309,12 +448,22 @@ func (s *Server) practiceStart(w http.ResponseWriter, r *http.Request) {
 		// Excluding what was just served: a word leaves the recent queue
 		// when it is ANSWERED, and this drill has only been shown, so
 		// without this the next one is very often the same card again.
-		nextOpts := drillOptionsFor(next, override)
+		// The words this run has covered travel with it, so a passage can
+		// be about them.
+		nextDrilled := drilled
+		if ex.SubjectType == exercise.SubjectWord && ex.SubjectRef != "" && !slices.Contains(nextDrilled, ex.SubjectRef) {
+			nextDrilled = append(append([]string{}, drilled...), ex.SubjectRef)
+		}
+		nextOpts, _ := drillOptionsFor(next, override, allowed, nextDrilled)
 		nextOpts.ExcludeSubject = ex.SubjectRef
 		s.prefetch.start(r.Context(), s.opts.Practice, ident.ID, next, nextOpts)
 	}
 
-	RenderPartial(w, r, "exercise", toExerciseView(ex, position, streak))
+	// drilled, not nextDrilled: the question form sends back what the run
+	// had covered BEFORE this one, and practiceAnswer adds this word when
+	// it is actually answered. Sending it now would count a question the
+	// learner abandoned.
+	RenderPartial(w, r, "exercise", toExerciseView(ex, position, streak, drilled))
 }
 
 // practiceAnswer handles an exercise form's submit: form field response
@@ -369,7 +518,13 @@ func (s *Server) practiceAnswer(w http.ResponseWriter, r *http.Request) {
 		streak = 0
 	}
 
-	view := toExerciseResultView(eval, ex, r.FormValue("response"), position, streak)
+	// The answered word joins the run's list, so a passage later on can
+	// be about it.
+	drilled := drilledSubjectsFrom(r)
+	if ex.SubjectType == exercise.SubjectWord && ex.SubjectRef != "" && !slices.Contains(drilled, ex.SubjectRef) {
+		drilled = append(drilled, ex.SubjectRef)
+	}
+	view := toExerciseResultView(eval, ex, r.FormValue("response"), position, streak, drilled)
 	if view.Done {
 		view.Summary = s.runSummary(r.Context(), ident.ID)
 	}
