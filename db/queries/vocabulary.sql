@@ -234,3 +234,28 @@ WHERE id = $1 AND identity_id = $2;
 -- db/queries/sessions.sql.
 UPDATE vocabulary_items SET deleted_at = NULL
 WHERE id = $1 AND identity_id = $2;
+
+-- name: ListRecentUnpracticedVocabulary :many
+-- 練習's first choice of what to drill (see
+-- application/practice.Service.Start): words added recently that the
+-- learner has never produced correctly, newest first.
+--
+-- Recency leads the whole selection order because a word added this
+-- week still has the context that produced it attached — the sentence
+-- it came from, why it was looked up — and that is the moment it is
+-- cheapest to learn. Everything past that window is the SRS
+-- scheduler's job, and stays so.
+--
+-- Both bounds are load-bearing. Without first_seen >= $2 every drill
+-- is a word forever; without successful_productions = 0 the same word
+-- repeats until its SRS interval catches up.
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags, deleted_at
+FROM vocabulary_items
+WHERE identity_id = $1
+  AND deleted_at IS NULL
+  AND first_seen >= sqlc.arg(added_since)
+  AND successful_productions = 0
+ORDER BY first_seen DESC
+LIMIT sqlc.arg(limit_count);

@@ -193,6 +193,75 @@ func (q *Queries) InsertVocabularyItemIfAbsent(ctx context.Context, arg InsertVo
 	return err
 }
 
+const listRecentUnpracticedVocabulary = `-- name: ListRecentUnpracticedVocabulary :many
+SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
+       lookups, productions, successful_productions, first_seen, last_event,
+       meaning_en, tags, deleted_at
+FROM vocabulary_items
+WHERE identity_id = $1
+  AND deleted_at IS NULL
+  AND first_seen >= $2
+  AND successful_productions = 0
+ORDER BY first_seen DESC
+LIMIT $3
+`
+
+type ListRecentUnpracticedVocabularyParams struct {
+	IdentityID string
+	AddedSince pgtype.Timestamptz
+	LimitCount int32
+}
+
+// 練習's first choice of what to drill (see
+// application/practice.Service.Start): words added recently that the
+// learner has never produced correctly, newest first.
+//
+// Recency leads the whole selection order because a word added this
+// week still has the context that produced it attached — the sentence
+// it came from, why it was looked up — and that is the moment it is
+// cheapest to learn. Everything past that window is the SRS
+// scheduler's job, and stays so.
+//
+// Both bounds are load-bearing. Without first_seen >= $2 every drill
+// is a word forever; without successful_productions = 0 the same word
+// repeats until its SRS interval catches up.
+func (q *Queries) ListRecentUnpracticedVocabulary(ctx context.Context, arg ListRecentUnpracticedVocabularyParams) ([]VocabularyItem, error) {
+	rows, err := q.db.Query(ctx, listRecentUnpracticedVocabulary, arg.IdentityID, arg.AddedSince, arg.LimitCount)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VocabularyItem
+	for rows.Next() {
+		var i VocabularyItem
+		if err := rows.Scan(
+			&i.ID,
+			&i.IdentityID,
+			&i.Expression,
+			&i.Reading,
+			&i.Meaning,
+			&i.Kind,
+			&i.JlptLevel,
+			&i.Source,
+			&i.Lookups,
+			&i.Productions,
+			&i.SuccessfulProductions,
+			&i.FirstSeen,
+			&i.LastEvent,
+			&i.MeaningEn,
+			&i.Tags,
+			&i.DeletedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listVocabularyActivationCandidates = `-- name: ListVocabularyActivationCandidates :many
 SELECT id, identity_id, expression, reading, meaning, kind, jlpt_level, source,
        lookups, productions, successful_productions, first_seen, last_event,

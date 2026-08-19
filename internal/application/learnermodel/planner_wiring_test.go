@@ -213,3 +213,9 @@ func TestRebuildWithNilPlannerIsSafe(t *testing.T) {
 func (panicVocabRepo) ListPage(context.Context, learner.IdentityID, string, storage.VocabularyCursor, int) ([]vocabulary.Item, storage.VocabularyCursor, error) {
 	panic("planner must not reach the vocabulary repository here")
 }
+
+// ListRecentUnpracticed is 練習's word-drill source; no test in this
+// package drills words, so reaching it means a wiring mistake.
+func (panicVocabRepo) ListRecentUnpracticed(context.Context, learner.IdentityID, time.Time, int) ([]vocabulary.Item, error) {
+	panic("not used by these tests")
+}

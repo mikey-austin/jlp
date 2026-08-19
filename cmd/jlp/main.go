@@ -341,7 +341,7 @@ func main() {
 		// TopConcept's own concept resolution) — the same shared
 		// instances feedbackSvc's construction above already established.
 		drillAgent := drill.New(aiGen)
-		practiceSvc := practice.NewService(postgres.NewExerciseRepository(pool), drillAgent, teachingPlanner, grammarRepo, recorder, retrievalSched)
+		practiceSvc := practice.NewService(postgres.NewExerciseRepository(pool), drillAgent, teachingPlanner, grammarRepo, recorder, retrievalSched, vocabRepo, time.Now)
 
 		// The conversation tutor (Phase 4 Task 6, PRD §17.4): a free-form
 		// dialogue alternative to the writing/feedback pane, in the same

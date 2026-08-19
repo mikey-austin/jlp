@@ -70,6 +70,15 @@ type VocabularyRepository interface {
 	// one indexed query regardless of how large a learner's vocabulary
 	// grows.
 	ListActivationCandidates(ctx context.Context, identity learner.IdentityID, limit int) ([]vocabulary.Item, error)
+	// ListRecentUnpracticed returns identity's words added at or after
+	// addedSince that have never been produced correctly, newest first,
+	// capped at limit.
+	//
+	// This is 練習's FIRST choice of what to drill, ahead of the spaced
+	// scheduler: a word added this week still has the context that
+	// produced it attached, and that is when it is cheapest to learn.
+	// Everything past the window is the scheduler's job.
+	ListRecentUnpracticed(ctx context.Context, identity learner.IdentityID, addedSince time.Time, limit int) ([]vocabulary.Item, error)
 	// AllExpressions returns every one of identity's vocabulary
 	// expressions mapped to its item ID — the candidate set
 	// application/vocabulary.Service.DetectProduction scans a reviewed

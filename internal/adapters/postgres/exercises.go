@@ -42,6 +42,8 @@ type exercisePayload struct {
 	IdentityID     string    `json:"identity_id"`
 	SessionID      *string   `json:"session_id,omitempty"`
 	ConceptSlug    string    `json:"concept_slug"`
+	SubjectType    string    `json:"subject_type,omitempty"`
+	SubjectRef     string    `json:"subject_ref,omitempty"`
 	Type           string    `json:"type"`
 	InstructionsJA string    `json:"instructions_ja"`
 	InstructionsEN string    `json:"instructions_en"`
@@ -78,6 +80,8 @@ func (r *ExerciseRepository) Create(ctx context.Context, ex exercise.Exercise) e
 		IdentityID:     string(ex.IdentityID),
 		SessionID:      sessionStr,
 		ConceptSlug:    ex.ConceptSlug,
+		SubjectType:    ex.SubjectType,
+		SubjectRef:     ex.SubjectRef,
 		Type:           ex.Type,
 		InstructionsJA: ex.InstructionsJA,
 		InstructionsEN: ex.InstructionsEN,
@@ -128,6 +132,8 @@ func (r *ExerciseRepository) Get(ctx context.Context, identity learner.IdentityI
 		ID:             payload.ID,
 		IdentityID:     learner.IdentityID(payload.IdentityID),
 		ConceptSlug:    payload.ConceptSlug,
+		SubjectType:    payload.SubjectType,
+		SubjectRef:     payload.SubjectRef,
 		Type:           payload.Type,
 		InstructionsJA: payload.InstructionsJA,
 		InstructionsEN: payload.InstructionsEN,
@@ -136,6 +142,14 @@ func (r *ExerciseRepository) Get(ctx context.Context, identity learner.IdentityI
 		Answer:         payload.Answer,
 		Acceptable:     payload.Acceptable,
 		CreatedAt:      payload.CreatedAt,
+	}
+	// Rows written before exercises carried a subject: every one of them
+	// was a concept drill, because that was the only kind there was.
+	// Normalised here rather than left empty so nothing downstream has to
+	// know the field arrived late.
+	if ex.SubjectType == "" {
+		ex.SubjectType = exercise.SubjectConcept
+		ex.SubjectRef = payload.ConceptSlug
 	}
 	if payload.SessionID != nil {
 		sid := session.ID(*payload.SessionID)

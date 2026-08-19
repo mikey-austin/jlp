@@ -510,3 +510,9 @@ func TestAPIVocabularyIngestUnsupportedTypeReturnsBadRequest(t *testing.T) {
 		t.Fatalf("error body missing error field: %s", rec.Body.String())
 	}
 }
+
+// ListRecentUnpracticed is 練習's word-drill source; no test in this
+// package drills words, so reaching it means a wiring mistake.
+func (r *fakeVocabRepo) ListRecentUnpracticed(context.Context, learner.IdentityID, time.Time, int) ([]vocabulary.Item, error) {
+	panic("not used by these tests")
+}

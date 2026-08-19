@@ -148,7 +148,11 @@ func (f *fakeEventStore) ListAll(context.Context, learner.IdentityID) ([]event.L
 	panic("not used by practice service tests")
 }
 
-type fakeVocabRepo struct{}
+type fakeVocabRepo struct {
+	recent     []vocabulary.Item
+	askedSince time.Time
+	askedLimit int
+}
 
 func (f *fakeVocabRepo) UpsertOnLookup(context.Context, learner.IdentityID, string, string, string, string, string, vocabulary.Kind, string, time.Time) (vocabulary.Item, bool, error) {
 	panic("not used by practice service tests")
@@ -233,7 +237,7 @@ func newTestHarness(gen ai.StructuredGenerator, prios storage.PriorityRepository
 	// planner/random-fallback path unchanged. TestStartPrefersDueConcept
 	// below builds its own Service directly with a real scheduler
 	// instead of going through this harness.
-	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, nil)
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, nil, nil, nil)
 	return &testHarness{svc: svc, repo: repo, grammar: grammarRepo, prios: prios, events: events}
 }
 
@@ -364,7 +368,7 @@ func TestAnswerCorrectChoiceNeverCallsAI(t *testing.T) {
 	ex := startExercise(t, h)
 
 	deny := &denyAfterStartGen{}
-	h.svc = apppractice.NewService(h.repo, drill.New(deny), planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, h.grammar, h.prios, &fakeVocabRepo{}, time.Now), h.grammar, learning.NewRecorder(h.events, inprocbus.New()), nil)
+	h.svc = apppractice.NewService(h.repo, drill.New(deny), planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, h.grammar, h.prios, &fakeVocabRepo{}, time.Now), h.grammar, learning.NewRecorder(h.events, inprocbus.New()), nil, nil, nil)
 
 	eval, err := h.svc.Answer(context.Background(), testIdentity, ex.ID, ex.Answer, 4)
 	if err != nil {
@@ -600,7 +604,7 @@ func TestStartPrefersDueConceptOverPlannerTopConcept(t *testing.T) {
 	rec := learning.NewRecorder(events, inprocbus.New())
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
 	agent := drill.New(fakeai.New())
-	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched, nil, nil)
 
 	ex, err := svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
@@ -630,7 +634,7 @@ func TestStartFallsBackToPlannerWhenNothingDueIsConceptType(t *testing.T) {
 	rec := learning.NewRecorder(events, inprocbus.New())
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
 	agent := drill.New(fakeai.New())
-	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched, nil, nil)
 
 	ex, err := svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
@@ -659,7 +663,7 @@ func TestStartFallsBackToPlannerWhenDueConceptSlugIsStale(t *testing.T) {
 	rec := learning.NewRecorder(events, inprocbus.New())
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
 	agent := drill.New(fakeai.New())
-	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched, nil, nil)
 
 	ex, err := svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
@@ -696,7 +700,7 @@ func TestStartFindsDueConceptBehindLeadingExpressionItems(t *testing.T) {
 	rec := learning.NewRecorder(events, inprocbus.New())
 	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, &fakeEventStore{}, grammarRepo, prios, &fakeVocabRepo{}, time.Now)
 	agent := drill.New(fakeai.New())
-	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched)
+	svc := apppractice.NewService(repo, agent, teachingPlanner, grammarRepo, rec, sched, nil, nil)
 
 	ex, err := svc.Start(context.Background(), testIdentity, "")
 	if err != nil {
@@ -718,4 +722,148 @@ func (f *fakeVocabRepo) ListPage(ctx context.Context, identity learner.IdentityI
 	page := all[:limit]
 	last := page[len(page)-1]
 	return page, storage.VocabularyCursor{LastEvent: last.LastEvent, ID: last.ID}, nil
+}
+
+// ListRecentUnpracticed IS exercised here — it is the first branch of
+// Start's selection order. recent is what the query would have matched;
+// the fake records the cutoff it was asked for so a test can assert the
+// window rather than trusting it.
+func (r *fakeVocabRepo) ListRecentUnpracticed(_ context.Context, _ learner.IdentityID, addedSince time.Time, limit int) ([]vocabulary.Item, error) {
+	r.askedSince = addedSince
+	r.askedLimit = limit
+	return r.recent, nil
+}
+
+// ---------------------------------------------------------------------
+// Selection order: a recent word outranks everything, including the
+// spaced scheduler. See Service.Start's doc comment for why.
+// ---------------------------------------------------------------------
+
+// wordSelectionHarness builds a Service whose every OTHER source would
+// happily supply a concept, so a test that gets a word back has proved
+// the word won on order rather than by being the only option.
+func wordSelectionHarness(t *testing.T, recent []vocabulary.Item, now time.Time) (*apppractice.Service, *fakeVocabRepo, *fakeExerciseRepo) {
+	t.Helper()
+	repo := newFakeExerciseRepo()
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	grammarRepo := &fakeGrammarRepo{
+		concepts: []grammar.Concept{iAdjectivePastConcept},
+		bySlug:   map[string]grammar.Concept{iAdjectivePastConcept.Slug: iAdjectivePastConcept},
+	}
+	vocab := &fakeVocabRepo{recent: recent}
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, events, grammarRepo, &fakePriorityRepo{}, &fakeVocabRepo{}, func() time.Time { return now })
+	svc := apppractice.NewService(repo, drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, nil, vocab,
+		func() time.Time { return now })
+	return svc, vocab, repo
+}
+
+func recentItem(id, expr, reading, meaning string) vocabulary.Item {
+	return vocabulary.Item{ID: id, Expression: expr, Reading: reading, Meaning: meaning}
+}
+
+func TestARecentWordIsDrilledBeforeAnythingElse(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing, easily mixed up"),
+	}, now)
+
+	ex, err := svc.Start(context.Background(), testIdentity, "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.SubjectType != exercise.SubjectWord {
+		t.Fatalf("subject type = %q, want %q — the concept path won despite a fresh word being available",
+			ex.SubjectType, exercise.SubjectWord)
+	}
+	if ex.Type != exercise.TypeWordRecall {
+		t.Errorf("type = %q, want %q", ex.Type, exercise.TypeWordRecall)
+	}
+	if ex.SubjectRef != "w1" {
+		t.Errorf("subject ref = %q, want the vocabulary item id", ex.SubjectRef)
+	}
+	if ex.Prompt != "紛らわしい" {
+		t.Errorf("prompt = %q, want the expression on the front of the card", ex.Prompt)
+	}
+	if ex.Answer != "まぎらわしい" {
+		t.Errorf("answer = %q, want the stored reading", ex.Answer)
+	}
+}
+
+// The window is the whole reason recency can lead: without it, one old
+// word blocks the scheduler forever.
+func TestTheRecentWordQueryIsBoundedToTheWindow(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, vocab, _ := wordSelectionHarness(t, nil, now)
+
+	if _, err := svc.Start(context.Background(), testIdentity, ""); err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	want := now.Add(-14 * 24 * time.Hour)
+	if !vocab.askedSince.Equal(want) {
+		t.Errorf("asked for words added since %s, want %s (a 14-day window)", vocab.askedSince, want)
+	}
+	if vocab.askedLimit <= 0 {
+		t.Errorf("asked for limit %d — an unbounded scan over a bulk-imported vocabulary", vocab.askedLimit)
+	}
+}
+
+// With nothing fresh, the scheduler and planner get their turn exactly
+// as before. This is what stops the word branch from being a takeover.
+func TestNoRecentWordFallsThroughToTheConceptPath(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, nil, now)
+
+	ex, err := svc.Start(context.Background(), testIdentity, "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.SubjectType != exercise.SubjectConcept {
+		t.Fatalf("subject type = %q, want %q", ex.SubjectType, exercise.SubjectConcept)
+	}
+	if ex.SubjectRef == "" {
+		t.Error("a concept drill recorded no subject ref")
+	}
+}
+
+// A card whose back is blank teaches nothing, so the word is skipped
+// rather than shown. Pinning it because the obvious implementation —
+// take items[0] — shows it.
+func TestAWordWithNothingOnTheBackIsSkipped(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("empty", "謎", "", ""),
+		recentItem("w2", "紛らわしい", "まぎらわしい", "confusing"),
+	}, now)
+
+	ex, err := svc.Start(context.Background(), testIdentity, "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.SubjectRef != "w2" {
+		t.Errorf("drilled %q, want w2 — a card with no reading and no meaning reveals nothing", ex.SubjectRef)
+	}
+}
+
+// A caller that has not wired vocabulary must behave exactly as before
+// rather than failing, the same nil-tolerance retrieval already has.
+func TestAServiceWithNoVocabularyStillDrillsConcepts(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	repo := newFakeExerciseRepo()
+	events := &fakeCapturingEventStore{}
+	rec := learning.NewRecorder(events, inprocbus.New())
+	grammarRepo := &fakeGrammarRepo{
+		concepts: []grammar.Concept{iAdjectivePastConcept},
+		bySlug:   map[string]grammar.Concept{iAdjectivePastConcept.Slug: iAdjectivePastConcept},
+	}
+	teachingPlanner := planner.NewPlanner(&fakeObsRepo{}, events, grammarRepo, &fakePriorityRepo{}, &fakeVocabRepo{}, func() time.Time { return now })
+	svc := apppractice.NewService(repo, drill.New(fakeai.New()), teachingPlanner, grammarRepo, rec, nil, nil, nil)
+
+	ex, err := svc.Start(context.Background(), testIdentity, "")
+	if err != nil {
+		t.Fatalf("start: %v", err)
+	}
+	if ex.SubjectType != exercise.SubjectConcept {
+		t.Errorf("subject type = %q, want %q", ex.SubjectType, exercise.SubjectConcept)
+	}
 }

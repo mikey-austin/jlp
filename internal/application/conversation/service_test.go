@@ -970,3 +970,9 @@ func (f *fakeVocabRepo) ListPage(ctx context.Context, identity learner.IdentityI
 	last := page[len(page)-1]
 	return page, storage.VocabularyCursor{LastEvent: last.LastEvent, ID: last.ID}, nil
 }
+
+// ListRecentUnpracticed is 練習's word-drill source; no test in this
+// package drills words, so reaching it means a wiring mistake.
+func (r *fakeVocabRepo) ListRecentUnpracticed(context.Context, learner.IdentityID, time.Time, int) ([]vocabulary.Item, error) {
+	panic("not used by these tests")
+}

@@ -67,7 +67,7 @@ func newPracticeService() *appractice.Service {
 	grammarRepo := newFakeGrammarRepo([]grammar.Concept{catalogConcept})
 	plnr := planner.NewPlanner(newFakeObservationRepo(), newFakeEventRepo(), grammarRepo, newFakePriorityRepo(), &fakeVocabRepo{}, time.Now)
 	rec := learning.NewRecorder(newFakeEventRepo(), inprocbus.New())
-	return appractice.NewService(newFakeExerciseRepo(), agentdrill.New(fakeai.New()), plnr, grammarRepo, rec, nil)
+	return appractice.NewService(newFakeExerciseRepo(), agentdrill.New(fakeai.New()), plnr, grammarRepo, rec, nil, nil, nil)
 }
 
 func TestCreateExerciseDelegatesToPracticeService(t *testing.T) {

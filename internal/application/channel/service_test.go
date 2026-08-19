@@ -407,7 +407,7 @@ func newTestHarness(allowFrom string) *testHarness {
 
 	exerciseRepo := newFakeExerciseRepo()
 	drillAgent := drill.New(fakeai.New())
-	practiceSvc := practice.NewService(exerciseRepo, drillAgent, teachingPlanner, grammarRepo, rec, nil)
+	practiceSvc := practice.NewService(exerciseRepo, drillAgent, teachingPlanner, grammarRepo, rec, nil, nil, nil)
 
 	svc := appchannel.NewService(sessionsSvc, feedbackSvc, practiceSvc, docRepo, identityRepo, config.Channels{AllowFrom: allowFrom})
 
@@ -665,4 +665,10 @@ func (f *fakeVocabRepo) ListPage(ctx context.Context, identity learner.IdentityI
 	page := all[:limit]
 	last := page[len(page)-1]
 	return page, storage.VocabularyCursor{LastEvent: last.LastEvent, ID: last.ID}, nil
+}
+
+// ListRecentUnpracticed is 練習's word-drill source; no test in this
+// package drills words, so reaching it means a wiring mistake.
+func (r *fakeVocabRepo) ListRecentUnpracticed(context.Context, learner.IdentityID, time.Time, int) ([]vocabulary.Item, error) {
+	panic("not used by these tests")
 }

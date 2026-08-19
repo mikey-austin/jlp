@@ -36,12 +36,24 @@ type Exercise struct {
 	// takes only an identity). The column/field exist for a future
 	// session-scoped drill mode.
 	SessionID *session.ID
-	// ConceptSlug is the grammar.Concept.Slug this exercise drills.
+	// ConceptSlug is the grammar.Concept.Slug this exercise drills. Empty
+	// for a word drill, which has no concept.
 	ConceptSlug string
-	// Type is one of "fill-in-blank", "multiple-choice", "transformation",
-	// "free-production" — see the Type* constants below and
-	// schemas/defs/exercise.v1.json's own enum, which is the single
-	// source of truth this must stay in sync with.
+	// SubjectType/SubjectRef name what this exercise drills:
+	// "concept" + a grammar.Concept.Slug, or "word" + a
+	// vocabulary.Item.ID.
+	//
+	// ConceptSlug is left meaning exactly what it always meant rather
+	// than being widened to hold a word id, so every existing reader is
+	// unaffected. Rows written before this pair existed unmarshal with
+	// both empty and are normalised on read to ("concept", ConceptSlug).
+	SubjectType string
+	SubjectRef  string
+	// Type is one of the Type* constants below. The four AI-generated
+	// shapes must stay in sync with schemas/defs/exercise.v1.json's own
+	// enum, which is their single source of truth; TypeWordRecall is
+	// deliberately NOT in that enum, because no model generates it — see
+	// its constant below.
 	Type string
 	// InstructionsJA/InstructionsEN are the learner-facing task
 	// description ("choose the correct past tense form"), not the
@@ -73,6 +85,23 @@ const (
 	TypeMultipleChoice = "multiple-choice"
 	TypeTransformation = "transformation"
 	TypeFreeProduction = "free-production"
+	// TypeWordRecall is a flip card over one vocabulary item: the
+	// expression on the front, its reading and meaning on the back,
+	// graded by the learner.
+	//
+	// Built directly from the stored item, with NO model call — the
+	// reading and the meaning are already known, so asking a model to
+	// restate them would add latency, cost and a chance of being wrong
+	// about the learner's own vocabulary. That is what makes a word drill
+	// cheap enough to do daily, and why this type is absent from
+	// exercise.v1.json: nothing generates it.
+	TypeWordRecall = "word-recall"
+)
+
+// Subject types for SubjectType.
+const (
+	SubjectConcept = "concept"
+	SubjectWord    = "word"
 )
 
 // Evaluation is the result of grading a learner's response to an

@@ -231,6 +231,29 @@ func (r *VocabularyRepository) ListActivationCandidates(ctx context.Context, ide
 	return out, nil
 }
 
+// ListRecentUnpracticed is 練習's first-choice drill source — see the
+// port's doc comment and db/queries/vocabulary.sql for why recency
+// leads. Bounded and ordered in SQL, like ListActivationCandidates
+// above, so it stays one indexed query as a learner's vocabulary grows.
+func (r *VocabularyRepository) ListRecentUnpracticed(ctx context.Context, identity learner.IdentityID, addedSince time.Time, limit int) ([]vocabulary.Item, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.q.ListRecentUnpracticedVocabulary(ctx, sqlcgen.ListRecentUnpracticedVocabularyParams{
+		IdentityID: string(identity),
+		AddedSince: pgtype.Timestamptz{Time: addedSince, Valid: true},
+		LimitCount: int32(limit),
+	})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]vocabulary.Item, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, fromVocabularyItemRow(row))
+	}
+	return out, nil
+}
+
 // GetByExpressions is List's bounded sibling (see
 // storage.VocabularyRepository.GetByExpressions' doc comment): a
 // dedicated indexed query rather than List(filter="") + a Go-side
