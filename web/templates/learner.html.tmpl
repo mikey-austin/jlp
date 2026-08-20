@@ -1,112 +1,127 @@
+{{/* insight renders one subject as a single line that expands.
+
+     A line, not a table row: every one of these lists is "a subject, a
+     kind, one number, and a paragraph explaining it", and a paragraph is
+     what made the tables unreadable — it is the widest column, it is
+     scoring diagnostics rather than anything a learner asked for, and at
+     phone widths the stacked card it produced was taller than the screen.
+     Behind a disclosure it is available and not in the way.
+
+     <details>, so it works with no JavaScript and brings keyboard and
+     screen-reader behaviour with it. */}}
+{{define "insight"}}
+<li class="insight">
+  <details>
+    <summary class="insight__line">
+      <span class="insight__subject" lang="ja">{{.Label}}</span>
+      <span class="badge badge--type">{{.Kind}}</span>
+      <span class="insight__metric">{{.Metric}}</span>
+    </summary>
+    <div class="insight__detail">
+      {{range .Details}}<p>{{.}}</p>{{end}}
+    </div>
+  </details>
+</li>
+{{end}}
+
 {{define "content"}}<section class="learner">
   <h1>学習</h1>
 
-  <h2>優先項目</h2>
-  <div class="table-card table-card--stack">
-    <table>
-      <thead><tr><th>対象</th><th>種類</th><th>スコア</th><th>理由</th></tr></thead>
-      <tbody>
-        {{range .Priorities}}<tr>
-          {{/* Label: a word priority's subject is a vocabulary UUID. */}}
-          <td data-label="対象">{{.Label}}</td>
-          <td data-label="種類"><span class="badge badge--type">{{.SubjectType}}</span></td>
-          <td data-label="スコア">{{printf "%.1f" .Score}}</td>
-          <td data-label="理由">{{.Reason}}</td>
-        </tr>{{else}}<tr><td colspan="4" class="empty">優先項目がありません</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
-
-  <h2>観察</h2>
-  <div class="table-card table-card--stack">
-    <table>
-      <thead><tr><th>対象</th><th>種類</th><th>状態</th><th>信頼度</th><th>最終更新</th></tr></thead>
-      <tbody>
-        {{range .Observations}}<tr>
-          {{/* Label: a word observation's subject is a vocabulary UUID. */}}
-          <td data-label="対象">{{.Label}}</td>
-          <td data-label="種類"><span class="badge badge--type">{{.SubjectType}}</span></td>
-          <td data-label="状態">{{.Kind}}</td>
-          <td data-label="信頼度">{{percent .Confidence}}%</td>
-          <td data-label="最終更新">{{.UpdatedAt.Format "2006-01-02"}}</td>
-        </tr>{{else}}<tr><td colspan="5" class="empty">観察がありません</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
-
-  {{/* 練習 sits directly above 復習キュー because the two are one loop:
-       what you drill here is what gets scheduled there, and a word
-       answered correctly leaves the queue. Counted from the same
-       quiz.answered events the scheduler and the learner model consume,
-       so these numbers cannot disagree with the tables around them. */}}
-  <h2>練習</h2>
+  {{/* 練習 leads and never collapses: it is the only section that
+       answers "how am I doing", which is what the page is opened for.
+       Everything below it explains that answer. */}}
+  <h2 class="learner__heading">練習</h2>
   {{if .Practice.HasAnswers}}
-  <div class="stat-grid">
-    <div class="stat"><span class="stat__value">{{.Practice.Answered}}</span><span class="stat__label">解答した問題</span></div>
+  <div class="stat-grid stat-grid--compact">
+    <div class="stat"><span class="stat__value">{{.Practice.Answered}}</span><span class="stat__label">解答</span></div>
     <div class="stat"><span class="stat__value">{{.Practice.Accuracy}}%</span><span class="stat__label">正答率</span></div>
-    <div class="stat"><span class="stat__value">{{.Practice.Words}}</span><span class="stat__label">語彙の練習</span></div>
-    <div class="stat"><span class="stat__value">{{.Practice.Concepts}}</span><span class="stat__label">文法の練習</span></div>
+    <div class="stat"><span class="stat__value">{{.Practice.Words}}</span><span class="stat__label">語彙</span></div>
+    <div class="stat"><span class="stat__value">{{.Practice.Concepts}}</span><span class="stat__label">文法</span></div>
   </div>
   {{else}}
   <p class="description">まだ練習していません。<a href="/practice">練習</a>で始めましょう。</p>
   {{end}}
 
-  <h2>復習キュー</h2>
-  {{/* Whole-branch review C-1, the functional half: the scheduler is
-       driven by correction.retried / quiz.answered /
-       vocabulary.produced-correctly, and a conversation correction has
-       no retry route, so a grammar concept the learner got wrong IN
-       SPEECH is never scheduled here. Vocabulary IS covered (the
-       conversation path does publish vocabulary.produced-correctly),
-       which is exactly what makes the grammar hole easy to misread as
-       "nothing due". Said plainly rather than left to be inferred from
-       an empty table. */}}
-  <p class="description">
-    復習予定は、<strong>添削・練習・語彙の正用</strong>から作られます。練習した語彙も文法も、ここに予定として入ります。
-    会話練習と音声練習で指摘された<strong>文法</strong>は、まだこのキューには入りません（語彙は入ります）。
-  </p>
-  <div class="table-card table-card--stack">
-    <table>
-      <thead><tr><th>対象</th><th>種類</th><th>期日</th><th>間隔</th></tr></thead>
-      <tbody>
-        {{range .Retrieval}}<tr>
-          {{/* Label, not Subject: a due word's subject is its vocabulary
-               UUID, which tells the learner nothing about what to revise. */}}
-          <td data-label="対象">{{.Label}}</td>
-          <td data-label="種類"><span class="badge badge--type">{{.SubjectType}}</span></td>
-          <td data-label="期日">{{.DueAt.Format "2006-01-02"}}</td>
-          <td data-label="間隔">{{days .Interval}}日</td>
-        </tr>{{else}}<tr><td colspan="4" class="empty">復習予定がありません</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
+  {{/* The two panels a learner acts on are open; the rest are
+       diagnostics and start closed. A page that opens everything at once
+       is a page nobody reads the top of. */}}
+  <details class="panel" open>
+    <summary class="panel__summary">
+      <span class="panel__title">優先項目</span>
+      <span class="panel__meta">{{len .Priorities}}件</span>
+    </summary>
+    {{if .Priorities}}
+    <ul class="insight-list">
+      {{range .Priorities}}{{template "insight" .}}{{end}}
+    </ul>
+    {{else}}<p class="empty">優先項目がありません</p>{{end}}
+  </details>
 
-  <h2>エージェント利用</h2>
-  <div class="table-card table-card--stack">
-    <table>
-      <thead><tr><th>エージェント</th><th>リクエスト数</th><th>成功率</th><th>平均レイテンシ (ms)</th></tr></thead>
-      <tbody>
-        {{range .AgentUsage}}<tr>
-          <td data-label="エージェント">{{if .Agent}}{{.Agent}}{{else}}未分類{{end}}</td>
-          <td data-label="リクエスト数">{{.Requests}}</td>
-          <td data-label="成功率">{{percent .SuccessRate}}%</td>
-          <td data-label="平均レイテンシ (ms)">{{.AvgLatencyMS}}</td>
-        </tr>{{else}}<tr><td colspan="4" class="empty">利用データがありません</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
+  <details class="panel" open>
+    <summary class="panel__summary">
+      <span class="panel__title">復習キュー</span>
+      <span class="panel__meta">{{len .Retrieval}}件</span>
+    </summary>
+    <p class="description">
+      復習予定は、<strong>添削・練習・語彙の正用</strong>から作られます。会話練習と音声練習で指摘された<strong>文法</strong>は、
+      まだこのキューには入りません（語彙は入ります）。
+    </p>
+    {{if .Retrieval}}
+    <ul class="insight-list">
+      {{range .Retrieval}}{{template "insight" .}}{{end}}
+    </ul>
+    {{else}}<p class="empty">復習予定がありません</p>{{end}}
+  </details>
 
-  <h2>システム</h2>
-  <div class="stat-grid">
-    <div class="stat"><span class="stat__value">{{.System.LearningEvents}}</span><span class="stat__label">学習イベント</span></div>
-    <div class="stat"><span class="stat__value">{{.System.AIRequests}}</span><span class="stat__label">AIリクエスト</span></div>
-  </div>
-  <div class="table-card">
-    <table>
-      <thead><tr><th>種類</th><th>件数</th></tr></thead>
-      <tbody>
-        {{range $type, $count := .System.EventsByType}}<tr><td>{{$type}}</td><td>{{$count}}</td></tr>{{else}}<tr><td colspan="2" class="empty">データがありません</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
+  <details class="panel">
+    <summary class="panel__summary">
+      <span class="panel__title">観察</span>
+      <span class="panel__meta">{{len .Observations}}件</span>
+    </summary>
+    {{if .Observations}}
+    <ul class="insight-list">
+      {{range .Observations}}{{template "insight" .}}{{end}}
+    </ul>
+    {{else}}<p class="empty">観察がありません</p>{{end}}
+    {{if .ObservationsHidden}}<p class="panel__more">ほか{{.ObservationsHidden}}件</p>{{end}}
+  </details>
+
+  <details class="panel">
+    <summary class="panel__summary">
+      <span class="panel__title">エージェント利用</span>
+      <span class="panel__meta">{{len .AgentUsage}}件</span>
+    </summary>
+    <div class="table-card table-card--stack">
+      <table>
+        <thead><tr><th>エージェント</th><th>リクエスト数</th><th>成功率</th><th>平均レイテンシ (ms)</th></tr></thead>
+        <tbody>
+          {{range .AgentUsage}}<tr>
+            <td data-label="エージェント">{{if .Agent}}{{.Agent}}{{else}}未分類{{end}}</td>
+            <td data-label="リクエスト数">{{.Requests}}</td>
+            <td data-label="成功率">{{percent .SuccessRate}}%</td>
+            <td data-label="平均レイテンシ (ms)">{{.AvgLatencyMS}}</td>
+          </tr>{{else}}<tr><td colspan="4" class="empty">利用データがありません</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </details>
+
+  <details class="panel">
+    <summary class="panel__summary">
+      <span class="panel__title">システム</span>
+      <span class="panel__meta">{{.System.LearningEvents}}イベント</span>
+    </summary>
+    <div class="stat-grid stat-grid--compact">
+      <div class="stat"><span class="stat__value">{{.System.LearningEvents}}</span><span class="stat__label">学習イベント</span></div>
+      <div class="stat"><span class="stat__value">{{.System.AIRequests}}</span><span class="stat__label">AIリクエスト</span></div>
+    </div>
+    <div class="table-card">
+      <table>
+        <thead><tr><th>種類</th><th>件数</th></tr></thead>
+        <tbody>
+          {{range $type, $count := .System.EventsByType}}<tr><td>{{$type}}</td><td>{{$count}}</td></tr>{{else}}<tr><td colspan="2" class="empty">データがありません</td></tr>{{end}}
+        </tbody>
+      </table>
+    </div>
+  </details>
 </section>{{end}}

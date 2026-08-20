@@ -1175,3 +1175,131 @@ p.empty {
     color: var(--print-fg);
   }
 }
+
+/* ============================ 学習 panels ================================ */
+
+/* Each section is a disclosure. The page used to open every table at
+   once, which on a phone meant scrolling past four screens of scoring
+   diagnostics to reach the numbers the page is opened for. Native
+   <details>, so it needs no JavaScript and keeps keyboard and
+   screen-reader behaviour. */
+.panel {
+  margin: 0 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.panel__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  cursor: pointer;
+  font-weight: 600;
+  /* The marker is replaced by a rotating chevron below; without this the
+     browser draws both. */
+  list-style: none;
+}
+.panel__summary::-webkit-details-marker {
+  display: none;
+}
+.panel__summary::after {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  margin-inline-start: auto;
+  border-right: 2px solid var(--fg-muted);
+  border-bottom: 2px solid var(--fg-muted);
+  transform: rotate(45deg);
+  transition: transform 160ms ease-out;
+}
+.panel[open] > .panel__summary::after {
+  transform: rotate(-135deg);
+}
+.panel__title {
+  font-size: var(--text-base);
+}
+.panel__meta {
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-weight: 400;
+}
+.panel > *:not(.panel__summary) {
+  padding-inline: var(--space-5);
+}
+.panel > *:last-child {
+  padding-bottom: var(--space-4);
+}
+.panel .table-card {
+  border: 0;
+  padding-inline: 0;
+}
+.panel__more {
+  margin: var(--space-3) 0 0;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+
+/* ---- one subject per line, expanding ---- */
+.insight-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.insight {
+  border-top: 1px solid var(--border);
+}
+.insight:first-child {
+  border-top: 0;
+}
+.insight__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
+  cursor: pointer;
+  list-style: none;
+}
+.insight__line::-webkit-details-marker {
+  display: none;
+}
+/* The subject takes the room; the badge and number stay put. This is
+   what keeps every row one line at 390px, which the four-column table
+   never managed. */
+.insight__subject {
+  flex: 1 1 auto;
+  min-width: 0;
+  /* Wraps rather than truncating. An ellipsis kept every row exactly one
+     line, which measured well and read badly: the subject is the whole
+     point of the row, and a learner cannot act on 紛らわ… — nor on a
+     concept slug cut off before the part that distinguishes it. Long
+     ids break mid-token so they cannot push the badge off screen. */
+  overflow-wrap: anywhere;
+}
+.insight__metric {
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.insight__detail {
+  padding: 0 0 var(--space-3);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.insight__detail p {
+  margin: 0 0 var(--space-1);
+}
+
+.learner__heading {
+  margin: var(--space-5) 0 var(--space-3);
+}
+/* Four stats fit two-up on a phone rather than one-up, which is the
+   difference between the practice numbers being on screen together and
+   being a scroll. */
+.stat-grid--compact {
+  grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
+  margin-bottom: var(--space-4);
+}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -315,5 +316,89 @@ func TestLearnerPageShowsTheWordBehindADueExpression(t *testing.T) {
 	// a blank cell would be worse than an unfriendly one.
 	if !strings.Contains(rec.Body.String(), "11111111-1111-1111-1111-111111111111") {
 		t.Error("an unresolvable subject rendered as neither its label nor its raw value")
+	}
+}
+
+// The page used to open every table at once, so a phone reader scrolled
+// past four screens of scoring diagnostics to reach the numbers the page
+// is opened for. Sections are disclosures now, and the two a learner
+// acts on are the ones that start open.
+func TestLearnerPageOpensOnlyTheActionableSections(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Retrieval.(*fakeLearnerRetrievalRepo).list = []storage.RetrievalItem{
+		{SubjectType: "concept", Subject: "te-form", DueAt: time.Now(), Interval: 24 * time.Hour},
+	}
+
+	rec := httptest.NewRecorder()
+	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d", rec.Code)
+	}
+	body := rec.Body.String()
+
+	// Every section is a <details>, so none of this needs JavaScript.
+	if strings.Count(body, `class="panel"`) == 0 && strings.Count(body, `class="panel" open`) == 0 {
+		t.Fatalf("no panels rendered:\n%s", body)
+	}
+	// 優先項目 and 復習キュー open; the diagnostics do not.
+	if !strings.Contains(body, `<details class="panel" open>`) {
+		t.Error("nothing is open; the page opens on a wall of closed sections")
+	}
+	if !strings.Contains(body, `<details class="panel">`) {
+		t.Error("nothing is closed; every section is expanded as before")
+	}
+}
+
+// The planner's rationale is scoring diagnostics — the widest thing on
+// the page and not what a learner asked for. It stays available, behind
+// the disclosure, rather than on the line.
+func TestThePlannerRationaleIsBehindTheDisclosureNotOnTheLine(t *testing.T) {
+	opts := learnerTestOptions()
+	opts.Priorities.(*fakeLearnerPriorityRepo).top = []storage.Priority{
+		{SubjectType: "concept", Subject: "te-form", Score: 72,
+			Reason: "recurring weakness: 23 occurrences in 30d (persistence 3.00)"},
+	}
+
+	rec := httptest.NewRecorder()
+	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	body := rec.Body.String()
+
+	// Present…
+	if !strings.Contains(body, "persistence 3.00") {
+		t.Errorf("the rationale was dropped entirely:\n%s", body)
+	}
+	// …but inside the detail block, not the summary line.
+	line := body[strings.Index(body, `class="insight__line"`):]
+	line = line[:strings.Index(line, "</summary>")]
+	if strings.Contains(line, "persistence") {
+		t.Errorf("the rationale is on the summary line:\n%s", line)
+	}
+}
+
+// 観察 is unbounded — every subject the model ever formed a view about.
+// A list that quietly stops is one nobody knows is incomplete, so the
+// remainder is counted.
+func TestLearnerPageCountsTheObservationsItDoesNotShow(t *testing.T) {
+	opts := learnerTestOptions()
+	var many []learnermodel.Observation
+	for i := 0; i < learnerObservationLimit+5; i++ {
+		many = append(many, learnermodel.Observation{
+			SubjectType: learnermodel.SubjectConcept,
+			Subject:     "concept-" + strconv.Itoa(i),
+			Kind:        learnermodel.KindWeakness,
+			UpdatedAt:   time.Now(),
+		})
+	}
+	opts.Observations.(*fakeObservationRepo).list = many
+
+	rec := httptest.NewRecorder()
+	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/learner", nil))
+	body := rec.Body.String()
+
+	if strings.Count(body, `class="insight"`) > learnerObservationLimit+len(opts.Priorities.(*fakeLearnerPriorityRepo).top)+10 {
+		t.Error("the observation list was not capped")
+	}
+	if !strings.Contains(body, "ほか5件") {
+		t.Errorf("the hidden remainder was not reported:\n%s", body)
 	}
 }
