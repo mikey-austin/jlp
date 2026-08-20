@@ -69,6 +69,14 @@ type Exercise struct {
 	// except TypeFreeProduction, which has no single correct answer and
 	// is scored by internal/agent/drill.Agent.Evaluate instead.
 	Answer string
+	// Reading is the word's reading, for a word drill — what furigana on
+	// the answer card is made from.
+	//
+	// Kept even when it is not the Answer (a cloze answers with the
+	// expression, not its reading), because showing a learner the kanji
+	// they could not recall without telling them how to say it teaches
+	// half a word.
+	Reading string
 	// Definition is the word's meaning, for a word drill. Carried
 	// separately from Acceptable because a cloze with choices has no
 	// acceptable alternatives to hide it in, and the answer card shows

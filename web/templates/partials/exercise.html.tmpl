@@ -4,6 +4,16 @@
      decoration; when TTS is not configured the button reports
      unavailable on click rather than being absent, so the learner learns
      the capability exists and is off. */}}
+{{/* ruby renders text with furigana above it, or plain text when there
+     is none worth showing (see rubyReading). Group ruby over the whole
+     word: splitting a reading across kanji needs a morphological
+     analyser, and guessing the split is how 紛らわしい ends up labelled
+     まぎ-ら-わ-しい.
+
+     <rp> gives a browser without ruby support something sane to fall
+     back to — 紛らわしい(まぎらわしい) rather than the two run together. */}}
+{{define "ruby"}}{{if .Reading}}<ruby>{{.Text}}<rp>（</rp><rt>{{.Reading}}</rt><rp>）</rp></ruby>{{else}}{{.Text}}{{end}}{{end}}
+
 {{define "speak"}}{{if hasJapanese .}}<button type="button" class="speak" data-speak="{{.}}" aria-label="読み上げる" title="読み上げる">🔊</button>{{end}}{{end}}
 
 {{/* run_header is the progress bar and streak shared by the question
@@ -52,7 +62,7 @@
            server-side into before/word/after so all three escape
            normally; see sentenceHighlight. */}}
       {{with .ExampleParts}}
-      <p class="flip-card__example" lang="ja">{{.Before}}<strong>{{.Word}}</strong>{{.After}}{{template "speak" .Whole}}</p>
+      <p class="flip-card__example" lang="ja">{{.Before}}<strong>{{template "ruby" .Ruby}}</strong>{{.After}}{{template "speak" .Whole}}</p>
       {{end}}
       {{/* Self-graded, because only the learner knows whether they
            recalled it BEFORE turning the card over. Both buttons post
@@ -158,12 +168,12 @@
   <div class="answer-diff">
     <p class="answer-diff__label">正解との違い</p>
     <p class="answer-diff__spans" lang="ja">{{range .Spans}}<span class="{{.Class}}">{{.Text}}</span>{{end}}</p>
-    <p class="answer-diff__answer" lang="ja">正解：{{.Answer}}</p>
+    <p class="answer-diff__answer" lang="ja">正解：{{template "ruby" .AnswerRuby}}</p>
   </div>
   {{else if .Answer}}
   {{/* No diff to show — nothing was typed, or nothing was attempted —
        but the answer itself is the whole point of asking. */}}
-  <p class="answer-plain" lang="ja">正解：{{.Answer}}{{template "speak" .Answer}}</p>
+  <p class="answer-plain" lang="ja">正解：{{template "ruby" .AnswerRuby}}{{template "speak" .Answer}}</p>
   {{end}}
 
   {{/* Always shown once the answer is in: getting a word right without
@@ -174,7 +184,7 @@
   {{/* The sentence restored, with the word emphasised. Shown only now:
        while a cloze is open, this IS the answer. */}}
   {{with .ExampleParts}}
-  <p class="answer-example" lang="ja">{{.Before}}<strong>{{.Word}}</strong>{{.After}}{{template "speak" .Whole}}</p>
+  <p class="answer-example" lang="ja">{{.Before}}<strong>{{template "ruby" .Ruby}}</strong>{{.After}}{{template "speak" .Whole}}</p>
   {{end}}
 
   <p class="feedback ja">{{.FeedbackJA}}{{template "speak" .FeedbackJA}}</p>

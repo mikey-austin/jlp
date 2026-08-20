@@ -52,6 +52,7 @@ type exercisePayload struct {
 	Answer         string    `json:"answer"`
 	Example        string    `json:"example,omitempty"`
 	Definition     string    `json:"definition,omitempty"`
+	Reading        string    `json:"reading,omitempty"`
 	Acceptable     []string  `json:"acceptable,omitempty"`
 	CreatedAt      time.Time `json:"created_at"`
 }
@@ -92,6 +93,7 @@ func (r *ExerciseRepository) Create(ctx context.Context, ex exercise.Exercise) e
 		Answer:         ex.Answer,
 		Example:        ex.Example,
 		Definition:     ex.Definition,
+		Reading:        ex.Reading,
 		Acceptable:     ex.Acceptable,
 		CreatedAt:      ex.CreatedAt,
 	})
@@ -146,6 +148,7 @@ func (r *ExerciseRepository) Get(ctx context.Context, identity learner.IdentityI
 		Answer:         payload.Answer,
 		Example:        payload.Example,
 		Definition:     payload.Definition,
+		Reading:        payload.Reading,
 		Acceptable:     payload.Acceptable,
 		CreatedAt:      payload.CreatedAt,
 	}

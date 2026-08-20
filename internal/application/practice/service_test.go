@@ -1355,3 +1355,18 @@ func TestANotSureAnswerIsWrongEvenIfTheAnswerIsEmpty(t *testing.T) {
 // exported: a test asserting the two differ should fail if either
 // changes to match the other.
 const wrongFeedbackJAForTest = "惜しい！もう一度挑戦しましょう。"
+
+// ReadingForTest exposes readingFor to the http package's furigana test.
+// A pattern matched by prefix must not carry the whole expression's
+// reading — see readingFor.
+func TestReadingIsWithheldFromAPrefixMatch(t *testing.T) {
+	item := vocabulary.Item{ID: "w1", Expression: "〜というわけではない", Reading: "というわけではない"}
+	ex := apppractice.WordClozeForTest(item, "お金がないというわけではありませんが。", "というわけでは")
+	if ex.Reading != "" {
+		t.Errorf("a prefix match carried reading %q; it belongs to the whole expression", ex.Reading)
+	}
+	whole := apppractice.WordClozeForTest(item, "お金がないというわけではないが。", "というわけではない")
+	if whole.Reading == "" {
+		t.Error("the whole expression was denied its reading")
+	}
+}

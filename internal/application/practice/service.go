@@ -668,10 +668,17 @@ func wordCloze(item vocabulary.Item, example, form string, distractors []string)
 		instructionsJA = "空欄に入る語を入力してください。（意味：" + meaning + "）"
 	}
 	ex := exercise.Exercise{
-		SubjectType:    exercise.SubjectWord,
-		SubjectRef:     item.ID,
-		Type:           exercise.TypeWordCloze,
-		Definition:     meaning,
+		SubjectType: exercise.SubjectWord,
+		SubjectRef:  item.ID,
+		Type:        exercise.TypeWordCloze,
+		Definition:  meaning,
+		// Only when the blanked text is the WHOLE expression. A pattern
+		// matched by prefix (というわけでは out of というわけではない)
+		// would otherwise carry the full expression's reading, and
+		// floating that over a fragment is not furigana — it is a wrong
+		// claim about how that fragment is read. Decided here, where the
+		// expression is still in hand, so the view can simply trust it.
+		Reading:        readingFor(item, form),
 		InstructionsJA: instructionsJA,
 		InstructionsEN: "Type the word that belongs in the blank.",
 		// Replaced everywhere it occurs: leaving a second, unblanked copy
@@ -741,6 +748,15 @@ func clozeChoices(answer string, distractors []string) []string {
 	return choices
 }
 
+// readingFor is the reading to show above shown, or "" when shown is
+// only part of the expression the reading belongs to.
+func readingFor(item vocabulary.Item, shown string) string {
+	if shown != item.MatchableForm() {
+		return ""
+	}
+	return strings.TrimSpace(item.Reading)
+}
+
 // acceptableForms is the alternatives a cloze answer may take: the
 // reading, when it differs from the expression itself.
 func acceptableForms(item vocabulary.Item) []string {
@@ -768,6 +784,7 @@ func wordRecall(item vocabulary.Item) exercise.Exercise {
 		SubjectRef:     item.ID,
 		Type:           exercise.TypeWordRecall,
 		Definition:     back,
+		Reading:        strings.TrimSpace(item.Reading),
 		InstructionsJA: "この語の読みと意味を思い出してください。",
 		InstructionsEN: "Recall this word's reading and meaning, then check yourself.",
 		Prompt:         item.Expression,
@@ -1014,4 +1031,10 @@ func deterministicEvaluation(response string, ex exercise.Exercise) exercise.Eva
 		return exercise.Evaluation{Correct: true, Score: deterministicCorrectScore, FeedbackJA: correctFeedbackJA, FeedbackEN: correctFeedbackEN}
 	}
 	return exercise.Evaluation{Correct: false, Score: deterministicWrongScore, FeedbackJA: wrongFeedbackJA, FeedbackEN: wrongFeedbackEN}
+}
+
+// WordClozeForTest exposes wordCloze so a test can pin which readings
+// survive the prefix rule without going through a whole Start.
+func WordClozeForTest(item vocabulary.Item, example, form string) exercise.Exercise {
+	return wordCloze(item, example, form, nil)
 }

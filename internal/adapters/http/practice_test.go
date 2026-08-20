@@ -386,7 +386,7 @@ func TestPracticePageOffersAdapterChoiceAndProgress(t *testing.T) {
 // learner's own sentence — which is how an escaping bug becomes an
 // injection.
 func TestHighlightSplitsAroundTheWord(t *testing.T) {
-	got := highlight("この二つの記号は紛らわしいので注意", "紛らわしい")
+	got := highlight("この二つの記号は紛らわしいので注意", "紛らわしい", "")
 	if got == nil {
 		t.Fatal("no highlight for a sentence that contains the word")
 	}
@@ -408,7 +408,7 @@ func TestHighlightIsAbsentWhenThereIsNothingToMark(t *testing.T) {
 		{"no word", "文があります", ""},
 		{"word not present", "この文には入っていません", "紛らわしい"},
 	} {
-		if got := highlight(tc.sentence, tc.word); got != nil {
+		if got := highlight(tc.sentence, tc.word, ""); got != nil {
 			t.Errorf("%s: got %+v, want nil", tc.name, got)
 		}
 	}
@@ -424,7 +424,7 @@ func TestAnExampleSentenceIsEscapedNotInjected(t *testing.T) {
 		ID: "ex-1", Type: exercise.TypeWordRecall, IsWord: true,
 		Prompt: "危ない", Reading: "あぶない",
 		Position: 1, Total: runLength, Percent: 10,
-		ExampleParts: highlight("<script>alert(1)</script>は危ないです", "危ない"),
+		ExampleParts: highlight("<script>alert(1)</script>は危ないです", "危ない", "あぶない"),
 	}
 	if view.ExampleParts == nil {
 		t.Fatal("no highlight; the fixture does not exercise the path")
@@ -440,9 +440,13 @@ func TestAnExampleSentenceIsEscapedNotInjected(t *testing.T) {
 	if !strings.Contains(body, "&lt;script&gt;") {
 		t.Errorf("the sentence was not escaped into the output at all:\n%s", body)
 	}
-	// And the emphasis itself IS markup, deliberately.
-	if !strings.Contains(body, "<strong>危ない</strong>") {
+	// The emphasis and the furigana ARE markup, deliberately — which is
+	// exactly why the sentence around them must not be.
+	if !strings.Contains(body, "<strong><ruby>危ない") {
 		t.Errorf("the target word was not emphasised:\n%s", body)
+	}
+	if !strings.Contains(body, "<rt>あぶない</rt>") {
+		t.Errorf("the target word carried no furigana:\n%s", body)
 	}
 }
 
@@ -698,5 +702,23 @@ func TestDecliningShowsTheAnswerWithoutADiff(t *testing.T) {
 	}
 	if strings.Contains(body, "もう一度挑戦しましょう") {
 		t.Error("a decline got the wrong-answer copy")
+	}
+}
+
+// Furigana is withheld in three cases, each for its own reason. Group
+// ruby over a fragment is the interesting one: a pattern matched by
+// prefix would get the whole expression's reading floating over part of
+// it, which is not furigana, it is a wrong claim about how that fragment
+// is read.
+func TestFuriganaIsWithheldWhenItWouldBeWrongOrPointless(t *testing.T) {
+	for _, tc := range []struct{ name, text, reading, want string }{
+		{"kanji word", "紛らわしい", "まぎらわしい", "まぎらわしい"},
+		{"no reading recorded", "紛らわしい", "", ""},
+		{"reading is the text", "ひらがな", "ひらがな", ""},
+		{"surrounding space ignored", "曖昧", "  あいまい ", "あいまい"},
+	} {
+		if got := rubyReading(tc.text, tc.reading); got != tc.want {
+			t.Errorf("%s: rubyReading(%q, %q) = %q, want %q", tc.name, tc.text, tc.reading, got, tc.want)
+		}
 	}
 }

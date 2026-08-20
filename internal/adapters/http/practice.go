@@ -143,7 +143,13 @@ func toExerciseView(ex exercise.Exercise, position, streak int, drilled []string
 		// The prompt IS the expression for a card, tilde and all, while
 		// the sentence contains whatever form actually inflected into it.
 		if form, ok := vocabulary.MatchIn(ex.Example, ex.Prompt); ok {
-			v.ExampleParts = highlight(ex.Example, form)
+			// Ruby only when the matched form IS the whole expression:
+			// see rubyReading.
+			reading := ""
+			if form == ex.Prompt {
+				reading = ex.Reading
+			}
+			v.ExampleParts = highlight(ex.Example, form, reading)
 		}
 	}
 	return v
@@ -168,6 +174,10 @@ type exerciseResultView struct {
 	// Answer is the canonical answer, shown alongside the diff. Only ever
 	// set once the attempt is over, never while the question is open.
 	Answer string
+	// AnswerRuby is the answer with its furigana. Showing a learner the
+	// kanji they could not recall without telling them how to say it
+	// teaches half a word.
+	AnswerRuby rubyView
 	// NotSure is set when the learner declined to answer. The result
 	// still shows everything a wrong answer shows — the answer, the
 	// definition, the sentence — because that is what they asked for by
@@ -215,7 +225,7 @@ func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, respon
 	// open — for a cloze it IS the answer.
 	if ex.SubjectType == exercise.SubjectWord {
 		v.Definition = ex.Definition
-		v.ExampleParts = highlight(ex.Example, ex.Answer)
+		v.ExampleParts = highlight(ex.Example, ex.Answer, ex.Reading)
 	}
 
 	// The answer itself, whenever the attempt is over and there is one.
@@ -223,6 +233,7 @@ func toExerciseResultView(eval exercise.Evaluation, ex exercise.Exercise, respon
 	// know, and the only useful reply is to tell them.
 	if !eval.Correct && ex.Answer != "" && ex.Type != exercise.TypeFreeProduction {
 		v.Answer = ex.Answer
+		v.AnswerRuby = rubyView{Text: ex.Answer, Reading: rubyReading(ex.Answer, ex.Reading)}
 	}
 
 	// A diff only means something when there is one canonical answer the
@@ -566,6 +577,9 @@ func (s *Server) practiceAnswer(w http.ResponseWriter, r *http.Request) {
 // escaping bug becomes an injection.
 type sentenceHighlight struct {
 	Before, Word, After string
+	// Reading is furigana for Word, empty when there is none worth
+	// showing — see rubyReading.
+	Reading string
 	// Whole is the sentence unsplit — what a speak button reads, since
 	// the emphasis is visual and has no business in the audio.
 	Whole string
@@ -576,7 +590,7 @@ type sentenceHighlight struct {
 // nil when there is no sentence, no word, or the word does not appear:
 // a "highlight" that highlights nothing is just a sentence, and the
 // template renders it only when there is something to emphasise.
-func highlight(sentence, word string) *sentenceHighlight {
+func highlight(sentence, word, reading string) *sentenceHighlight {
 	sentence = strings.TrimSpace(sentence)
 	if sentence == "" || word == "" {
 		return nil
@@ -586,10 +600,11 @@ func highlight(sentence, word string) *sentenceHighlight {
 		return nil
 	}
 	return &sentenceHighlight{
-		Before: sentence[:i],
-		Word:   word,
-		After:  sentence[i+len(word):],
-		Whole:  sentence,
+		Before:  sentence[:i],
+		Word:    word,
+		After:   sentence[i+len(word):],
+		Reading: rubyReading(word, reading),
+		Whole:   sentence,
 	}
 }
 
@@ -694,4 +709,44 @@ func (s *Server) runSummary(ctx context.Context, identity learner.IdentityID) *r
 	sort.Slice(view.Words, func(i, j int) bool { return view.Words[i].Label < view.Words[j].Label })
 	sort.Slice(view.Concepts, func(i, j int) bool { return view.Concepts[i].Label < view.Concepts[j].Label })
 	return view
+}
+
+// rubyReading is the furigana to show above text, or "" for none.
+//
+// Withheld in three cases, each for its own reason:
+//
+//   - No reading recorded. Nothing to show.
+//   - The reading IS the text. A kana word ruby-ed with itself is
+//     clutter that says nothing.
+//   - The text is only PART of the expression the reading belongs to.
+//     A pattern matched by prefix (というわけでは out of
+//     というわけではない) would get the whole expression's reading
+//     floating over a fragment of it, which is not furigana, it is a
+//     wrong claim about how that fragment is read.
+//
+// Group ruby over the whole word rather than per-character alignment:
+// splitting a reading across kanji needs a morphological analyser, and
+// guessing the split is how 紛らわしい ends up labelled まぎ-ら-わ-しい.
+func rubyReading(text, reading string) string {
+	text, reading = strings.TrimSpace(text), strings.TrimSpace(reading)
+	if reading == "" || reading == text {
+		return ""
+	}
+	return reading
+}
+
+// rubyView is one piece of text with optional furigana — what the
+// "ruby" template renders.
+//
+// A named type rather than a map built in the template: html/template
+// has no dict function, and adding one so a template can assemble its
+// own arguments moves structure out of Go and into a string.
+type rubyView struct {
+	Text    string
+	Reading string
+}
+
+// Ruby is the highlighted word with its furigana, for the template.
+func (s sentenceHighlight) Ruby() rubyView {
+	return rubyView{Text: s.Word, Reading: s.Reading}
 }
