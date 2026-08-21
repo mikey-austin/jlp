@@ -1370,3 +1370,44 @@ func TestReadingIsWithheldFromAPrefixMatch(t *testing.T) {
 		t.Error("the whole expression was denied its reading")
 	}
 }
+
+// The model writes the passage, then writes the choices, and it writes
+// the true one first every time — the canned fixture has that shape
+// because production does. A reading question whose answer is always
+// option A is answered correctly by a learner who has not read it, and
+// after the second one that is what happens.
+//
+// Three choices over thirty draws: if the answer never moved, one
+// position would take all thirty, which a shuffle produces with
+// probability 3·(1/3)^30 ≈ 1e-14.
+func TestAPassageDoesNotAlwaysPutTheAnswerFirst(t *testing.T) {
+	now := time.Date(2026, 8, 19, 12, 0, 0, 0, time.UTC)
+	svc, _, _ := wordSelectionHarness(t, []vocabulary.Item{
+		recentItem("w1", "紛らわしい", "まぎらわしい", "confusing"),
+		recentItem("w2", "曖昧", "あいまい", "vague"),
+		recentItem("w3", "微妙", "びみょう", "subtle"),
+	}, now)
+
+	positions := map[int]int{}
+	for i := 0; i < 30; i++ {
+		ex, err := svc.Start(context.Background(), testIdentity, apppractice.StartOptions{Want: apppractice.KindPassage})
+		if err != nil {
+			t.Fatalf("start %d: %v", i, err)
+		}
+		if ex.Type != exercise.TypePassageChoice {
+			t.Fatalf("start %d: type = %q, want a passage", i, ex.Type)
+		}
+		at := slices.Index(ex.Choices, ex.Answer)
+		if at < 0 {
+			t.Fatalf("start %d: the answer %q is not among its choices %v — shuffling lost it",
+				i, ex.Answer, ex.Choices)
+		}
+		positions[at]++
+	}
+	if len(positions) < 2 {
+		t.Errorf("the answer sat at one position in all 30 draws (%v); the choices are not shuffled", positions)
+	}
+	if positions[0] == 30 {
+		t.Error("the answer was option A every time — exactly the bug")
+	}
+}

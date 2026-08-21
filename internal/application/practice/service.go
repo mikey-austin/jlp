@@ -351,6 +351,13 @@ func (s *Service) passageDrill(ctx context.Context, identity learner.IdentityID,
 	// exercise records one, and the retrieval schedule needs a single
 	// subject to move. The others are still met in context, which is the
 	// point of the shape — they simply are not what this attempt scores.
+	// Shuffled, for the same reason clozeChoices shuffles: the model
+	// writes the passage, then writes the choices, and it writes the
+	// true one first every time. A reading question whose answer is
+	// always option A tests nothing after the first one — which is
+	// exactly what it had been doing.
+	rand.Shuffle(len(ex.Choices), func(i, j int) { ex.Choices[i], ex.Choices[j] = ex.Choices[j], ex.Choices[i] })
+
 	ex.SubjectType = exercise.SubjectWord
 	ex.SubjectRef = items[0].ID
 	return ex, true, nil
