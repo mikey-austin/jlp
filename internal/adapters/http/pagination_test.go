@@ -151,7 +151,7 @@ func wordsOnPage(body string) map[string]bool {
 	// cells were named for the phone card layout, once when the table
 	// became a list — and both times the empty-page guard below is what
 	// caught it.
-	const marker = `<li class="word" data-expression="`
+	const marker = `<li class="list__item" data-expression="`
 	for offset := 0; ; {
 		i := strings.Index(body[offset:], marker)
 		if i < 0 {

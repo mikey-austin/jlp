@@ -456,6 +456,21 @@ func TestSessionsCreateEmptyTitleReopensModalWithErrorAndPreservedValues(t *test
 	srv := NewServer(testOptionsWithSessions())
 	h := srv.HandlerForTest()
 
+	// A session to lose. The reopened page is supposed to keep the list
+	// rendered behind the modal, and against an EMPTY repository that
+	// claim cannot fail — the old assertion looked for the table chrome,
+	// which an empty list renders just as happily as a full one.
+	existing := url.Values{}
+	existing.Set("title", "先週の日記")
+	existing.Set("purpose", "Diary")
+	seed := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(existing.Encode()))
+	seed.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	seedRec := httptest.NewRecorder()
+	h.ServeHTTP(seedRec, seed)
+	if seedRec.Code != http.StatusSeeOther {
+		t.Fatalf("seeding a session: status = %d, body=%s", seedRec.Code, seedRec.Body.String())
+	}
+
 	form := url.Values{}
 	form.Set("title", "")
 	form.Set("purpose", "Diary")
@@ -489,8 +504,9 @@ func TestSessionsCreateEmptyTitleReopensModalWithErrorAndPreservedValues(t *test
 			t.Fatalf("preserved form value %q not found: %s", want, body)
 		}
 	}
-	// The list stays rendered behind the modal, not replaced by it.
-	if !strings.Contains(body, "<table>") {
+	// The list stays rendered behind the modal, not replaced by it —
+	// checked by the session that is in it, not by the container.
+	if !strings.Contains(body, "先週の日記") {
 		t.Fatalf("session list missing from reopened page: %s", body)
 	}
 }
@@ -551,3 +567,77 @@ func TestSessionsWorkspaceCrossIdentityNotFound(t *testing.T) {
 // replacement). TestSessionsActivityRendersRecentEventsScopedToCallerAndSession
 // and TestSessionsActivityRepositoryErrorReturns500 tested exactly that
 // route and were removed with it.
+
+// The teaching profile decides how the tutor behaves in a session, and
+// it was not on this page at all: two 「日記」 sessions with different
+// teacher modes were indistinguishable without opening each in turn. It
+// belongs in the detail — visible without a page load, not on the line
+// where it would rebuild the wall of prose the list redesign removed.
+func TestASessionsProfileIsBehindTheDisclosureNotOnTheLine(t *testing.T) {
+	h := NewServer(testOptionsWithSessions()).HandlerForTest()
+
+	form := url.Values{}
+	form.Set("title", "先週の日記")
+	form.Set("purpose", "Diary")
+	form.Set("teacher_mode", "socratic")
+	form.Set("explanation_language", "en")
+	form.Set("strictness", "strict")
+	form.Set("feedback_timing", "immediate")
+	req := httptest.NewRequest(http.MethodPost, "/sessions", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("creating a session: status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/sessions", nil))
+	body := rec.Body.String()
+
+	start := strings.Index(body, `class="list__line"`)
+	if start < 0 {
+		t.Fatalf("no session rows rendered:\n%s", body)
+	}
+	end := strings.Index(body[start:], "</summary>")
+	if end < 0 {
+		t.Fatalf("the row has no summary to close:\n%s", body[start:])
+	}
+	line := body[start : start+end]
+	if !strings.Contains(line, "先週の日記") {
+		t.Fatalf("sliced the wrong element; it does not hold the session:\n%s", line)
+	}
+
+	for _, want := range []string{"先週の日記", `href="/sessions/`, "Diary"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line is missing %q — you cannot find a session by it:\n%s", want, line)
+		}
+	}
+	// The profile: present, and behind the disclosure. The form's own
+	// <option> values also say "socratic", so each is checked inside the
+	// detail block specifically rather than anywhere in the body.
+	detailStart := strings.Index(body, `class="list__detail"`)
+	if detailStart < 0 {
+		t.Fatalf("no detail block rendered:\n%s", body)
+	}
+	detail := body[detailStart:]
+	if e := strings.Index(detail, "</details>"); e >= 0 {
+		detail = detail[:e]
+	}
+	for _, want := range []string{"socratic", "strict", "en", "immediate"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("the detail is missing profile field %q:\n%s", want, detail)
+		}
+		if strings.Contains(line, want) {
+			t.Errorf("profile field %q is on the summary line:\n%s", want, line)
+		}
+	}
+	// 削除 is destructive; it does not belong beside every row of a list
+	// being scrolled with a thumb.
+	if strings.Contains(line, "削除") {
+		t.Errorf("the delete button is on the summary line:\n%s", line)
+	}
+	if !strings.Contains(detail, "削除") {
+		t.Errorf("the delete button was dropped entirely, not just moved:\n%s", detail)
+	}
+}

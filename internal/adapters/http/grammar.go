@@ -30,18 +30,30 @@ func jlptChip(level int) string {
 // misleading 0001-01-01 date.
 type grammarConceptStatView struct {
 	Slug, Name, JLPTChip string
+	// Description is the catalog's explanation of the concept, and
+	// Example the first of its examples — what the list shows one
+	// disclosure deep so that finding out what a concept IS does not
+	// cost a page load per concept across a 400-entry catalog. Example
+	// is the FIRST only: the row is a taste, and /grammar/{slug} is
+	// where the rest of them live.
+	Description, Example string
 	Encounters           int
 	LastSeen             time.Time
 }
 
 func toGrammarConceptStatView(cs storage.ConceptStat) grammarConceptStatView {
-	return grammarConceptStatView{
-		Slug:       cs.Slug,
-		Name:       cs.Name,
-		JLPTChip:   jlptChip(cs.JLPTLevel),
-		Encounters: cs.Encounters,
-		LastSeen:   cs.LastSeen,
+	v := grammarConceptStatView{
+		Slug:        cs.Slug,
+		Name:        cs.Name,
+		JLPTChip:    jlptChip(cs.JLPTLevel),
+		Description: cs.Description,
+		Encounters:  cs.Encounters,
+		LastSeen:    cs.LastSeen,
 	}
+	if len(cs.Examples) > 0 {
+		v.Example = cs.Examples[0]
+	}
+	return v
 }
 
 // grammarList handles GET /grammar: the full curated JLPT catalog joined

@@ -99,7 +99,9 @@ func TestGrammarListRendersStatRow(t *testing.T) {
 		"い-adjective past tense (〜かった)",
 		`href="/grammar/i-adjective-past"`,
 		"N5",
-		">3<",
+		// The count with its unit: the line answers "have I met this",
+		// and a bare 3 in a column read as 3 of something unstated.
+		">3回<",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("GET /grammar body missing %q: %s", want, body)
@@ -233,5 +235,78 @@ func TestGrammarDetailCorrectionsRepositoryErrorReturns500(t *testing.T) {
 	srv.HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/grammar/i-adjective-past", nil))
 	if rec.Code != http.StatusInternalServerError {
 		t.Fatalf("status = %d, want 500", rec.Code)
+	}
+}
+
+// The catalog is all 400-odd JLPT concepts. As a four-column table that
+// was 400 stacked cards on a phone; the line now answers "which concept,
+// how hard, have I met it" and the explanation sits one disclosure deep.
+// Every other test on this page passes just as well if the description
+// migrates onto the line, so this is the one that holds the shape.
+func TestAConceptsExplanationIsBehindTheDisclosureNotOnTheLine(t *testing.T) {
+	opts := grammarTestOptions()
+	repo := opts.Grammar.(*fakeGrammarPagesRepo)
+	repo.stats = []storage.ConceptStat{{
+		Slug: "te-form", Name: "て-form", JLPTLevel: 5, Encounters: 3,
+		LastSeen:    time.Date(2026, 8, 17, 9, 0, 0, 0, time.UTC),
+		Description: "動詞を接続する基本の活用",
+		Examples:    []string{"本を読んで、寝ました。", "二つ目の例文。"},
+	}}
+
+	rec := httptest.NewRecorder()
+	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/grammar", nil))
+	body := rec.Body.String()
+
+	start := strings.Index(body, `class="list__line"`)
+	if start < 0 {
+		t.Fatalf("no concept rows rendered:\n%s", body)
+	}
+	end := strings.Index(body[start:], "</summary>")
+	if end < 0 {
+		t.Fatalf("the row has no summary to close:\n%s", body[start:])
+	}
+	line := body[start : start+end]
+	if !strings.Contains(line, "て-form") {
+		t.Fatalf("sliced the wrong element; it does not hold the concept:\n%s", line)
+	}
+
+	for _, want := range []string{"て-form", "N5", "3回"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line is missing %q — you cannot find a concept by it:\n%s", want, line)
+		}
+	}
+	for _, hidden := range []string{"動詞を接続する基本の活用", "本を読んで、寝ました。", "2026-08-17"} {
+		if strings.Contains(line, hidden) {
+			t.Errorf("%q is on the summary line; the list is a wall of prose again:\n%s", hidden, line)
+		}
+		if !strings.Contains(body, hidden) {
+			t.Errorf("%q was dropped from the page entirely, not just off the line", hidden)
+		}
+	}
+	// The row is a taste, not the archive — the second example lives on
+	// /grammar/{slug}, or 400 concepts put their whole example list on
+	// one page.
+	if strings.Contains(body, "二つ目の例文。") {
+		t.Error("the row printed every example; only the first belongs on the list page")
+	}
+}
+
+// A concept never met in 添削 has a zero LastSeen. The detail must say so
+// in words rather than formatting 0001-01-01, which is the same trap the
+// table had.
+func TestAnUnencounteredConceptShowsNoDate(t *testing.T) {
+	opts := grammarTestOptions()
+	repo := opts.Grammar.(*fakeGrammarPagesRepo)
+	repo.stats = []storage.ConceptStat{{Slug: "keigo", Name: "敬語", JLPTLevel: 2, Description: "丁寧な言い方"}}
+
+	rec := httptest.NewRecorder()
+	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/grammar", nil))
+	body := rec.Body.String()
+
+	if strings.Contains(body, "0001-01-01") {
+		t.Errorf("a never-encountered concept rendered its zero time as a date:\n%s", body)
+	}
+	if !strings.Contains(body, "未遭遇") {
+		t.Errorf("body missing 未遭遇 for a zero-encounter concept:\n%s", body)
 	}
 }

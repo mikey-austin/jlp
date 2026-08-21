@@ -113,12 +113,20 @@ func (r *GrammarRepository) ConceptStats(ctx context.Context, identity learner.I
 		if err != nil {
 			return nil, fmt.Errorf("concept %q: %w", row.Slug, err)
 		}
+		var examples []string
+		if len(row.Examples) > 0 {
+			if err := json.Unmarshal(row.Examples, &examples); err != nil {
+				return nil, fmt.Errorf("concept %q examples: %w", row.Slug, err)
+			}
+		}
 		out = append(out, storage.ConceptStat{
-			Slug:       row.Slug,
-			Name:       row.Name,
-			JLPTLevel:  int(row.JlptLevel),
-			Encounters: int(row.Encounters),
-			LastSeen:   lastSeen,
+			Slug:        row.Slug,
+			Name:        row.Name,
+			JLPTLevel:   int(row.JlptLevel),
+			Description: row.Description,
+			Examples:    examples,
+			Encounters:  int(row.Encounters),
+			LastSeen:    lastSeen,
 		})
 	}
 	return out, nil

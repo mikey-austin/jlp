@@ -558,7 +558,7 @@ func TestAWordsProseIsBehindTheDisclosureNotOnTheLine(t *testing.T) {
 	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/vocabulary", nil))
 	body := rec.Body.String()
 
-	start := strings.Index(body, `class="word__line"`)
+	start := strings.Index(body, `class="list__line"`)
 	if start < 0 {
 		t.Fatalf("no word rows rendered:\n%s", body)
 	}

@@ -19,8 +19,15 @@ import (
 type ConceptStat struct {
 	Slug, Name string
 	JLPTLevel  int
-	Encounters int       // corrections tagged with this concept for the identity
-	LastSeen   time.Time // zero when never
+	// Description and Examples are the catalog's own explanation of the
+	// concept, carried here so /grammar can show what a concept IS
+	// without a page load per concept — the list is the whole catalog,
+	// and a name plus a level does not tell a learner whether they know
+	// it. Same columns GetConcept returns; no extra query.
+	Description string
+	Examples    []string
+	Encounters  int       // corrections tagged with this concept for the identity
+	LastSeen    time.Time // zero when never
 }
 
 // GrammarRepository persists the curated JLPT concept catalog

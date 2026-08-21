@@ -4,14 +4,48 @@
     <button type="button" id="new-session-trigger" class="btn" aria-haspopup="dialog" aria-controls="session-modal">新しいセッション</button>
   </div>
   {{template "undo_delete" .}}
-  <div class="table-card">
-    <table>
-      <thead><tr><th>タイトル</th><th>目的</th><th>更新</th><th></th></tr></thead>
-      <tbody>
-        {{range .Sessions}}<tr><td><a href="/sessions/{{.ID}}">{{.Title}}</a></td><td>{{.Purpose}}</td><td>{{.UpdatedAt.Format "2006-01-02 15:04"}}</td><td><button type="button" class="btn btn--danger btn--sm no-print" data-confirm-delete="/sessions/{{.ID}}/delete" data-confirm-delete-label="{{.Title}}" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td></tr>{{else}}<tr><td colspan="4" class="empty">セッションがありません</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
+  {{/* One line per session, expanding. 目的 and the teaching profile
+       are what you open a session to check, not what you scroll past to
+       find one — and the profile was not on this page at all before, so
+       two 「日記」 sessions with different teacher modes were
+       indistinguishable without opening each in turn.
+
+       削除 moves one disclosure deep with it: it is destructive, and it
+       does not belong beside every row of a list you are scrolling with
+       a thumb. */}}
+  <ul class="list list--card">
+    {{range .Sessions}}
+    {{/* data-session-id is the row's stable identity; the title is a
+         link and wraps, so reading it out of the markup is parsing
+         presentation. */}}
+    <li class="list__item" data-session-id="{{.ID}}">
+      <details>
+        <summary class="list__line">
+          <span class="list__primary"><a href="/sessions/{{.ID}}">{{.Title}}</a></span>
+          {{if .Purpose}}<span class="badge badge--type">{{.Purpose}}</span>{{end}}
+          <span class="list__meta" title="最終更新">{{.Updated}}</span>
+        </summary>
+        <div class="list__detail">
+          {{/* The profile decides how the tutor behaves here. A session
+               created before one of these fields existed simply omits
+               it rather than printing a blank label. */}}
+          <p>
+            {{if .TeacherMode}}<span class="chip">{{.TeacherMode}}</span>{{end}}
+            {{if .Strictness}}<span class="chip">{{.Strictness}}</span>{{end}}
+            {{if .ExplanationLanguage}}<span class="chip">説明 {{.ExplanationLanguage}}</span>{{end}}
+            {{if .FeedbackTiming}}<span class="chip">訂正 {{.FeedbackTiming}}</span>{{end}}
+          </p>
+          <p>作成 {{.Created}}</p>
+          <button type="button" class="btn btn--danger btn--sm no-print"
+                  data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Title}}"
+                  aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button>
+        </div>
+      </details>
+    </li>
+    {{else}}
+    <li class="list__item list__empty"><p class="empty">セッションがありません</p></li>
+    {{end}}
+  </ul>
 
   <dialog id="session-modal" class="modal" aria-labelledby="session-modal-title"{{if .FormError}} data-reopen{{end}}>
     <div class="modal__panel">

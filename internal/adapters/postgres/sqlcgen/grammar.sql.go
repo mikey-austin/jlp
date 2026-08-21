@@ -12,7 +12,7 @@ import (
 )
 
 const conceptStats = `-- name: ConceptStats :many
-SELECT gc.slug, gc.name, gc.jlpt_level,
+SELECT gc.slug, gc.name, gc.jlpt_level, gc.description, gc.examples,
        COUNT(oc.correction_id)::int AS encounters,
        COALESCE(MAX(oc.created_at), 'epoch'::timestamptz) AS last_seen
 FROM grammar_concepts gc
@@ -23,16 +23,18 @@ LEFT JOIN (
     JOIN feedback_requests f ON f.id = c.feedback_request_id
     WHERE cc.resolved AND f.identity_id = $1
 ) oc ON oc.concept_slug = gc.slug
-GROUP BY gc.slug, gc.name, gc.jlpt_level
+GROUP BY gc.slug, gc.name, gc.jlpt_level, gc.description, gc.examples
 ORDER BY encounters DESC, gc.jlpt_level DESC, gc.slug
 `
 
 type ConceptStatsRow struct {
-	Slug       string
-	Name       string
-	JlptLevel  int32
-	Encounters int32
-	LastSeen   interface{}
+	Slug        string
+	Name        string
+	JlptLevel   int32
+	Description string
+	Examples    []byte
+	Encounters  int32
+	LastSeen    interface{}
 }
 
 // Scoped subquery, not a straight LEFT JOIN + WHERE: filtering
@@ -42,6 +44,12 @@ type ConceptStatsRow struct {
 // produces a row here (encounters=0), rather than a WHERE clause on
 // the outer query dropping the grammar_concepts row entirely because
 // its only correction_concepts match belongs to someone else.
+// description and examples come along for the ride: /grammar lists all
+// 400-odd catalog concepts, and carrying the explanation in the same row
+// is what lets that page put it one disclosure deep instead of making a
+// learner open a separate page per concept to find out what it is. They
+// are columns of grammar_concepts, the table already being scanned, so
+// this costs a wider row and no extra query.
 func (q *Queries) ConceptStats(ctx context.Context, identityID string) ([]ConceptStatsRow, error) {
 	rows, err := q.db.Query(ctx, conceptStats, identityID)
 	if err != nil {
@@ -55,6 +63,8 @@ func (q *Queries) ConceptStats(ctx context.Context, identityID string) ([]Concep
 			&i.Slug,
 			&i.Name,
 			&i.JlptLevel,
+			&i.Description,
+			&i.Examples,
 			&i.Encounters,
 			&i.LastSeen,
 		); err != nil {

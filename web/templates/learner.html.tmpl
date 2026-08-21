@@ -10,14 +10,14 @@
      <details>, so it works with no JavaScript and brings keyboard and
      screen-reader behaviour with it. */}}
 {{define "insight"}}
-<li class="insight">
+<li class="list__item" data-subject="{{.Label}}">
   <details>
-    <summary class="insight__line">
-      <span class="insight__subject" lang="ja">{{.Label}}</span>
+    <summary class="list__line">
+      <span class="list__primary" lang="ja">{{.Label}}</span>
       <span class="badge badge--type">{{.Kind}}</span>
-      <span class="insight__metric">{{.Metric}}</span>
+      <span class="list__meta">{{.Metric}}</span>
     </summary>
-    <div class="insight__detail">
+    <div class="list__detail">
       {{range .Details}}<p>{{.}}</p>{{end}}
     </div>
   </details>
@@ -51,7 +51,7 @@
       <span class="panel__meta">{{len .Priorities}}件</span>
     </summary>
     {{if .Priorities}}
-    <ul class="insight-list">
+    <ul class="list">
       {{range .Priorities}}{{template "insight" .}}{{end}}
     </ul>
     {{else}}<p class="empty">優先項目がありません</p>{{end}}
@@ -67,7 +67,7 @@
       まだこのキューには入りません（語彙は入ります）。
     </p>
     {{if .Retrieval}}
-    <ul class="insight-list">
+    <ul class="list">
       {{range .Retrieval}}{{template "insight" .}}{{end}}
     </ul>
     {{else}}<p class="empty">復習予定がありません</p>{{end}}
@@ -79,7 +79,7 @@
       <span class="panel__meta">{{len .Observations}}件</span>
     </summary>
     {{if .Observations}}
-    <ul class="insight-list">
+    <ul class="list">
       {{range .Observations}}{{template "insight" .}}{{end}}
     </ul>
     {{else}}<p class="empty">観察がありません</p>{{end}}

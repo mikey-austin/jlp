@@ -368,8 +368,22 @@ func TestThePlannerRationaleIsBehindTheDisclosureNotOnTheLine(t *testing.T) {
 		t.Errorf("the rationale was dropped entirely:\n%s", body)
 	}
 	// …but inside the detail block, not the summary line.
-	line := body[strings.Index(body, `class="insight__line"`):]
-	line = line[:strings.Index(line, "</summary>")]
+	// Locating the line rather than assuming it: a marker that has
+	// stopped matching slices an empty string, and every assertion below
+	// then passes on nothing. That is exactly how the /vocabulary
+	// pagination test spent two redesigns green and blind.
+	start := strings.Index(body, `class="list__line"`)
+	if start < 0 {
+		t.Fatalf("no rows rendered — the marker no longer matches the markup:\n%s", body)
+	}
+	end := strings.Index(body[start:], "</summary>")
+	if end < 0 {
+		t.Fatalf("the row has no summary to close:\n%s", body[start:])
+	}
+	line := body[start : start+end]
+	if !strings.Contains(line, "te-form") {
+		t.Fatalf("sliced the wrong element; it does not hold the subject:\n%s", line)
+	}
 	if strings.Contains(line, "persistence") {
 		t.Errorf("the rationale is on the summary line:\n%s", line)
 	}

@@ -1232,9 +1232,21 @@ p.empty {
 .panel > *:last-child {
   padding-bottom: var(--space-4);
 }
+/* A table in a panel is a card like the stat grid above it, and lines up
+   with it. It used to be stripped of its border and stretched to the
+   panel edge: the tinted header band then read as panel chrome rather
+   than as the top of a table, and it sat 20px out of line with every
+   other child of the panel.
+
+   Margin, not the padding the panel gives its other children — padding
+   would inset the ROWS while leaving the card's border and header band
+   still touching the panel edge, which is the same misalignment with an
+   extra indent. */
 .panel .table-card {
-  border: 0;
   padding-inline: 0;
+  padding-bottom: 0;
+  margin-inline: var(--space-5);
+  margin-bottom: var(--space-4);
 }
 .panel__more {
   margin: var(--space-3) 0 0;
@@ -1242,19 +1254,41 @@ p.empty {
   font-size: var(--text-sm);
 }
 
-/* ---- one subject per line, expanding ---- */
-.insight-list {
+/* ======================= one row per thing, expanding ==================== */
+
+/* 学習, 語彙, 文法 and セッション all show the same thing: a long list of
+   subjects, each with a name, a badge, one number, and a paragraph.
+   The paragraph is what made them unreadable as tables — it is the
+   widest column, and at 390px the stacked-card fallback turned every
+   row into a four-to-nine-line block. Five hundred words, four hundred
+   grammar concepts: five hundred blocks, four hundred blocks.
+
+   So: what you scan FOR stays on the line, everything else goes one
+   disclosure deep. Native <details> per row, so it works with no
+   JavaScript and brings keyboard and screen-reader behaviour with it.
+
+   One component, four pages. It was two copies after 語彙 and diverging
+   already. */
+.list {
   margin: 0;
   padding: 0;
   list-style: none;
 }
-.insight {
+/* Standalone lists are the page's card; inside a .panel the panel is
+   already the card, so the list stays flat. */
+.list--card {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.list__item {
   border-top: 1px solid var(--border);
 }
-.insight:first-child {
+.list__item:first-child {
   border-top: 0;
 }
-.insight__line {
+.list__line {
   display: flex;
   align-items: center;
   gap: var(--space-3);
@@ -1262,13 +1296,18 @@ p.empty {
   cursor: pointer;
   list-style: none;
 }
-.insight__line::-webkit-details-marker {
+.list--card .list__line {
+  padding-inline: var(--space-4);
+}
+.list__line::-webkit-details-marker {
   display: none;
 }
-/* The subject takes the room; the badge and number stay put. This is
-   what keeps every row one line at 390px, which the four-column table
-   never managed. */
-.insight__subject {
+.list--card .list__line:hover {
+  background: var(--surface-2);
+}
+/* The subject takes the room; badges and numbers stay put. This is what
+   keeps every row one line at 390px, which the tables never managed. */
+.list__primary {
   flex: 1 1 auto;
   min-width: 0;
   /* Wraps rather than truncating. An ellipsis kept every row exactly one
@@ -1278,19 +1317,53 @@ p.empty {
      ids break mid-token so they cannot push the badge off screen. */
   overflow-wrap: anywhere;
 }
-.insight__metric {
+.list__meta {
   flex: 0 0 auto;
-  font-variant-numeric: tabular-nums;
   color: var(--fg-muted);
   font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
 }
-.insight__detail {
+.list__detail {
   padding: 0 0 var(--space-3);
   color: var(--fg-muted);
   font-size: var(--text-sm);
 }
-.insight__detail p {
-  margin: 0 0 var(--space-1);
+.list--card .list__detail {
+  padding: 0 var(--space-4) var(--space-4);
+}
+.list__detail p {
+  margin: 0 0 var(--space-2);
+}
+.list__detail p:last-of-type {
+  margin-bottom: 0;
+}
+/* A control in the detail is not another paragraph; it needs the gap
+   that makes it read as an action rather than as the end of the text. */
+.list__detail .btn {
+  margin-top: var(--space-3);
+}
+/* The one line a learner reads for meaning rather than for navigation. */
+.list__gloss {
+  color: var(--fg);
+}
+.list__empty {
+  padding: var(--space-5);
+}
+
+/* ---- per-page additions to the shared row ---- */
+
+/* Japanese headwords carry furigana, which adds a line box above the
+   text. The leading goes on the whole cell so a word with a reading and
+   a word without occupy the same height — otherwise rows jitter as you
+   scroll and the eye loses the column of counts on the right. */
+.list__primary--ja {
+  font-size: var(--text-lg);
+  line-height: 2.1;
+}
+.word__sep {
+  opacity: 0.5;
+  margin-inline: 0.15em;
 }
 
 .learner__heading {
@@ -1304,79 +1377,3 @@ p.empty {
   margin-bottom: var(--space-4);
 }
 
-/* ============================ 語彙 word list ============================= */
-
-/* The same one-line-per-subject shape 学習 uses, tuned for a list that
-   can run to hundreds: the row is denser, and the word carries furigana
-   because that is the thing being scanned for. */
-.word-list {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  border: 1px solid var(--border);
-  border-radius: 12px;
-  background: var(--surface);
-  overflow: hidden;
-}
-.word {
-  border-top: 1px solid var(--border);
-}
-.word:first-child {
-  border-top: 0;
-}
-.word__line {
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  cursor: pointer;
-  list-style: none;
-}
-.word__line::-webkit-details-marker {
-  display: none;
-}
-.word__line:hover {
-  background: var(--bg-subtle, transparent);
-}
-.word__expression {
-  flex: 1 1 auto;
-  min-width: 0;
-  font-size: var(--text-lg);
-  /* Wraps rather than truncating: a word cut off is a word you cannot
-     look for. Long ids break mid-token so they cannot push the counts
-     off screen. */
-  overflow-wrap: anywhere;
-  /* Leading enough for furigana, on every row whether or not it has a
-     reading — otherwise rows jitter in height as you scroll and the eye
-     loses the column of counts on the right. */
-  line-height: 2.1;
-}
-.word__use {
-  flex: 0 0 auto;
-  color: var(--fg-muted);
-  font-size: var(--text-sm);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-}
-.word__sep {
-  opacity: 0.5;
-  margin-inline: 0.15em;
-}
-.word__detail {
-  padding: 0 var(--space-4) var(--space-4);
-  color: var(--fg-muted);
-  font-size: var(--text-sm);
-}
-.word__detail p {
-  margin: 0 0 var(--space-2);
-}
-.word__meaning {
-  color: var(--fg);
-}
-.word__tags,
-.word__source {
-  font-size: var(--text-xs, 0.75rem);
-}
-.word--empty {
-  padding: var(--space-5);
-}

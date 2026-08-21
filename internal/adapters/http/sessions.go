@@ -43,6 +43,46 @@ func defaultSessionFormValues() sessionFormValues {
 	}
 }
 
+// sessionListView is one session.Session as /sessions renders it.
+//
+// The list used to hand the domain type straight to the template, which
+// was fine while the row was four columns. It is now a line that expands,
+// and the detail shows the teaching profile — the settings that decide
+// how the tutor behaves in that session, and the only way to tell two
+// 「日記」 sessions apart without opening both.
+type sessionListView struct {
+	ID, Title, Purpose string
+	Updated, Created   string
+	DeleteAction       string
+	// Profile, flattened for display. A session created before a field
+	// existed has it empty; the template omits those rather than
+	// printing a blank label.
+	TeacherMode, Strictness, ExplanationLanguage, FeedbackTiming string
+}
+
+func toSessionListView(sess session.Session) sessionListView {
+	return sessionListView{
+		ID:                  string(sess.ID),
+		Title:               sess.Title,
+		Purpose:             sess.Purpose,
+		Updated:             sess.UpdatedAt.Format("2006-01-02 15:04"),
+		Created:             sess.CreatedAt.Format("2006-01-02"),
+		DeleteAction:        "/sessions/" + string(sess.ID) + "/delete",
+		TeacherMode:         sess.Profile.TeacherMode,
+		Strictness:          sess.Profile.Strictness,
+		ExplanationLanguage: sess.Profile.ExplanationLanguage,
+		FeedbackTiming:      sess.Profile.FeedbackTiming,
+	}
+}
+
+func toSessionListViews(list []session.Session) []sessionListView {
+	out := make([]sessionListView, 0, len(list))
+	for _, sess := range list {
+		out = append(out, toSessionListView(sess))
+	}
+	return out
+}
+
 func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	list, err := s.opts.Sessions.List(r.Context(), ident.ID)
@@ -53,7 +93,7 @@ func (s *Server) sessionsList(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "sessions", map[string]any{
 		"Title":         "セッション",
 		"Identity":      ident,
-		"Sessions":      list,
+		"Sessions":      toSessionListViews(list),
 		"FormValues":    defaultSessionFormValues(),
 		"RestoreAction": undoRestoreAction(r, "/sessions"),
 	})
@@ -140,7 +180,7 @@ func (s *Server) renderSessionsCreateError(w http.ResponseWriter, r *http.Reques
 	s.render(w, r, "sessions", map[string]any{
 		"Title":      "セッション",
 		"Identity":   ident,
-		"Sessions":   list,
+		"Sessions":   toSessionListViews(list),
 		"FormValues": values,
 		"FormError":  message,
 	})

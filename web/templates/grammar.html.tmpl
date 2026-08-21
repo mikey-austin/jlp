@@ -14,17 +14,42 @@
     別の場所に記録されるため、ここには含まれません。「未遭遇」は「一度も出てきていない」ではなく
     「添削では記録がない」という意味です。
   </p>
-  <div class="table-card table-card--stack">
-    <table>
-      <thead><tr><th>名前</th><th>JLPT</th><th>遭遇回数</th><th>最終確認</th></tr></thead>
-      <tbody>
-        {{range .Concepts}}<tr>
-          <td data-label="名前"><a href="/grammar/{{.Slug}}">{{.Name}}</a></td>
-          <td data-label="JLPT"><span class="badge badge--jlpt badge--jlpt-{{.JLPTChip | lower}}">{{.JLPTChip}}</span></td>
-          <td data-label="遭遇回数">{{.Encounters}}</td>
-          <td data-label="最終確認">{{if .Encounters}}{{.LastSeen.Format "2006-01-02"}}{{else}}未遭遇{{end}}</td>
-        </tr>{{else}}<tr><td colspan="4" class="empty">文法コンセプトがありません</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
+
+  {{/* One line per concept, expanding. The catalog is the whole of
+       JLPT N5–N1 — four hundred-odd concepts — and as a four-column
+       table that was four hundred stacked cards, sixteen hundred lines
+       of thumb-scrolling at 390px.
+
+       The line answers "which concept, how hard, have I met it". The
+       explanation and an example sit one disclosure deep: ConceptStats
+       already carries them (they are columns of the same table it
+       scans), so reading what a concept IS no longer costs a page load
+       per concept. */}}
+  <ul class="list list--card">
+    {{range .Concepts}}
+    {{/* data-slug is the row's stable identity — the name is a link and
+         wraps, so anything reading it out of the markup is parsing
+         presentation. */}}
+    <li class="list__item" data-slug="{{.Slug}}">
+      <details>
+        <summary class="list__line">
+          <span class="list__primary">{{.Name}}</span>
+          <span class="badge badge--jlpt badge--jlpt-{{.JLPTChip | lower}}">{{.JLPTChip}}</span>
+          {{/* Encounters, not the date: "have I met this" is the
+               question, and 0 vs 16 answers it at a glance where
+               2026-08-17 does not. The date is in the detail. */}}
+          <span class="list__meta" title="遭遇回数">{{if .Encounters}}{{.Encounters}}回{{else}}未遭遇{{end}}</span>
+        </summary>
+        <div class="list__detail">
+          {{if .Description}}<p class="list__gloss">{{.Description}}</p>{{end}}
+          {{if .Example}}<p lang="ja">{{.Example}}{{template "speak" .Example}}</p>{{end}}
+          <p>{{if .Encounters}}最終確認 {{.LastSeen.Format "2006-01-02"}}{{else}}添削での記録はありません{{end}}</p>
+          <p><a href="/grammar/{{.Slug}}">詳しく見る →</a></p>
+        </div>
+      </details>
+    </li>
+    {{else}}
+    <li class="list__item list__empty"><p class="empty">文法コンセプトがありません</p></li>
+    {{end}}
+  </ul>
 </section>{{end}}
