@@ -7,24 +7,61 @@
     <a href="/vocabulary?filter=activate"{{if eq .Filter "activate"}} class="is-active"{{end}}>活性化候補</a>
   </nav>
   {{template "undo_delete" .}}
-  <div class="table-card table-card--stack table-card--words">
-    <table>
-      <thead><tr><th>表現</th><th>読み方</th><th>意味</th><th>English</th><th>タグ</th><th>種類</th><th>検索回数</th><th>使用</th><th></th></tr></thead>
-      <tbody>
-        {{range .Items}}<tr>
-          <td class="w-expression" data-label="表現">{{.Expression}}</td>
-          <td class="w-reading" data-label="読み方">{{.Reading}}</td>
-          <td class="w-meaning" data-label="意味">{{.Meaning}}</td>
-          <td class="w-en" data-label="English">{{if .MeaningEN}}{{.MeaningEN}}{{end}}</td>
-          <td class="w-tags" data-label="タグ">{{if .TagsJoined}}{{.TagsJoined}}{{end}}</td>
-          <td class="w-kind" data-label="種類"><span class="badge badge--type">{{.KindLabel}}</span></td>
-          <td class="w-lookups" data-label="検索回数">{{.Lookups}}</td>
-          <td class="w-use" data-label="使用">✓{{.SuccessfulProductions}} ✗{{.FailedProductions}}</td>
-          <td class="w-actions" data-label="操作"><button type="button" class="btn btn--danger btn--sm no-print" data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Expression}}" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td>
-        </tr>{{else}}<tr><td colspan="9" class="empty">語彙がありません</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
+
+  {{/* One line per word, expanding — the same treatment 学習 got, and
+       for the same reason. Nine columns needed roughly four screens of
+       horizontal swipe at 390px, and the stacked-card fallback that
+       rescued them turned every word into a nine-line block: five
+       hundred words became five hundred blocks.
+
+       What stays on the line is what you scan FOR — the word itself,
+       with its reading above it, what kind it is, and how much you have
+       used it. Meaning, gloss, tags and source are what you open a word
+       to read, not what you scroll past to find one.
+
+       <details> per row: no JavaScript, and keyboard and screen-reader
+       behaviour come with it. */}}
+  <ul class="word-list">
+    {{range .Items}}
+    {{/* data-expression is the row's stable identity: the visible text
+         is wrapped in <ruby> and carries <rp> fallbacks, so anything
+         reading the word out of the markup would be parsing presentation.
+         Twice now a test has keyed on presentation here and silently
+         stopped matching. */}}
+    <li class="word" data-expression="{{.Expression}}">
+      <details>
+        <summary class="word__line">
+          <span class="word__expression" lang="ja">{{template "ruby" .Ruby}}</span>
+          <span class="badge badge--type">{{.KindLabel}}</span>
+          {{/* Use before lookups: "have I produced this" is the question
+               the whole vocabulary funnel is about, and a word looked up
+               nine times and never used is exactly what 活性化候補
+               exists to surface. */}}
+          <span class="word__use" title="使えた回数 / 調べた回数">✓{{.SuccessfulProductions}}<span class="word__sep">/</span>{{.Lookups}}</span>
+        </summary>
+        {{if .HasDetail}}
+        <div class="word__detail">
+          {{if .Meaning}}<p class="word__meaning" lang="ja">{{.Meaning}}{{template "speak" .Meaning}}</p>{{end}}
+          {{if .MeaningEN}}<p class="word__en">{{.MeaningEN}}</p>{{end}}
+          <p class="word__counts">
+            調べた {{.Lookups}}回 ・ 使えた {{.SuccessfulProductions}}回{{if .FailedProductions}} ・ 誤用 {{.FailedProductions}}回{{end}}
+          </p>
+          {{if .TagsJoined}}<p class="word__tags">{{.TagsJoined}}</p>{{end}}
+          {{if .Source}}<p class="word__source">{{.Source}}</p>{{end}}
+          {{/* Destructive, so it lives one disclosure deep rather than
+               beside every word in a list you are scrolling with a
+               thumb. */}}
+          <button type="button" class="btn btn--danger btn--sm no-print"
+                  data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Expression}}"
+                  aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button>
+        </div>
+        {{end}}
+      </details>
+    </li>
+    {{else}}
+    <li class="word word--empty"><p class="empty">語彙がありません</p></li>
+    {{end}}
+  </ul>
 
   {{/* Forward-only, because the cursor is a keyset: see migration
        00028. "最初に戻る" appears only past page one, so page one shows a

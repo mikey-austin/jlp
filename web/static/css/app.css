@@ -1303,3 +1303,80 @@ p.empty {
   grid-template-columns: repeat(auto-fit, minmax(8rem, 1fr));
   margin-bottom: var(--space-4);
 }
+
+/* ============================ 語彙 word list ============================= */
+
+/* The same one-line-per-subject shape 学習 uses, tuned for a list that
+   can run to hundreds: the row is denser, and the word carries furigana
+   because that is the thing being scanned for. */
+.word-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  overflow: hidden;
+}
+.word {
+  border-top: 1px solid var(--border);
+}
+.word:first-child {
+  border-top: 0;
+}
+.word__line {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  cursor: pointer;
+  list-style: none;
+}
+.word__line::-webkit-details-marker {
+  display: none;
+}
+.word__line:hover {
+  background: var(--bg-subtle, transparent);
+}
+.word__expression {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-size: var(--text-lg);
+  /* Wraps rather than truncating: a word cut off is a word you cannot
+     look for. Long ids break mid-token so they cannot push the counts
+     off screen. */
+  overflow-wrap: anywhere;
+  /* Leading enough for furigana, on every row whether or not it has a
+     reading — otherwise rows jitter in height as you scroll and the eye
+     loses the column of counts on the right. */
+  line-height: 2.1;
+}
+.word__use {
+  flex: 0 0 auto;
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.word__sep {
+  opacity: 0.5;
+  margin-inline: 0.15em;
+}
+.word__detail {
+  padding: 0 var(--space-4) var(--space-4);
+  color: var(--fg-muted);
+  font-size: var(--text-sm);
+}
+.word__detail p {
+  margin: 0 0 var(--space-2);
+}
+.word__meaning {
+  color: var(--fg);
+}
+.word__tags,
+.word__source {
+  font-size: var(--text-xs, 0.75rem);
+}
+.word--empty {
+  padding: var(--space-5);
+}

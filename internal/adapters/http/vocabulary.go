@@ -50,10 +50,19 @@ type vocabularyItemView struct {
 	MeaningEN, TagsJoined                                          string
 	DeleteAction                                                   string
 	Lookups, Productions, SuccessfulProductions, FailedProductions int
+	// Ruby is the expression with furigana, for the list line. Same rule
+	// as 練習's answer card: withheld when there is no reading, or when
+	// the reading IS the expression, because kana ruby-ed with itself is
+	// clutter that says nothing.
+	Ruby rubyView
+	// HasDetail says whether opening the row would show anything. A
+	// disclosure that expands to nothing is worse than no disclosure:
+	// it invites a tap and answers it with a blank.
+	HasDetail bool
 }
 
 func toVocabularyItemView(item vocabulary.Item, filter string) vocabularyItemView {
-	return vocabularyItemView{
+	v := vocabularyItemView{
 		DeleteAction:          "/vocabulary/" + item.ID + "/delete" + filterQuery(filter),
 		Expression:            item.Expression,
 		Reading:               item.Reading,
@@ -67,6 +76,14 @@ func toVocabularyItemView(item vocabulary.Item, filter string) vocabularyItemVie
 		SuccessfulProductions: item.SuccessfulProductions,
 		FailedProductions:     item.Productions - item.SuccessfulProductions,
 	}
+	v.Ruby = rubyView{Text: item.Expression, Reading: rubyReading(item.Expression, item.Reading)}
+	// Everything the line does not already show. Source and the counts
+	// are always there, so in practice this is always true — but stated
+	// rather than assumed, so a future line that absorbs the last of the
+	// detail does not leave an empty disclosure behind.
+	v.HasDetail = v.Meaning != "" || v.MeaningEN != "" || v.TagsJoined != "" ||
+		v.Source != "" || v.Lookups > 0 || v.Productions > 0
+	return v
 }
 
 // vocabularyPage handles GET /vocabulary: the identity's personal

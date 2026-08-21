@@ -144,10 +144,14 @@ func fetchVocabPage(t *testing.T, h http.Handler, path string) (body, next strin
 // wordsOnPage pulls the expression cell out of each row.
 func wordsOnPage(body string) map[string]bool {
 	out := map[string]bool{}
-	// Matches the class, not data-label: naming the cells for the phone
-	// card layout changed the attribute order, and this marker silently
-	// stopped matching — the test then "passed" its way to an empty page.
-	const marker = `class="w-expression" data-label="表現">`
+	// Matches data-expression, an attribute that exists FOR this: the
+	// visible word is wrapped in <ruby> with <rp> fallbacks, so reading
+	// it out of the rendered text means parsing presentation. This
+	// marker has now silently stopped matching twice — once when the
+	// cells were named for the phone card layout, once when the table
+	// became a list — and both times the empty-page guard below is what
+	// caught it.
+	const marker = `<li class="word" data-expression="`
 	for offset := 0; ; {
 		i := strings.Index(body[offset:], marker)
 		if i < 0 {
@@ -155,7 +159,7 @@ func wordsOnPage(body string) map[string]bool {
 		}
 		at := offset + i + len(marker)
 		offset = at
-		end := strings.Index(body[at:], "</td>")
+		end := strings.Index(body[at:], `"`)
 		if end < 0 {
 			return out
 		}

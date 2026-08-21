@@ -4,34 +4,6 @@
      decoration; when TTS is not configured the button reports
      unavailable on click rather than being absent, so the learner learns
      the capability exists and is off. */}}
-{{/* ruby renders text with furigana above it, or plain text when there
-     is none worth showing (see rubyReading). Group ruby over the whole
-     word: splitting a reading across kanji needs a morphological
-     analyser, and guessing the split is how 紛らわしい ends up labelled
-     まぎ-ら-わ-しい.
-
-     <rp> gives a browser without ruby support something sane to fall
-     back to — 紛らわしい(まぎらわしい) rather than the two run together. */}}
-{{define "ruby"}}{{if .Reading}}<ruby>{{.Text}}<rp>（</rp><rt>{{.Reading}}</rt><rp>）</rp></ruby>{{else}}{{.Text}}{{end}}{{end}}
-
-{{define "speak"}}{{if hasJapanese .}}<button type="button" class="speak" data-speak="{{.}}" aria-label="読み上げる" title="読み上げる">🔊</button>{{end}}{{end}}
-
-{{/* run_header is the progress bar and streak shared by the question
-     and its result, so one run reads as one run rather than a series of
-     unrelated cards. */}}
-{{define "run_header"}}
-<div class="run-header">
-  <div class="run-bar" role="progressbar" aria-valuenow="{{.Position}}" aria-valuemin="1" aria-valuemax="{{.Total}}"
-       aria-label="練習の進捗">
-    <span class="run-bar__fill" style="width: {{.Percent}}%"></span>
-  </div>
-  <p class="run-meta">
-    <span class="run-count">{{.Position}} / {{.Total}}</span>
-    {{if gt .Streak 1}}<span class="run-run" title="連続正解">🔥 {{.Streak}}連続</span>{{end}}
-  </p>
-</div>
-{{end}}
-
 {{define "exercise"}}
 <div class="exercise card" id="exercise-{{.ID}}" data-exercise-id="{{.ID}}" data-type="{{.Type}}">
   {{template "run_header" .}}

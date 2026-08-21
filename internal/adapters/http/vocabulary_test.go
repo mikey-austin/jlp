@@ -538,3 +538,49 @@ func (r *fakeVocabRepo) LatestExamples(context.Context, learner.IdentityID, []st
 func (r *fakeVocabRepo) RecordExample(context.Context, learner.IdentityID, string, string, storage.ExampleOrigin, time.Time) error {
 	panic("not used by these tests")
 }
+
+// The whole point of the list redesign: a word's prose — meaning, gloss,
+// tags, source — is what you open a word to read, not what you scroll
+// past to find one. Nine columns needed four screens of horizontal swipe
+// at phone widths, and the stacked-card fallback turned every word into a
+// nine-line block. Every other test here passes just as well if the
+// detail migrates back onto the line, so this is the one that holds the
+// shape.
+func TestAWordsProseIsBehindTheDisclosureNotOnTheLine(t *testing.T) {
+	opts, repo := vocabularyTestOptions()
+	repo.items["dev/勉強"] = &vocabulary.Item{
+		ID: "vocab-1", IdentityID: "dev", Expression: "勉強", Reading: "べんきょう",
+		Meaning: "学ぶこと", MeaningEN: "studying", Tags: []string{"education"},
+		Source: "lesson-3", Kind: vocabulary.KindWord, Lookups: 4,
+	}
+
+	rec := httptest.NewRecorder()
+	NewServer(opts).HandlerForTest().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/vocabulary", nil))
+	body := rec.Body.String()
+
+	start := strings.Index(body, `class="word__line"`)
+	if start < 0 {
+		t.Fatalf("no word rows rendered:\n%s", body)
+	}
+	end := strings.Index(body[start:], "</summary>")
+	if end < 0 {
+		t.Fatalf("the row has no summary to close:\n%s", body[start:])
+	}
+	line := body[start : start+end]
+
+	// On the line: what you scan FOR.
+	for _, want := range []string{"勉強", "べんきょう", "単語", "4"} {
+		if !strings.Contains(line, want) {
+			t.Errorf("the line is missing %q — you cannot find a word by it:\n%s", want, line)
+		}
+	}
+	// Behind it: everything else, present but not in the way.
+	for _, hidden := range []string{"学ぶこと", "studying", "education", "lesson-3", "削除"} {
+		if strings.Contains(line, hidden) {
+			t.Errorf("%q is on the summary line; the list is a wall of prose again:\n%s", hidden, line)
+		}
+		if !strings.Contains(body, hidden) {
+			t.Errorf("%q was dropped from the page entirely, not just off the line", hidden)
+		}
+	}
+}
