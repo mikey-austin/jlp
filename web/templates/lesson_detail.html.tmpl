@@ -1,46 +1,66 @@
-{{define "content"}}<section class="lesson-detail">
-  <h1>レッスンガイド <span class="badge">{{.Lesson.Status}}</span></h1>
-  <p class="description">作成日: {{.Lesson.CreatedAt.Format "2006-01-02 15:04"}}{{if not .Lesson.CompletedAt.IsZero}} ・ 完了日: {{.Lesson.CompletedAt.Format "2006-01-02 15:04"}}{{end}}</p>
+{{/* guide_section is one section of the plan.
 
-  <section class="card card--roomy lesson-guide">
+     A .panel, like every other collapsible section on the site, and
+     OPEN by default — unlike 学習's diagnostics, this is a document a
+     learner reads top to bottom with a tutor, and a closed <details>
+     does not print. The disclosure is here so you can fold away what
+     you have already covered, not so the page starts hidden. */}}
+{{define "guide_section"}}
+{{if .Items}}
+<details class="panel" open>
+  <summary class="panel__summary">
+    <span class="panel__title">{{.Title}}</span>
+    <span class="panel__meta">{{len .Items}}件</span>
+  </summary>
+  {{if .AsChips}}
+  {{/* Short labels — words, grammar points, focus areas. As bullets
+       they were a tall single-file column of two-word lines; as chips
+       they wrap and you take in the whole set at once. */}}
+  <p class="chip-set">{{range .Items}}<span class="chip">{{.}}</span>{{end}}</p>
+  {{else}}
+  <ul class="guide-list">{{range .Items}}<li>{{.}}</li>{{end}}</ul>
+  {{end}}
+</details>
+{{end}}
+{{end}}
+
+{{define "content"}}<section class="lesson-detail">
+  <h1>レッスンガイド <span class="badge badge--type">{{.StatusLabel}}</span></h1>
+  <p class="description">作成 {{.Created}}{{if .Completed}} ・ 完了 {{.Completed}}{{end}}</p>
+
+  {{/* レベル概要 is the one paragraph the tutor reads first, so it leads
+       and is not a section you can fold away. */}}
+  {{if .Plan.LevelSummary}}
+  <section class="card lesson-summary">
     <h2>レベル概要</h2>
     <p>{{.Plan.LevelSummary}}</p>
-
-    <h2>強み</h2>
-    <ul>{{range .Plan.Strengths}}<li>{{.}}</li>{{end}}</ul>
-
-    <h2>弱み</h2>
-    <ul>{{range .Plan.Weaknesses}}<li>{{.}}</li>{{end}}</ul>
-
-    <h2>重点分野</h2>
-    <ul>{{range .Plan.Focus}}<li>{{.}}</li>{{end}}</ul>
-
-    <h2>語彙</h2>
-    <ul>{{range .Plan.Vocabulary}}<li>{{.}}</li>{{end}}</ul>
-
-    <h2>文法項目</h2>
-    <ul>{{range .Plan.GrammarConcepts}}<li>{{.}}</li>{{end}}</ul>
-
-    <h2>会話プロンプト</h2>
-    <ul>{{range .Plan.ConversationPrompts}}<li>{{.}}</li>{{end}}</ul>
-
-    <h2>練習問題</h2>
-    <ul>{{range .Plan.Exercises}}<li>{{.}}</li>{{end}}</ul>
-
-    <h2>最近の例</h2>
-    <ul>{{range .Plan.RecentExamples}}<li>{{.}}</li>{{end}}</ul>
-
-    <h2>講師への質問</h2>
-    <ul>{{range .Plan.QuestionsForTutor}}<li>{{.}}</li>{{end}}</ul>
   </section>
+  {{end}}
+
+  {{range .Sections}}{{template "guide_section" .}}{{end}}
 
   {{if eq .Lesson.Status "completed"}}
-  <h2>レッスン後の記録</h2>
-  {{range .Observations}}<article class="card observation">
-    <p class="observation-meta">{{.Author}} — {{.CreatedAt.Format "2006-01-02 15:04"}}</p>
-    <p>{{.Notes}}</p>
-    {{if .Subjects}}<p class="concepts">{{range .Subjects}}<span class="chip">{{.}}</span>{{end}}</p>{{end}}
-  </article>{{else}}<p class="empty">記録がありません</p>{{end}}
+  <h2 class="lesson-detail__heading">レッスン後の記録</h2>
+  {{/* One line per record, expanding: the notes are a paragraph, which
+       is what made every other list on this site unreadable. */}}
+  <ul class="list list--card">
+    {{range .Observations}}
+    <li class="list__item">
+      <details open>
+        <summary class="list__line">
+          <span class="list__primary">{{.Author}}</span>
+          <span class="list__meta">{{.CreatedAt.Format "2006-01-02 15:04"}}</span>
+        </summary>
+        <div class="list__detail">
+          <p class="list__gloss">{{.Notes}}</p>
+          {{if .Subjects}}<p class="chip-set">{{range .Subjects}}<span class="chip">{{.}}</span>{{end}}</p>{{end}}
+        </div>
+      </details>
+    </li>
+    {{else}}
+    <li class="list__item list__empty"><p class="empty">記録がありません</p></li>
+    {{end}}
+  </ul>
   {{else}}
   <section class="card no-print">
     <h2>レッスン完了の記録</h2>

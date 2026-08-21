@@ -337,10 +337,15 @@ main p.description {
 /* .cards is the generic vertical stack of sibling cards (correction
  * cards, anki cards, settings rows): spacing BETWEEN cards, never
  * inside them. */
+/* A grid, not a column. Full-width rows meant five draft cards filled a
+   desktop screen and fifty filled seven; auto-fit puts two or three
+   across on a wide screen and falls back to one on a phone with no
+   media query. */
 .cards {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
   gap: var(--space-4);
+  align-items: start;
 }
 
 /* ============================== Settings (Phase 4 Task S) =============== */
@@ -911,27 +916,47 @@ main p.description {
 
 /* ============================== Anki ====================================== */
 
+.anki-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.anki-card__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+}
+.anki-card__date {
+  color: var(--fg-muted);
+  font-size: var(--text-xs);
+  font-variant-numeric: tabular-nums;
+}
 .anki-card .front {
   font-size: var(--text-lg);
-  margin: 0 0 var(--space-2);
+  margin: 0;
 }
+/* The back is the answer, so it is not a fainter version of the prompt —
+   it is set apart and marked as what the front becomes. Two paragraphs
+   of different greys said nothing about which was which. */
 .anki-card .back {
-  color: var(--fg-muted);
-  margin: 0 0 var(--space-2);
+  margin: 0;
+  padding-left: var(--space-4);
+  border-left: 2px solid var(--primary-soft);
 }
 .anki-card .notes {
   font-size: var(--text-sm);
-  color: var(--fg-subtle);
-  margin: 0 0 var(--space-3);
+  color: var(--fg-muted);
+  margin: 0;
 }
 .anki-card footer {
   display: flex;
   gap: var(--space-3);
+  margin-top: var(--space-2);
 }
 .anki-card footer.resolved {
   color: var(--fg-muted);
   font-size: var(--text-sm);
-  text-transform: capitalize;
 }
 .anki-export-actions {
   display: flex;
@@ -980,16 +1005,43 @@ p.empty {
 
 /* ============================== Lesson guides =========================== */
 
-.lesson-guide h2 {
-  margin-top: var(--space-6);
+/* The guide had exactly one rule to its name — a top margin on its
+   <h2>s — and everything else was browser-default <ul> inside one
+   1400px card. Ten headings of the same weight, no way to tell where a
+   section started, and nothing on the page built from the components
+   every other page uses. It is .panel sections and these two list
+   shapes now. */
+.lesson-summary {
+  margin-bottom: var(--space-4);
 }
-.observation {
-  margin: 0 0 var(--space-4);
-}
-.observation-meta {
-  color: var(--fg-muted);
-  font-size: var(--text-sm);
+.lesson-summary h2,
+.lesson-detail__heading {
   margin: 0 0 var(--space-2);
+  font-size: var(--text-lg);
+}
+.lesson-detail__heading {
+  margin-top: var(--space-5);
+}
+.lesson-summary p {
+  margin: 0;
+}
+.guide-list {
+  margin: 0;
+  padding-left: var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.guide-list li::marker {
+  color: var(--fg-subtle);
+}
+/* Short labels wrap as a set rather than stacking one per line: eight
+   two-word vocabulary entries were eight lines of mostly empty row. */
+.chip-set {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
 }
 
 /* ============================== Agent-run trace (Phase 4 Task 2) ======== */

@@ -1,20 +1,51 @@
 {{define "content"}}<section class="anki">
   <h1>Ankiカード</h1>
 
-  <section id="anki-drafts">
-    <h2>下書き</h2>
+  {{/* 下書き is a work queue, not an archive: you read front, read back,
+       and press one of two buttons. Putting the back behind a disclosure
+       would make triage cost two taps a card, so drafts stay whole and
+       get a grid instead — several across on a wide screen rather than
+       one full-width row each.
+
+       承認済み is the archive, and grows without bound. That one gets
+       the expanding row every other list on this site uses. */}}
+  <details class="panel" id="anki-drafts" open>
+    <summary class="panel__summary">
+      <span class="panel__title">下書き</span>
+      <span class="panel__meta">{{len .Drafts}}件</span>
+    </summary>
     {{if .Drafts}}<div class="cards">{{range .Drafts}}{{template "anki_card" .}}{{end}}</div>
     {{else}}<p class="empty">下書きのカードはありません。校正カードの「Ankiカード作成」から作成できます。</p>{{end}}
-  </section>
+  </details>
 
-  <section id="anki-approved">
-    <h2>承認済み</h2>
-    {{if .Approved}}<div class="cards">{{range .Approved}}{{template "anki_card" .}}{{end}}</div>
-    {{else}}<p class="empty">承認済みのカードはありません。</p>{{end}}
+  <details class="panel" id="anki-approved" open>
+    <summary class="panel__summary">
+      <span class="panel__title">承認済み</span>
+      <span class="panel__meta">{{len .Approved}}件</span>
+    </summary>
+    <ul class="list">
+      {{range .Approved}}
+      <li class="list__item" data-card-id="{{.ID}}">
+        <details>
+          <summary class="list__line">
+            <span class="list__primary" lang="ja">{{.Front}}</span>
+            {{if .SourceLabel}}<span class="badge badge--type">{{.SourceLabel}}</span>{{end}}
+            <span class="list__meta">{{.Created}}</span>
+          </summary>
+          <div class="list__detail">
+            <p class="list__gloss" lang="ja">{{.Back}}{{template "speak" .Back}}</p>
+            {{if .Notes}}<p>{{.Notes}}</p>{{end}}
+          </div>
+        </details>
+      </li>
+      {{else}}
+      <li class="list__item list__empty"><p class="empty">承認済みのカードはありません。</p></li>
+      {{end}}
+    </ul>
     <div class="anki-export-actions">
       <a href="/anki/export.tsv" class="btn btn--secondary">TSVエクスポート</a>
       {{if .AnkiConnectEnabled}}<button class="btn" hx-post="/anki/push" hx-target="#anki-push-result" hx-swap="innerHTML">Ankiへ送信</button>{{end}}
     </div>
     <div id="anki-push-result"></div>
-  </section>
+  </details>
 </section>{{end}}

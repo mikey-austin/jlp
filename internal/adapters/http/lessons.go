@@ -18,10 +18,41 @@ import (
 type lessonView struct {
 	ID, Status             string
 	CreatedAt, CompletedAt time.Time
+	// Preformatted, because the list renders each date in two places and
+	// a template that formats the same value twice is a template that
+	// eventually formats it two ways.
+	Created, Completed string
+	StatusLabel        string
+	DeleteAction       string
+}
+
+// lessonStatusLabels renders storage.Lesson.Status for a learner. An
+// unknown status falls through as itself rather than as a blank badge:
+// a status this page has not been taught about is worth seeing, not
+// worth hiding.
+var lessonStatusLabels = map[string]string{
+	"prepared":  "準備済み",
+	"completed": "完了",
 }
 
 func toLessonView(l storage.Lesson) lessonView {
-	return lessonView{ID: l.ID, Status: l.Status, CreatedAt: l.CreatedAt, CompletedAt: l.CompletedAt}
+	v := lessonView{
+		ID: l.ID, Status: l.Status,
+		CreatedAt: l.CreatedAt, CompletedAt: l.CompletedAt,
+		Created:      l.CreatedAt.Format("2006-01-02 15:04"),
+		StatusLabel:  l.Status,
+		DeleteAction: "/lessons/" + l.ID + "/delete",
+	}
+	if label, ok := lessonStatusLabels[l.Status]; ok {
+		v.StatusLabel = label
+	}
+	// Zero means "not completed" (storage.Lesson's documented
+	// convention); formatting it would print 0001-01-01, the same trap
+	// /grammar's 未遭遇 avoids.
+	if !l.CompletedAt.IsZero() {
+		v.Completed = l.CompletedAt.Format("2006-01-02 15:04")
+	}
+	return v
 }
 
 func toLessonViews(lessons []storage.Lesson) []lessonView {
@@ -30,6 +61,42 @@ func toLessonViews(lessons []storage.Lesson) []lessonView {
 		views = append(views, toLessonView(l))
 	}
 	return views
+}
+
+// guideSection is one titled part of a lesson plan as the detail page
+// renders it.
+//
+// The template used to name all ten sections by hand, each an <h2> and a
+// bare <ul>. That is why the page drifted out of line with the rest of
+// the site: there was nothing to style, only raw markup, and adding a
+// section to the schema meant editing the template. Building the list
+// here means one rendering for all of them.
+//
+// AsChips marks the sections whose items are short labels — a word, a
+// grammar point, a focus area — rather than sentences. As bullets they
+// were a tall single-file column of two-word lines; as chips they wrap.
+type guideSection struct {
+	Title   string
+	Items   []string
+	AsChips bool
+}
+
+// guideSections lists the plan in the order a tutor reads it: what to
+// work on, then the material, then what to do with it, then what to ask.
+// Empty sections are dropped by the template rather than rendering a
+// heading with nothing under it.
+func guideSections(plan lessonPlanDTO) []guideSection {
+	return []guideSection{
+		{Title: "重点分野", Items: plan.Focus},
+		{Title: "強み", Items: plan.Strengths},
+		{Title: "弱み", Items: plan.Weaknesses},
+		{Title: "語彙", Items: plan.Vocabulary, AsChips: true},
+		{Title: "文法項目", Items: plan.GrammarConcepts, AsChips: true},
+		{Title: "会話プロンプト", Items: plan.ConversationPrompts},
+		{Title: "練習問題", Items: plan.Exercises},
+		{Title: "最近の例", Items: plan.RecentExamples},
+		{Title: "講師への質問", Items: plan.QuestionsForTutor},
+	}
 }
 
 // lessonPlanDTO mirrors schemas/defs/lesson_plan.v1.json field-for-
@@ -168,11 +235,16 @@ func (s *Server) lessonsDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	view := toLessonView(lesson)
 	s.render(w, r, "lesson_detail", map[string]any{
 		"Title":        "レッスンガイド",
 		"Identity":     ident,
-		"Lesson":       toLessonView(lesson),
+		"Lesson":       view,
+		"StatusLabel":  view.StatusLabel,
+		"Created":      view.Created,
+		"Completed":    view.Completed,
 		"Plan":         plan,
+		"Sections":     guideSections(plan),
 		"Observations": toObservationViews(observations),
 	})
 }

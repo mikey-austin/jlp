@@ -5,19 +5,35 @@
   </form>
 
   {{template "undo_delete" .}}
-  <div class="table-card">
-    <table>
-      <thead><tr><th>作成日</th><th>状態</th><th></th></tr></thead>
-      <tbody>
-        {{range .Lessons}}<tr>
-          <td>{{.CreatedAt.Format "2006-01-02 15:04"}}</td>
-          <td><span class="badge">{{.Status}}</span></td>
-          <td><a href="/lessons/{{.ID}}" class="chip">開く</a>
-              <button type="button" class="btn btn--danger btn--sm no-print" data-confirm-delete="/lessons/{{.ID}}/delete" data-confirm-delete-label="{{.CreatedAt.Format "2006-01-02 15:04"}} のレッスンガイド" aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button></td>
-        </tr>{{else}}<tr><td colspan="3" class="empty">レッスンガイドがありません。上のボタンから作成できます。</td></tr>{{end}}
-      </tbody>
-    </table>
-  </div>
+
+  {{/* One line per guide, expanding — the same shape 学習, 語彙, 文法 and
+       セッション use. A guide is identified by when it was made, so that
+       is the line; 完了日 and 削除 are what you open one to find. */}}
+  <ul class="list list--card">
+    {{range .Lessons}}
+    <li class="list__item" data-lesson-id="{{.ID}}">
+      <details>
+        <summary class="list__line">
+          <span class="list__primary"><a href="/lessons/{{.ID}}">{{.Created}}</a></span>
+          <span class="badge badge--type">{{.StatusLabel}}</span>
+          <span class="list__meta">{{if .Completed}}完了 {{.Completed}}{{else}}未完了{{end}}</span>
+        </summary>
+        <div class="list__detail">
+          {{/* Not the created date: it IS the line. A detail that
+               repeats its own summary is a detail worth closing. */}}
+          <p><a href="/lessons/{{.ID}}">ガイドを開く →</a></p>
+          {{/* Destructive, so it lives one disclosure deep rather than
+               beside every row of a list scrolled with a thumb. */}}
+          <button type="button" class="btn btn--danger btn--sm no-print"
+                  data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Created}} のレッスンガイド"
+                  aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button>
+        </div>
+      </details>
+    </li>
+    {{else}}
+    <li class="list__item list__empty"><p class="empty">レッスンガイドがありません。上のボタンから作成できます。</p></li>
+    {{end}}
+  </ul>
 
   {{template "confirm_delete" .}}
 </section>{{end}}

@@ -15,10 +15,46 @@ import (
 // the /anki page's draft/approved lists) render it.
 type ankiCardView struct {
 	ID, Front, Back, Notes, Status string
+	// SourceLabel says where the card came from and Created when — both
+	// already on storage.AnkiCard and neither ever shown. "Which of
+	// these did the tutor correct and which did I look up" is the first
+	// question about a queue of cards, and the page could not answer it.
+	SourceLabel, Created string
+	// StatusLabel is Status for a learner. The resolved footer used to
+	// print the raw enum, capitalised by CSS into "Approved".
+	StatusLabel string
+}
+
+// ankiSourceLabels and ankiStatusLabels render storage.AnkiCard's two
+// enums for a learner. An unknown value falls through as itself: a
+// source or status this page has not been taught about is worth seeing,
+// not worth hiding behind a blank badge.
+var ankiSourceLabels = map[string]string{
+	"correction": "添削",
+	"vocabulary": "語彙",
+}
+
+var ankiStatusLabels = map[string]string{
+	"draft":    "下書き",
+	"approved": "承認済み",
+	"rejected": "却下",
+	"exported": "書き出し済み",
+}
+
+func labelOr(labels map[string]string, key string) string {
+	if label, ok := labels[key]; ok {
+		return label
+	}
+	return key
 }
 
 func toAnkiCardView(c storage.AnkiCard) ankiCardView {
-	return ankiCardView{ID: c.ID, Front: c.Front, Back: c.Back, Notes: c.Notes, Status: c.Status}
+	return ankiCardView{
+		ID: c.ID, Front: c.Front, Back: c.Back, Notes: c.Notes, Status: c.Status,
+		SourceLabel: labelOr(ankiSourceLabels, c.SourceType),
+		Created:     c.CreatedAt.Format("2006-01-02"),
+		StatusLabel: labelOr(ankiStatusLabels, c.Status),
+	}
 }
 
 func toAnkiCardViews(cards []storage.AnkiCard) []ankiCardView {

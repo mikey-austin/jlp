@@ -495,3 +495,107 @@ func TestAnkiStatusInvalidValueReturnsBadRequest(t *testing.T) {
 		t.Fatalf("status = %d, want 400, body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+// 承認済み is an archive that grows without bound; 下書き is a work queue
+// you clear. So the archive gets the expanding row every other list on
+// the site uses, and drafts stay whole — burying a draft's back behind a
+// disclosure would make triage cost two taps a card, which is worse than
+// the layout it replaced.
+func TestApprovedCardsAreRowsAndDraftsStayWhole(t *testing.T) {
+	h, _, cards, _ := ankiTestServer(t, nil)
+	cards.byID["draft-1"] = storage.AnkiCard{
+		ID: "draft-1", IdentityID: "dev", SourceType: "correction", SourceID: "c1",
+		Front: "面白いでした", Back: "面白かったです", Notes: "い-adjectiveの過去形",
+		Status: "draft", CreatedAt: time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC),
+	}
+	cards.byID["done-1"] = storage.AnkiCard{
+		ID: "done-1", IdentityID: "dev", SourceType: "vocabulary", SourceID: "v1",
+		Front: "気が置けない", Back: "遠慮しなくてよい", Notes: "否定形だが良い意味",
+		Status: "approved", CreatedAt: time.Date(2026, 8, 19, 9, 0, 0, 0, time.UTC),
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/anki", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /anki status = %d, body=%s", rec.Code, rec.Body.String())
+	}
+	body := rec.Body.String()
+
+	// A draft shows everything it needs to be triaged, with both buttons.
+	draftStart := strings.Index(body, `id="anki-draft-1"`)
+	if draftStart < 0 {
+		t.Fatalf("the draft card did not render:\n%s", body)
+	}
+	draft := body[draftStart:]
+	if e := strings.Index(draft, "</article>"); e >= 0 {
+		draft = draft[:e]
+	}
+	for _, want := range []string{"面白いでした", "面白かったです", "い-adjectiveの過去形", "承認", "却下"} {
+		if !strings.Contains(draft, want) {
+			t.Errorf("the draft card is missing %q — it cannot be triaged in place:\n%s", want, draft)
+		}
+	}
+
+	// An approved card is a line; its back is behind the disclosure.
+	start := strings.Index(body, `class="list__line"`)
+	if start < 0 {
+		t.Fatalf("no approved rows rendered:\n%s", body)
+	}
+	end := strings.Index(body[start:], "</summary>")
+	if end < 0 {
+		t.Fatalf("the row has no summary to close:\n%s", body[start:])
+	}
+	line := body[start : start+end]
+	if !strings.Contains(line, "気が置けない") {
+		t.Fatalf("sliced the wrong element; it does not hold the card front:\n%s", line)
+	}
+	if strings.Contains(line, "遠慮しなくてよい") {
+		t.Errorf("the answer is on the summary line:\n%s", line)
+	}
+	if !strings.Contains(body, "遠慮しなくてよい") {
+		t.Error("the answer was dropped from the page entirely, not just off the line")
+	}
+}
+
+// SourceType and CreatedAt were on every card and shown on none of them.
+// "Which of these did the tutor correct and which did I look up" is the
+// first question about a queue of cards, and the page could not answer
+// it. Nor is the answer the raw enum: the resolved footer used to print
+// "approved", capitalised by CSS into "Approved" on a Japanese page.
+func TestACardSaysWhereItCameFromInJapanese(t *testing.T) {
+	h, _, cards, _ := ankiTestServer(t, nil)
+	cards.byID["draft-1"] = storage.AnkiCard{
+		ID: "draft-1", IdentityID: "dev", SourceType: "vocabulary", SourceID: "v1",
+		Front: "気が置けない", Back: "遠慮しなくてよい", Status: "draft",
+		CreatedAt: time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC),
+	}
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/anki", nil))
+	body := rec.Body.String()
+
+	for _, want := range []string{"語彙", "2026-08-20"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("the card does not say %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, ">vocabulary<") {
+		t.Errorf("the raw source enum is on the page:\n%s", body)
+	}
+}
+
+// A source or status this page has not been taught about is worth
+// seeing, not worth hiding behind a blank badge — a silently empty badge
+// is indistinguishable from a card with no source at all.
+func TestAnUnknownSourceFallsThroughAsItself(t *testing.T) {
+	got := toAnkiCardView(storage.AnkiCard{
+		ID: "c1", SourceType: "conversation", Status: "queued",
+		CreatedAt: time.Date(2026, 8, 20, 9, 0, 0, 0, time.UTC),
+	})
+	if got.SourceLabel != "conversation" {
+		t.Errorf("SourceLabel = %q, want the raw value passed through", got.SourceLabel)
+	}
+	if got.StatusLabel != "queued" {
+		t.Errorf("StatusLabel = %q, want the raw value passed through", got.StatusLabel)
+	}
+}

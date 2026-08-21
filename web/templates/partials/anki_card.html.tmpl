@@ -1,7 +1,14 @@
 {{define "anki_card"}}
+{{/* A flashcard, shown as one: the prompt, then what it turns into.
+     Front and back used to be two paragraphs of different greys with
+     nothing saying which was which. */}}
 <article class="anki-card card" id="anki-{{.ID}}" data-status="{{.Status}}">
-  <p class="front">{{.Front}}</p>
-  <p class="back">{{.Back}}</p>
+  <header class="anki-card__head">
+    {{if .SourceLabel}}<span class="badge badge--type">{{.SourceLabel}}</span>{{end}}
+    <span class="anki-card__date">{{.Created}}</span>
+  </header>
+  <p class="front" lang="ja">{{.Front}}</p>
+  <p class="back" lang="ja">{{.Back}}{{template "speak" .Back}}</p>
   {{if .Notes}}<p class="notes">{{.Notes}}</p>{{end}}
   {{if eq .Status "draft"}}<footer>
     <button class="btn btn--sm" hx-post="/anki/{{.ID}}/status" hx-vals='{"status":"approved"}'
@@ -9,6 +16,6 @@
     <button class="btn btn--secondary btn--sm" hx-post="/anki/{{.ID}}/status" hx-vals='{"status":"rejected"}'
             hx-target="#anki-{{.ID}}" hx-swap="outerHTML">却下</button>
   </footer>
-  {{else}}<footer class="resolved">{{.Status}}</footer>{{end}}
+  {{else}}<footer class="resolved">{{.StatusLabel}}</footer>{{end}}
 </article>
 {{end}}

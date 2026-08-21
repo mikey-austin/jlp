@@ -206,8 +206,14 @@ func TestLessonsGenerateThenDetailShowsAllSections(t *testing.T) {
 	if !strings.Contains(body, "それはそれとして") {
 		t.Error("detail page missing the canned それはそれとして content")
 	}
-	if !strings.Contains(body, "prepared") {
+	// The status, in the language the rest of the page is written in.
+	// It used to render the raw storage enum, which is how a learner
+	// came to be shown the word "prepared" on a Japanese page.
+	if !strings.Contains(body, "準備済み") {
 		t.Error("detail page missing the prepared status")
+	}
+	if strings.Contains(body, ">prepared<") {
+		t.Errorf("the raw status enum is on the page:\n%s", body)
 	}
 	// The completion form is present (not yet completed).
 	if !strings.Contains(body, `action="/lessons/`+id+`/complete"`) {
@@ -264,8 +270,11 @@ func TestLessonsCompleteRecordsObservationAndEvents(t *testing.T) {
 	detailRec := httptest.NewRecorder()
 	h.ServeHTTP(detailRec, httptest.NewRequest(http.MethodGet, "/lessons/"+id, nil))
 	body := detailRec.Body.String()
-	if !strings.Contains(body, "completed") {
+	if !strings.Contains(body, "完了") {
 		t.Error("detail page missing the completed status")
+	}
+	if strings.Contains(body, ">completed<") {
+		t.Errorf("the raw status enum is on the page:\n%s", body)
 	}
 	if !strings.Contains(body, "助詞の復習が必要") {
 		t.Error("detail page missing the recorded observation notes")
@@ -316,5 +325,119 @@ func TestLessonsCompleteUnknownIDReturnsNotFound(t *testing.T) {
 	rec := postForm(t, h, "/lessons/does-not-exist/complete", form)
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want 404, body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// The guide is the page that had drifted furthest out of line with the
+// rest of the site: ten <h2>s and ten browser-default <ul>s inside one
+// card, with a single CSS rule to its name. It is .panel sections now,
+// each carrying a count, and the sections are OPEN — this is a document
+// a tutor reads top to bottom and prints, and a closed <details> does
+// not print its contents.
+func TestTheLessonGuideIsBuiltFromPanelsThatAreOpen(t *testing.T) {
+	h, _, _ := lessonsTestServer(t)
+	id := generateLesson(t, h)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lessons/"+id, nil))
+	body := rec.Body.String()
+
+	panels := strings.Count(body, `<details class="panel" open>`)
+	if panels < 5 {
+		t.Fatalf("only %d open guide panels rendered; the sections are not panels:\n%s", panels, body)
+	}
+	// Closed would mean a printed guide loses those sections entirely.
+	if strings.Contains(body, `<details class="panel">`) {
+		t.Errorf("a guide section is closed; it would be missing from a printed guide:\n%s", body)
+	}
+	// Counts, so a section that came back empty is visibly empty rather
+	// than a heading with nothing under it.
+	if !strings.Contains(body, `class="panel__meta"`) {
+		t.Errorf("guide sections carry no item count:\n%s", body)
+	}
+	// The short-label sections are chips, not a single-file column of
+	// two-word bullets.
+	if !strings.Contains(body, `class="chip-set"`) {
+		t.Errorf("語彙/文法項目 did not render as chips:\n%s", body)
+	}
+}
+
+// An empty section renders nothing at all. A heading with no list under
+// it reads as a section that failed to load rather than one the plan had
+// no entries for.
+func TestAnEmptyGuideSectionIsNotRendered(t *testing.T) {
+	if got := guideSections(lessonPlanDTO{Focus: []string{"て-form"}}); len(got) == 0 {
+		t.Fatal("guideSections returned nothing")
+	}
+	// The template drops empties; this pins that the data still offers
+	// them so the template is the only place that decides.
+	var empties int
+	for _, s := range guideSections(lessonPlanDTO{Focus: []string{"て-form"}}) {
+		if len(s.Items) == 0 {
+			empties++
+		}
+	}
+	if empties == 0 {
+		t.Fatal("fixture produced no empty sections, so this proves nothing")
+	}
+
+	h, _, _ := lessonsTestServer(t)
+	id := generateLesson(t, h)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lessons/"+id, nil))
+	body := rec.Body.String()
+
+	// Every rendered panel has a non-zero count.
+	if strings.Contains(body, ">0件<") {
+		t.Errorf("a section rendered with zero items:\n%s", body)
+	}
+}
+
+// One line per guide on the list, expanding — the same shape every other
+// list on the site uses. 削除 is destructive and belongs one disclosure
+// deep, not beside every row.
+func TestALessonsControlsAreBehindTheDisclosureNotOnTheLine(t *testing.T) {
+	h, _, _ := lessonsTestServer(t)
+	generateLesson(t, h)
+
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/lessons", nil))
+	body := rec.Body.String()
+
+	start := strings.Index(body, `class="list__line"`)
+	if start < 0 {
+		t.Fatalf("no lesson rows rendered:\n%s", body)
+	}
+	end := strings.Index(body[start:], "</summary>")
+	if end < 0 {
+		t.Fatalf("the row has no summary to close:\n%s", body[start:])
+	}
+	line := body[start : start+end]
+	if !strings.Contains(line, `href="/lessons/`) {
+		t.Fatalf("sliced the wrong element; it does not link to a lesson:\n%s", line)
+	}
+	if !strings.Contains(line, "準備済み") {
+		t.Errorf("the line does not say what state the guide is in:\n%s", line)
+	}
+	if strings.Contains(line, "削除") {
+		t.Errorf("the delete button is on the summary line:\n%s", line)
+	}
+	if !strings.Contains(body, "削除") {
+		t.Errorf("the delete button was dropped entirely, not just moved:\n%s", body)
+	}
+}
+
+// A status this page has not been taught about is worth seeing, not
+// worth hiding behind a blank badge — an empty badge is
+// indistinguishable from a guide with no status at all. Mirrors
+// TestAnUnknownSourceFallsThroughAsItself in anki_test.go.
+func TestAnUnknownLessonStatusFallsThroughAsItself(t *testing.T) {
+	got := toLessonView(storage.Lesson{ID: "l1", Status: "in-progress"})
+	if got.StatusLabel != "in-progress" {
+		t.Errorf("StatusLabel = %q, want the raw value passed through", got.StatusLabel)
+	}
+	// A zero CompletedAt is "not completed", not 0001-01-01.
+	if got.Completed != "" {
+		t.Errorf("Completed = %q for a zero time, want empty", got.Completed)
 	}
 }
