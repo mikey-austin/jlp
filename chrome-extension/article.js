@@ -26,6 +26,18 @@
   // Anything inside these is page furniture, not article.
   const SKIP = "nav, aside, footer, header, figure, figcaption, form, button, [aria-hidden='true'], [hidden], [role='navigation'], [role='complementary'], script, style, noscript";
 
+  // Link density is the other half of "page furniture": sites that don't
+  // mark up <nav>/<aside> (NHK's 「あわせて読みたい」 cards sit in plain divs
+  // inside <main>) still give themselves away by being mostly link text.
+  // Prose is not.
+  const linkDensity = (el) => {
+    const all = text(el).length;
+    if (!all) return 0;
+    const linked = [...el.querySelectorAll("a")].reduce((n, a) => n + text(a).length, 0);
+    return linked / all;
+  };
+  const isFurniture = (el) => !!el.closest(SKIP) || !!el.closest("a") || linkDensity(el) > 0.5;
+
   // pickRoot finds the element holding the article body: an <article>
   // (or [itemprop=articleBody]) when the page marks one up — news sites
   // mostly do — else the container whose direct <p> children carry the
@@ -42,7 +54,7 @@
     let best = null;
     let bestLen = 0;
     const scoreOf = (el) => [...el.querySelectorAll("p")]
-      .filter((p) => !p.closest(SKIP))
+      .filter((p) => !isFurniture(p))
       .reduce((n, p) => n + text(p).length, 0);
     for (const el of marked) {
       const n = scoreOf(el);
@@ -52,7 +64,7 @@
 
     const byParent = new Map();
     for (const p of document.querySelectorAll("p")) {
-      if (p.closest(SKIP)) continue;
+      if (isFurniture(p)) continue;
       const parent = p.parentElement;
       if (!parent) continue;
       byParent.set(parent, (byParent.get(parent) || 0) + text(p).length);
@@ -66,14 +78,20 @@
   // paragraphs keeps headings and paragraphs in document order, one per
   // block, so the server sees the article's own paragraph breaks.
   function paragraphs(root) {
-    const out = [];
+    const blocks = [];
     for (const el of root.querySelectorAll("h2, h3, p, blockquote, li")) {
-      if (el.closest(SKIP)) continue;
+      if (isFurniture(el)) continue;
       // A <p> inside an <li> or <blockquote> is counted once, via the <p>.
       if ((el.tagName === "LI" || el.tagName === "BLOCKQUOTE") && el.querySelector("p")) continue;
       const t = text(el);
-      if (t) out.push(t);
+      if (t) blocks.push({ t, heading: el.tagName === "H2" || el.tagName === "H3" });
     }
+    // A heading with no prose before the next heading titled a block the
+    // filters above dropped (「あわせて読みたい」 over a row of link cards),
+    // so it goes too.
+    const out = blocks
+      .filter((b, i) => !b.heading || (blocks[i + 1] && !blocks[i + 1].heading))
+      .map((b) => b.t);
     return out.length ? out : [text(root)];
   }
 
