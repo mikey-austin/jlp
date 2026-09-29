@@ -62,6 +62,34 @@ type chapter struct {
 	ID, File, Title string
 }
 
+// figureView is one in-text figure as the article template draws it.
+type figureView struct {
+	Href, Alt string
+	Caption   []reading.Segment
+}
+
+// blockView is a paragraph or a figure, in reading order.
+type blockView struct {
+	Paragraph []reading.Segment
+	Figure    *figureView
+}
+
+// imageItem is one figure file in the manifest. Ordinal finds its bytes.
+type imageItem struct {
+	ID, Href, MediaType string
+	Ordinal             int
+}
+
+func imageExt(mediaType string) string {
+	switch mediaType {
+	case "image/png":
+		return ".png"
+	case "image/gif":
+		return ".gif"
+	}
+	return ".jpg"
+}
+
 // bookData is what every template sees.
 type bookData struct {
 	UID        string
@@ -73,7 +101,9 @@ type bookData struct {
 	Generated  string
 	Modified   string
 	Lesson     reading.Lesson
-	Article    [][]reading.Segment
+	Blocks     []blockView
+	Images     []imageItem
+	HasCover   bool
 	Chapters   []chapter
 	Chapter    chapter
 	HasAnswers bool
@@ -101,6 +131,21 @@ func (Renderer) Render(_ context.Context, b publishing.Ebook) ([]byte, error) {
 	if gen.IsZero() {
 		gen = zipTime
 	}
+	var blocks []blockView
+	var images []imageItem
+	for _, bl := range reading.Layout(b.Article.Paragraphs, b.Figures, l.Vocabulary) {
+		if bl.Figure == nil {
+			blocks = append(blocks, blockView{Paragraph: bl.Paragraph})
+			continue
+		}
+		href := fmt.Sprintf("images/fig-%d%s", bl.Figure.Ordinal, imageExt(bl.Figure.MediaType))
+		alt := bl.Figure.Alt
+		if alt == "" {
+			alt = bl.Figure.Caption
+		}
+		blocks = append(blocks, blockView{Figure: &figureView{Href: href, Alt: alt, Caption: bl.Caption}})
+		images = append(images, imageItem{ID: fmt.Sprintf("fig-%d", bl.Figure.Ordinal), Href: href, MediaType: bl.Figure.MediaType, Ordinal: bl.Figure.Ordinal})
+	}
 	d := bookData{
 		UID:        "urn:uuid:" + b.ID,
 		Title:      b.Article.Title,
@@ -110,7 +155,9 @@ func (Renderer) Render(_ context.Context, b publishing.Ebook) ([]byte, error) {
 		Generated:  gen.Format("2006年1月2日"),
 		Modified:   gen.Format("2006-01-02T15:04:05Z"),
 		Lesson:     l,
-		Article:    reading.Annotate(b.Article.Paragraphs, l.Vocabulary),
+		Blocks:     blocks,
+		Images:     images,
+		HasCover:   len(b.Cover) > 0,
 		Chapters:   chapters,
 		HasAnswers: hasReview,
 	}
@@ -148,6 +195,21 @@ func (Renderer) Render(_ context.Context, b publishing.Ebook) ([]byte, error) {
 		cd := d
 		cd.Chapter = c
 		if err := addTemplate(zw, "OEBPS/"+c.File, c.ID+".xhtml.tmpl", cd); err != nil {
+			return nil, err
+		}
+	}
+	// Stored, not deflated: the bytes are already compressed images.
+	byOrdinal := map[int]reading.Figure{}
+	for _, f := range b.Figures {
+		byOrdinal[f.Ordinal] = f
+	}
+	for _, im := range images {
+		if err := add(zw, "OEBPS/"+im.Href, byOrdinal[im.Ordinal].Data, zip.Store); err != nil {
+			return nil, err
+		}
+	}
+	if len(b.Cover) > 0 {
+		if err := add(zw, "OEBPS/images/cover.jpg", b.Cover, zip.Store); err != nil {
 			return nil, err
 		}
 	}

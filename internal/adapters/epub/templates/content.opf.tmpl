@@ -8,12 +8,15 @@
     {{if .SourceURL}}<dc:source>{{.SourceURL}}</dc:source>
     {{end}}<dc:subject>日本語学習</dc:subject>
     <meta property="dcterms:modified">{{.Modified}}</meta>
-  </metadata>
+    {{if .HasCover}}<meta name="cover" content="cover-image"/>
+    {{end}}  </metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="ncx" href="toc.ncx" media-type="application/x-dtbncx+xml"/>
     <item id="css" href="style.css" media-type="text/css"/>
-    {{range .Chapters}}<item id="{{.ID}}" href="{{.File}}" media-type="application/xhtml+xml"/>
+    {{if .HasCover}}<item id="cover-image" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"/>
+    {{end}}{{range .Images}}<item id="{{.ID}}" href="{{.Href}}" media-type="{{.MediaType}}"/>
+    {{end}}    {{range .Chapters}}<item id="{{.ID}}" href="{{.File}}" media-type="application/xhtml+xml"/>
     {{end}}
   </manifest>
   <spine toc="ncx">

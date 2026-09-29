@@ -9,8 +9,9 @@
 {{if .Lesson.SummaryEN}}<p class="en" lang="en" xml:lang="en">{{.Lesson.SummaryEN}}</p>{{end}}
 </div>{{end}}
 <hr/>
-{{range .Article}}<p class="body">{{range .}}{{if .Vocab}}<span class="vocab">{{template "ruby" .}}</span>{{else}}{{.Text}}{{end}}{{end}}</p>
-{{end}}
+{{range .Blocks}}{{if .Figure}}<figure class="figure"><img src="{{.Figure.Href}}" alt="{{.Figure.Alt}}"/>{{if .Figure.Caption}}<figcaption>{{range .Figure.Caption}}{{if .Vocab}}<span class="vocab">{{template "ruby" .}}</span>{{else}}{{.Text}}{{end}}{{end}}</figcaption>{{end}}</figure>
+{{else}}<p class="body">{{range .Paragraph}}{{if .Vocab}}<span class="vocab">{{template "ruby" .}}</span>{{else}}{{.Text}}{{end}}{{end}}</p>
+{{end}}{{end}}
 <p class="colophon">{{if .SourceURL}}出典: {{.SourceURL}}<br/>{{end}}JLP 読解 — {{.Generated}}作成</p>
 </section>
 {{template "foot" .}}{{end}}

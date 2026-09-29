@@ -26,7 +26,7 @@ IMAGE_TAG ?= $(shell date +%Y%m%d)
 IMAGE     := $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth up-mail up-mqtt up-signal up-speech down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts vendor-cover-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat image image-push chat-image chat-image-push
+.PHONY: epubcheck-sample help init build up up-auth up-mail up-mqtt up-signal up-speech down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts vendor-cover-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat image image-push chat-image chat-image-push
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -178,6 +178,14 @@ COVER_FONT_REV := d714b17ce2379f06daf6295617f961df605dccb5
 vendor-cover-fonts: ## Vendor pinned M PLUS 1p (OFL) into internal/adapters/cover/fonts for the 読解 cover
 	$(TOOLS) sh -c "mkdir -p internal/adapters/cover/fonts && for f in MPLUS1p-Bold.ttf MPLUS1p-Regular.ttf OFL.txt; do \
 	  curl -fsSL https://cdn.jsdelivr.net/gh/google/fonts@$(COVER_FONT_REV)/ofl/mplus1p/\$$f -o internal/adapters/cover/fonts/\$$f || exit 1; done"
+
+# tmp/ is root-owned (the tools container runs as root), so every write
+# below happens inside a container; the host only mounts it read-only.
+EPUBCHECK_VERSION := 5.2.1
+epubcheck-sample: ## Render a sample edition with figures + cover and run EPUBCheck on it (needs docker)
+	$(TOOLS) sh -c "mkdir -p tmp && EPUB_SAMPLE_OUT=/src/tmp/sample.epub go test ./internal/adapters/epub -run TestRenderWithFiguresIsDeterministic -count=1"
+	$(TOOLS) sh -c "test -f tmp/epubcheck-$(EPUBCHECK_VERSION)/epubcheck.jar || (curl -fsSL https://github.com/w3c/epubcheck/releases/download/v$(EPUBCHECK_VERSION)/epubcheck-$(EPUBCHECK_VERSION).zip -o tmp/epubcheck.zip && cd tmp && unzip -qo epubcheck.zip)"
+	docker run --rm -v "$(CURDIR)/tmp:/w:ro" -w /w eclipse-temurin:21-jre java -jar epubcheck-$(EPUBCHECK_VERSION)/epubcheck.jar sample.epub
 
 ext-build: ## Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
 	@mkdir -p dist

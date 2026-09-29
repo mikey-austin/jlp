@@ -6,6 +6,9 @@ import (
 	"context"
 	"encoding/xml"
 	"errors"
+	"image"
+	"image/jpeg"
+	"image/png"
 	"io"
 	"os"
 	"os/exec"
@@ -32,6 +35,7 @@ func book() publishing.Ebook {
 			Paragraphs: []string{
 				"政府が発表した新たな経済対策をめぐり、議論が続いている。",
 				"中央銀行は金融引き締めを続けている。金融引き締めの影響は大きい。",
+				"市場は慎重な見方を崩していない。",
 			},
 		},
 		Lesson: reading.Lesson{
@@ -191,4 +195,71 @@ func TestEPUBCheck(t *testing.T) {
 		t.Fatalf("epubcheck failed: %v\n%s", err, out)
 	}
 	t.Logf("%s", out)
+}
+
+func bookWithFigures(t *testing.T) publishing.Ebook {
+	t.Helper()
+	var jb, pb bytes.Buffer
+	_ = jpeg.Encode(&jb, image.NewRGBA(image.Rect(0, 0, 400, 300)), nil)
+	_ = png.Encode(&pb, image.NewRGBA(image.Rect(0, 0, 300, 300)))
+	b := book()
+	b.Figures = []reading.Figure{
+		{Ordinal: 0, AfterParagraph: -1, InText: true, Lead: true, Caption: "冒頭", Alt: "会見の様子", MediaType: "image/jpeg", Data: jb.Bytes()},
+		{Ordinal: 1, AfterParagraph: 1, InText: true, Caption: "グラフ", MediaType: "image/png", Data: pb.Bytes()},
+		{Ordinal: 2, AfterParagraph: 0, InText: false, MediaType: "image/jpeg", Data: jb.Bytes()},
+	}
+	b.Cover = jb.Bytes()
+	return b
+}
+
+func TestRenderPlacesFiguresAndDeclaresCover(t *testing.T) {
+	out, err := epub.New().Render(context.Background(), bookWithFigures(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _ := unzip(t, out)
+	for _, name := range []string{"OEBPS/images/fig-0.jpg", "OEBPS/images/fig-1.png", "OEBPS/images/cover.jpg"} {
+		if len(files[name]) == 0 {
+			t.Fatalf("missing %s", name)
+		}
+	}
+	if _, ok := files["OEBPS/images/fig-2.jpg"]; ok {
+		t.Fatal("a cover-only figure must not be in the book's images")
+	}
+	art := files["OEBPS/article.xhtml"]
+	i0, i1 := strings.Index(art, `src="images/fig-0.jpg"`), strings.Index(art, `src="images/fig-1.png"`)
+	p2 := strings.Index(art, book().Article.Paragraphs[1][:9])
+	if i0 < 0 || i1 < 0 || i0 >= p2 || p2 >= i1 {
+		t.Fatalf("figure order wrong: fig0=%d para2=%d fig1=%d", i0, p2, i1)
+	}
+	if !strings.Contains(art, `alt="会見の様子"`) || !strings.Contains(art, "<figcaption>") {
+		t.Fatal("alt/caption missing")
+	}
+	opf := files["OEBPS/content.opf"]
+	for _, want := range []string{
+		`<meta name="cover" content="cover-image"/>`,
+		`id="cover-image" href="images/cover.jpg" media-type="image/jpeg" properties="cover-image"`,
+		`href="images/fig-1.png" media-type="image/png"`,
+	} {
+		if !strings.Contains(opf, want) {
+			t.Fatalf("content.opf missing %s", want)
+		}
+	}
+	if strings.Contains(opf[strings.Index(opf, "<spine"):], "cover") {
+		t.Fatal("the cover must not be in the spine (Kindle would show it twice)")
+	}
+}
+
+func TestRenderWithFiguresIsDeterministic(t *testing.T) {
+	a, _ := epub.New().Render(context.Background(), bookWithFigures(t))
+	b, _ := epub.New().Render(context.Background(), bookWithFigures(t))
+	if !bytes.Equal(a, b) {
+		t.Fatal("not deterministic")
+	}
+	// make epubcheck-sample renders the book to a file for the validator.
+	if p := os.Getenv("EPUB_SAMPLE_OUT"); p != "" {
+		if err := os.WriteFile(p, a, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
 }

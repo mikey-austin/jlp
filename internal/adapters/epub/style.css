@@ -38,3 +38,7 @@ ruby rt { font-size: 0.5em; }
 .review li { margin-bottom: 0.8em; }
 .answers .q { font-size: 0.9em; margin-bottom: 0.1em; }
 .answers .a { font-weight: bold; }
+
+figure.figure { margin: 1.2em 0; text-align: center; page-break-inside: avoid; break-inside: avoid; }
+figure.figure img { max-width: 100%; height: auto; }
+figure.figure figcaption { font-size: 0.8em; line-height: 1.5; margin-top: 0.4em; color: #555; text-align: center; }
