@@ -1,8 +1,13 @@
 package httpx
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"image"
+	"image/jpeg"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -460,7 +465,7 @@ func TestAPIReadingSubmitValidation(t *testing.T) {
 		{`{"content":"Only English text on this page."}`, "Japanese"},
 		{`{"content":"   "}`, "empty"},
 		{`{"content":"日本語の本文です。","url":"ftp://x"}`, "url"},
-		{`not json`, "invalid JSON"},
+		{`not json`, "invalid request body"},
 	} {
 		rec := readingPostJSON(h, "/api/v1/reading/articles", c.body)
 		if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), c.want) {
@@ -622,5 +627,142 @@ func TestReadingScope(t *testing.T) {
 	}
 	if !mintable {
 		t.Fatal("reading:write must be mintable")
+	}
+}
+
+func multipartSubmit(t *testing.T, meta string, images ...[]byte) *http.Request {
+	t.Helper()
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("metadata", meta)
+	for i, img := range images {
+		w, _ := mw.CreateFormFile(fmt.Sprintf("image-%d", i), fmt.Sprintf("f%d", i))
+		_, _ = w.Write(img)
+	}
+	_ = mw.Close()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/reading/articles", &body)
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	return req
+}
+
+func smallJPEG(t *testing.T) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	_ = jpeg.Encode(&b, image.NewRGBA(image.Rect(0, 0, 400, 300)), nil)
+	return b.Bytes()
+}
+
+func serve(h http.Handler, req *http.Request) *httptest.ResponseRecorder {
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	return rec
+}
+
+type figureSubmitOut struct {
+	Figures         int `json:"figures"`
+	FiguresRejected int `json:"figures_rejected"`
+	Article         struct {
+		ID string `json:"id"`
+	} `json:"article"`
+	Edition struct {
+		FigureCount int    `json:"figure_count"`
+		ID          string `json:"id"`
+		ArticleID   string `json:"article_id"`
+	} `json:"edition"`
+}
+
+func submitFigures(t *testing.T, h http.Handler, meta string, images ...[]byte) figureSubmitOut {
+	t.Helper()
+	res := serve(h, multipartSubmit(t, meta, images...))
+	if res.Code != http.StatusAccepted {
+		t.Fatalf("status %d: %s", res.Code, res.Body)
+	}
+	var out figureSubmitOut
+	_ = json.Unmarshal(res.Body.Bytes(), &out)
+	return out
+}
+
+func TestAPIReadingSubmitMultipartAttachesFigures(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	meta := `{"title":"経済対策","content":"政府は新たな経済対策をまとめた。\n\n物価高への対応が柱。",
+	  "figures":[{"caption":"会見","after_paragraph":0,"after_text":"政府は","lead":true},{"caption":"壊れた"}]}`
+	out := submitFigures(t, h, meta, smallJPEG(t), []byte("broken"))
+	if out.Figures != 1 || out.FiguresRejected != 1 || out.Edition.FigureCount != 1 {
+		t.Fatalf("response = %+v", out)
+	}
+}
+
+func TestAPIReadingSubmitJSONStillWorks(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	rec := readingPostJSON(h, "/api/v1/reading/articles", `{"title":"t","content":"政府は新たな経済対策をまとめた。"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d", rec.Code)
+	}
+}
+
+func TestAPIReadingSubmitMultipartTooLargeIs400(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	res := serve(h, multipartSubmit(t, `{"title":"t","content":"本文です。"}`, make([]byte, 16<<20)))
+	if res.Code != http.StatusBadRequest {
+		t.Fatalf("status %d, want 400", res.Code)
+	}
+}
+
+func TestReadingFigureRoute(t *testing.T) {
+	h, svc, _ := readingTestServer(t, false)
+	meta := `{"title":"t","content":"政府は新たな経済対策をまとめた。","figures":[{"after_paragraph":0}]}`
+	out := submitFigures(t, h, meta, smallJPEG(t))
+	path := "/reading/articles/" + out.Edition.ArticleID + "/figures/0"
+
+	got := get(h, path)
+	if got.Code != 200 || got.Header().Get("Content-Type") != "image/jpeg" ||
+		!strings.Contains(got.Header().Get("Cache-Control"), "immutable") || got.Header().Get("ETag") == "" {
+		t.Fatalf("own figure: %d %v", got.Code, got.Header())
+	}
+	req := httptest.NewRequest(http.MethodGet, path, nil)
+	req.Header.Set("If-None-Match", got.Header().Get("ETag"))
+	if r := serve(h, req); r.Code != http.StatusNotModified {
+		t.Fatalf("revalidation = %d", r.Code)
+	}
+	if r := get(h, "/reading/articles/"+out.Edition.ArticleID+"/figures/x"); r.Code != http.StatusNotFound {
+		t.Fatalf("bad ordinal = %d", r.Code)
+	}
+
+	// Another learner's figure is a 404, not a leak.
+	res, err := svc.Submit(context.Background(), "someone-else", reading.Draft{
+		Content: readingArticle,
+		Figures: []reading.FigureDraft{{InText: true, Data: smallJPEG(t)}},
+	}, appreading.SubmitOptions{})
+	if err != nil || res.Figures != 1 {
+		t.Fatalf("foreign submit: %v %+v", err, res)
+	}
+	if r := get(h, "/reading/articles/"+res.Article.ID+"/figures/0"); r.Code != http.StatusNotFound {
+		t.Fatalf("foreign figure = %d, want 404", r.Code)
+	}
+}
+
+func TestReadingDetailShowsFigures(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	meta := `{"title":"t","content":"政府は新たな経済対策をまとめた。","figures":[{"after_paragraph":0,"caption":"会見の様子"}]}`
+	out := submitFigures(t, h, meta, smallJPEG(t))
+	page := get(h, "/reading/"+out.Edition.ID).Body.String()
+	if !strings.Contains(page, `/figures/0"`) || !strings.Contains(page, "会見の様子") {
+		t.Fatalf("figure not on the page")
+	}
+}
+
+func TestAPIReadingSubmitSelectionKeepsOnlyCoverFigure(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	meta, _ := json.Marshal(map[string]any{
+		"title": "t", "content": "ナビ\n" + readingArticle, "selection": readingArticle,
+		"figures": []map[string]any{{"caption": "本文", "after_paragraph": 0}, {"caption": "表紙", "lead": true}},
+	})
+	out := submitFigures(t, h, string(meta), smallJPEG(t), smallJPEG(t))
+	if out.Figures != 1 {
+		t.Fatalf("figures = %d, want only the lead", out.Figures)
+	}
+	page := get(h, "/reading/"+out.Edition.ID).Body.String()
+	if strings.Contains(page, "<figure") {
+		t.Fatalf("cover-only figure must not appear in the text")
 	}
 }

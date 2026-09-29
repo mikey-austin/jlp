@@ -6,8 +6,10 @@
 package httpx
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/url"
@@ -86,14 +88,15 @@ func parsePublished(s string) *time.Time {
 // highlighted a passage chose it, while Content is the extension's best
 // guess at the page's article body.
 type submitArticleRequestDTO struct {
-	URL         string `json:"url"`
-	Title       string `json:"title"`
-	Source      string `json:"source"`
-	Author      string `json:"author"`
-	PublishedAt string `json:"published_at"`
-	Content     string `json:"content"`
-	Selection   string `json:"selection"`
-	Deliver     bool   `json:"deliver"`
+	URL         string          `json:"url"`
+	Title       string          `json:"title"`
+	Source      string          `json:"source"`
+	Author      string          `json:"author"`
+	PublishedAt string          `json:"published_at"`
+	Content     string          `json:"content"`
+	Selection   string          `json:"selection"`
+	Figures     []figureMetaDTO `json:"figures"`
+	Deliver     bool            `json:"deliver"`
 }
 
 type readingArticleDTO struct {
@@ -123,6 +126,7 @@ type readingEditionDTO struct {
 	Attempts        int                  `json:"attempts"`
 	LastError       string               `json:"last_error,omitempty"`
 	Vocabulary      int                  `json:"vocabulary"`
+	FigureCount     int                  `json:"figure_count"`
 	PageURL         string               `json:"page_url"`
 	EpubURL         string               `json:"epub_url,omitempty"`
 	DeliveryEnabled bool                 `json:"delivery_enabled"`
@@ -136,6 +140,9 @@ type submitArticleResponseDTO struct {
 	Edition   readingEditionDTO   `json:"edition"`
 	Duplicate bool                `json:"duplicate"`
 	Delivery  *readingDeliveryDTO `json:"delivery,omitempty"`
+	// Figures were attached; FiguresRejected did not pass validation.
+	Figures         int `json:"figures"`
+	FiguresRejected int `json:"figures_rejected"`
 }
 
 func toReadingDeliveryDTO(d reading.Delivery) readingDeliveryDTO {
@@ -145,7 +152,7 @@ func toReadingDeliveryDTO(d reading.Delivery) readingDeliveryDTO {
 	}
 }
 
-func (s *Server) toReadingEditionDTO(e reading.StudyEdition, dls []reading.Delivery) readingEditionDTO {
+func (s *Server) toReadingEditionDTO(e reading.StudyEdition, dls []reading.Delivery, figureCount int) readingEditionDTO {
 	dto := readingEditionDTO{
 		ID: e.ID, ArticleID: e.ArticleID, Status: string(e.Status), StatusLabel: editionStatusLabel(e.Status),
 		Terminal: e.Terminal(), Attempts: e.Attempts, LastError: e.LastError,
@@ -153,6 +160,7 @@ func (s *Server) toReadingEditionDTO(e reading.StudyEdition, dls []reading.Deliv
 		// learner configured, which is the only URL it knows is right.
 		PageURL:         "/reading/" + e.ID,
 		DeliveryEnabled: s.opts.Reading.DeliveryEnabled(),
+		FigureCount:     figureCount,
 		Deliveries:      make([]readingDeliveryDTO, 0, len(dls)),
 		CreatedAt:       e.CreatedAt, UpdatedAt: e.UpdatedAt,
 	}
@@ -168,24 +176,121 @@ func (s *Server) toReadingEditionDTO(e reading.StudyEdition, dls []reading.Deliv
 	return dto
 }
 
+type figureMetaDTO struct {
+	Caption        string `json:"caption"`
+	Alt            string `json:"alt"`
+	AfterParagraph int    `json:"after_paragraph"`
+	AfterText      string `json:"after_text"`
+	Lead           bool   `json:"lead"`
+	// InText defaults to true; the extension sends false for a page's
+	// og:image used only as the cover.
+	InText *bool `json:"in_text"`
+}
+
+// maxMultipartSubmitBytes bounds POST /api/v1/reading/articles when it
+// carries images: 12 figures at the client's 1200 px downscale are well
+// under this; the JSON form keeps maxRequestBodyBytes.
+const maxMultipartSubmitBytes = 15 << 20
+
+// decodeSubmit reads the submit request in either form. Images are
+// matched to metadata.figures by index (image-0 is figures[0]); a
+// figure whose image part is missing is dropped.
+func decodeSubmit(w http.ResponseWriter, r *http.Request) (submitArticleRequestDTO, []reading.FigureDraft, error) {
+	var req submitArticleRequestDTO
+	mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type"))
+	if mt != "multipart/form-data" {
+		return req, nil, decodeJSON(w, r, &req)
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxMultipartSubmitBytes)
+	if err := r.ParseMultipartForm(maxMultipartSubmitBytes); err != nil {
+		return req, nil, err
+	}
+	defer func() { _ = r.MultipartForm.RemoveAll() }()
+	if err := json.Unmarshal([]byte(r.FormValue("metadata")), &req); err != nil {
+		return req, nil, err
+	}
+	var figs []reading.FigureDraft
+	for i, m := range req.Figures {
+		fhs := r.MultipartForm.File[fmt.Sprintf("image-%d", i)]
+		if len(fhs) == 0 {
+			continue
+		}
+		f, err := fhs[0].Open()
+		if err != nil {
+			continue
+		}
+		data, err := io.ReadAll(io.LimitReader(f, reading.MaxFigureBytes+1))
+		_ = f.Close()
+		if err != nil {
+			continue
+		}
+		inText := m.InText == nil || *m.InText
+		figs = append(figs, reading.FigureDraft{Caption: m.Caption, Alt: m.Alt, AfterParagraph: m.AfterParagraph,
+			AfterText: m.AfterText, Lead: m.Lead, InText: inText, Data: data})
+	}
+	return req, figs, nil
+}
+
+// readingFigure handles GET /reading/articles/{id}/figures/{n}: one of
+// the learner's article images. The bytes never change for a given
+// (article, ordinal), so they are cached for a year and revalidated by
+// their sha256.
+func (s *Server) readingFigure(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	n, err := strconv.Atoi(chi.URLParam(r, "n"))
+	if err != nil || n < 0 {
+		http.NotFound(w, r)
+		return
+	}
+	f, err := s.opts.Reading.Figure(r.Context(), ident.ID, chi.URLParam(r, "id"), n)
+	if errors.Is(err, storage.ErrNotFound) {
+		http.NotFound(w, r)
+		return
+	}
+	if err != nil {
+		http.Error(w, "could not load image", http.StatusInternalServerError)
+		return
+	}
+	etag := `"` + f.SHA256 + `"`
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Cache-Control", "private, max-age=31536000, immutable")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.Header().Set("Content-Type", f.MediaType)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	_, _ = w.Write(f.Data)
+}
+
 // apiReadingSubmit handles POST /api/v1/reading/articles: 202 when a
 // new study edition was queued, 200 when the same article (same text,
 // same learner) was already in — the extension shows the existing
 // edition either way.
 func (s *Server) apiReadingSubmit(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
-	var req submitArticleRequestDTO
-	if err := decodeJSON(w, r, &req); err != nil {
-		writeAPIError(w, http.StatusBadRequest, "invalid JSON body")
+	req, figs, err := decodeSubmit(w, r)
+	if err != nil {
+		writeAPIError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
 	content := req.Content
 	if strings.TrimSpace(req.Selection) != "" {
 		content = req.Selection
+		// Figure positions refer to the whole article, so only the lead
+		// survives, and only as the cover.
+		kept := figs[:0]
+		for _, f := range figs {
+			if f.Lead {
+				f.InText = false
+				kept = append(kept, f)
+			}
+		}
+		figs = kept
 	}
 	res, err := s.opts.Reading.Submit(r.Context(), ident.ID, reading.Draft{
 		SourceURL: req.URL, SourceName: req.Source, Title: req.Title, Author: req.Author,
-		PublishedAt: parsePublished(req.PublishedAt), Content: content,
+		PublishedAt: parsePublished(req.PublishedAt), Content: content, Figures: figs,
 	}, appreading.SubmitOptions{Deliver: req.Deliver})
 	if err != nil {
 		if isReadingInputError(err) {
@@ -200,8 +305,9 @@ func (s *Server) apiReadingSubmit(w http.ResponseWriter, r *http.Request) {
 			ID: res.Article.ID, Title: res.Article.Title, Source: res.Article.SourceName,
 			URL: res.Article.SourceURL, Chars: res.Article.Runes(),
 		},
-		Edition:   s.toReadingEditionDTO(res.Edition, nil),
+		Edition:   s.toReadingEditionDTO(res.Edition, nil, res.Figures),
 		Duplicate: res.Duplicate,
+		Figures:   res.Figures, FiguresRejected: res.FiguresRejected,
 	}
 	if res.Delivery != nil {
 		d := toReadingDeliveryDTO(*res.Delivery)
@@ -227,7 +333,7 @@ func (s *Server) apiReadingEdition(w http.ResponseWriter, r *http.Request) {
 		writeAPIError(w, http.StatusInternalServerError, "could not load edition")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.toReadingEditionDTO(d.Edition, d.Deliveries))
+	writeJSON(w, http.StatusOK, s.toReadingEditionDTO(d.Edition, d.Deliveries, len(d.Figures)))
 }
 
 // apiReadingDeliver handles POST /api/v1/reading/editions/{id}/deliver.
@@ -406,10 +512,12 @@ func (s *Server) readingDetail(w http.ResponseWriter, r *http.Request) {
 		}
 		data["Lesson"] = l
 		data["Vocabulary"] = vocab
-		data["Body"] = reading.Annotate(d.Article.Paragraphs, l.Vocabulary)
-	} else {
-		data["Body"] = reading.Annotate(d.Article.Paragraphs, nil)
 	}
+	var vocabForBody []reading.VocabularyItem
+	if d.Edition.Lesson != nil {
+		vocabForBody = d.Edition.Lesson.Vocabulary
+	}
+	data["Blocks"] = reading.Layout(d.Article.Paragraphs, d.Figures, vocabForBody)
 	s.render(w, r, "reading_detail", data)
 }
 

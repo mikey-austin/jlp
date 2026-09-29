@@ -108,6 +108,26 @@ Queue a Send-to-Kindle delivery of a ready edition.
 | `409` | the edition is not ready yet |
 | `503` | Kindle delivery is not configured on this server |
 
+## Submitting with images
+
+`POST /api/v1/reading/articles` also accepts `multipart/form-data`: a
+`metadata` part holding the usual JSON body plus `figures[]`, and one
+`image-N` file part per figure, matched to `figures[N]` by index. Each
+figure takes `caption`, `alt`, `after_paragraph`, `after_text`, `lead`
+(the cover photo) and `in_text` (default `true`; send `false` for an image
+used only as the cover). A `selection` keeps only the lead figure, as
+cover-only, because the other positions refer to the whole article.
+
+The multipart body is limited to 15 MiB (the JSON form stays at 1 MiB).
+Images must be JPEG, PNG or GIF, at most 2 MB and 25 megapixels each, and
+at most 12 per article. An image that fails those checks (or is not an
+image) is dropped, not fatal: the response reports `figures` (attached) and
+`figures_rejected`, and the edition has `figure_count`.
+
+Each image is served at `GET /reading/articles/{id}/figures/{n}` — a page
+route, so it needs the learner's session cookie, not an API token; another
+learner's figure is a `404`.
+
 ## Example
 
 ```sh

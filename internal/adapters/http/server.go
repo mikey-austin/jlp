@@ -438,6 +438,7 @@ func (s *Server) routes() http.Handler {
 			r.Post("/reading/{id}/regenerate", s.readingAction(s.readingRegenerate))
 			r.Post("/reading/{id}/vocabulary", s.readingAction(s.readingAddVocabulary))
 			r.Post("/reading/{id}/anki", s.readingAction(s.readingAnki))
+			r.Get("/reading/articles/{id}/figures/{n}", s.readingFigure)
 			r.Post("/reading/articles/{id}/delete", s.readingDelete)
 			r.Post("/reading/articles/{id}/restore", s.readingRestore)
 		}

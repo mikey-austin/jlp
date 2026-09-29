@@ -1528,3 +1528,7 @@ p.empty {
     flex-basis: 100%;
   }
 }
+
+.reading-figure { margin: 1.25rem 0; }
+.reading-figure img { display: block; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px; }
+.reading-figure figcaption { font-size: .85rem; color: var(--fg-muted); text-align: center; margin-top: .4rem; }

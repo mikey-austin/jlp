@@ -58,7 +58,7 @@
   <details class="panel" open>
     <summary class="panel__summary"><span class="panel__title">記事</span></summary>
     <div class="reading-body" lang="ja">
-      {{range .Body}}<p>{{range .}}{{template "ruby_segment" .}}{{end}}</p>{{end}}
+      {{range .Blocks}}{{if .Figure}}<figure class="reading-figure"><img src="/reading/articles/{{$.Article.ID}}/figures/{{.Figure.Ordinal}}" alt="{{if .Figure.Alt}}{{.Figure.Alt}}{{else}}{{.Figure.Caption}}{{end}}" width="{{.Figure.Width}}" height="{{.Figure.Height}}" loading="lazy">{{if .Caption}}<figcaption lang="ja">{{range .Caption}}{{template "ruby_segment" .}}{{end}}</figcaption>{{end}}</figure>{{else}}<p>{{range .Paragraph}}{{template "ruby_segment" .}}{{end}}</p>{{end}}{{end}}
     </div>
   </details>
 
