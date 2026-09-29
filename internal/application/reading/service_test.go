@@ -1,9 +1,12 @@
 package reading_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"image"
+	"image/jpeg"
 	"sort"
 	"strings"
 	"sync"
@@ -351,10 +354,14 @@ func (f *failingAnalyser) Analyse(ctx context.Context, in agentreading.Input) (r
 	return f.inner.Analyse(ctx, in)
 }
 
-type fakeRenderer struct{ calls int }
+type fakeRenderer struct {
+	calls int
+	last  publishing.Ebook
+}
 
 func (r *fakeRenderer) Render(_ context.Context, b publishing.Ebook) ([]byte, error) {
 	r.calls++
+	r.last = b
 	return []byte("EPUB:" + b.ID + ":" + b.Article.Title), nil
 }
 func (*fakeRenderer) MediaType() string { return "application/epub+zip" }
@@ -437,6 +444,7 @@ type harness struct {
 	repo     *memRepo
 	analyser *failingAnalyser
 	render   *fakeRenderer
+	cover    *fakeCover
 	deliver  *fakeDeliverer
 	vocab    *fakeVocab
 	anki     *fakeAnki
@@ -450,6 +458,7 @@ func newHarness(t *testing.T, kindle bool) *harness {
 		repo:     newMemRepo(),
 		analyser: &failingAnalyser{inner: agentreading.New(fakeai.New())},
 		render:   &fakeRenderer{},
+		cover:    &fakeCover{},
 		deliver:  &fakeDeliverer{},
 		vocab:    &fakeVocab{},
 		anki:     &fakeAnki{},
@@ -462,6 +471,7 @@ func newHarness(t *testing.T, kindle bool) *harness {
 		Recorder:   learning.NewRecorder(h.events, inprocbus.New()),
 		Analyser:   h.analyser,
 		Renderer:   h.render,
+		Cover:      h.cover,
 		Vocabulary: h.vocab,
 		Anki:       h.anki,
 	}
@@ -844,3 +854,105 @@ func TestDeletedArticleIsNotAnalysed(t *testing.T) {
 }
 
 func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
+
+type fakeCover struct {
+	calls []publishing.CoverInput
+	fail  func(in publishing.CoverInput) bool
+}
+
+func (c *fakeCover) Design(_ context.Context, in publishing.CoverInput) ([]byte, error) {
+	c.calls = append(c.calls, in)
+	if c.fail != nil && c.fail(in) {
+		return nil, errors.New("cover: bad photo")
+	}
+	return []byte("COVER"), nil
+}
+
+func jpegBytes(t *testing.T) []byte {
+	t.Helper()
+	var b bytes.Buffer
+	if err := jpeg.Encode(&b, image.NewRGBA(image.Rect(0, 0, 400, 300)), nil); err != nil {
+		t.Fatal(err)
+	}
+	return b.Bytes()
+}
+
+func TestSubmitAttachesFiguresAndResubmitAddsThemOnce(t *testing.T) {
+	h := newHarness(t, false)
+	ctx := context.Background()
+	d := reading.Draft{Title: "経済対策", Content: "政府は新たな経済対策をまとめた。\n\n物価高への対応が柱となる。"}
+	res, err := h.svc.Submit(ctx, "me", d, appreading.SubmitOptions{})
+	if err != nil || res.Figures != 0 {
+		t.Fatalf("text-only submit = %+v %v", res, err)
+	}
+	d.Figures = []reading.FigureDraft{
+		{Data: jpegBytes(t), InText: true, Lead: true, Caption: "記者会見"},
+		{Data: []byte("not an image")},
+	}
+	res2, err := h.svc.Submit(ctx, "me", d, appreading.SubmitOptions{})
+	if err != nil || !res2.Duplicate || res2.Figures != 1 || res2.FiguresRejected != 1 {
+		t.Fatalf("resubmit with figures = %+v %v", res2, err)
+	}
+	d.Figures = []reading.FigureDraft{{Data: jpegBytes(t), InText: true}, {Data: jpegBytes(t), InText: true}}
+	res3, _ := h.svc.Submit(ctx, "me", d, appreading.SubmitOptions{})
+	if res3.Figures != 1 {
+		t.Fatalf("an article that has figures keeps them: %+v", res3)
+	}
+}
+
+func TestRenderPassesFiguresAndCover(t *testing.T) {
+	h := newHarness(t, false)
+	ctx := context.Background()
+	res, _ := h.svc.Submit(ctx, "me", reading.Draft{Title: "経済対策", SourceName: "NHK", Content: "政府は新たな経済対策をまとめた。",
+		Figures: []reading.FigureDraft{{Data: jpegBytes(t), InText: true, Lead: true}}}, appreading.SubmitOptions{})
+	h.svc.Drain(ctx)
+	if _, err := h.svc.RenderEbook(ctx, "me", res.Edition.ID); err != nil {
+		t.Fatal(err)
+	}
+	got := h.render.last
+	if len(got.Figures) != 1 || len(got.Figures[0].Data) == 0 || string(got.Cover) != "COVER" {
+		t.Fatalf("ebook figures=%d cover=%q", len(got.Figures), got.Cover)
+	}
+	if in := h.cover.calls[0]; in.Title != "経済対策" || in.Source != "NHK" || len(in.Photo) == 0 {
+		t.Fatalf("cover input = %+v", in)
+	}
+}
+
+func TestRenderFallsBackToNoPhotoCoverThenNoCover(t *testing.T) {
+	h := newHarness(t, false)
+	ctx := context.Background()
+	res, _ := h.svc.Submit(ctx, "me", reading.Draft{Title: "t", Content: "政府は新たな経済対策をまとめた。",
+		Figures: []reading.FigureDraft{{Data: jpegBytes(t), InText: true, Lead: true}}}, appreading.SubmitOptions{})
+	h.svc.Drain(ctx)
+	h.cover.fail = func(in publishing.CoverInput) bool { return in.Photo != nil }
+	if _, err := h.svc.RenderEbook(ctx, "me", res.Edition.ID); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(h.cover.calls); n != 2 || h.cover.calls[1].Photo != nil || string(h.render.last.Cover) != "COVER" {
+		t.Fatalf("calls=%d cover=%q: want a photo attempt then a no-photo one", n, h.render.last.Cover)
+	}
+	h.cover.fail = func(publishing.CoverInput) bool { return true }
+	if _, err := h.svc.RenderEbook(ctx, "me", res.Edition.ID); err != nil {
+		t.Fatalf("a failed cover must not fail the book: %v", err)
+	}
+	if h.render.last.Cover != nil {
+		t.Fatal("no cover expected after both attempts failed")
+	}
+}
+
+func TestFigureIsIdentityScoped(t *testing.T) {
+	h := newHarness(t, false)
+	ctx := context.Background()
+	res, _ := h.svc.Submit(ctx, "me", reading.Draft{Title: "t", Content: "政府は新たな経済対策をまとめた。",
+		Figures: []reading.FigureDraft{{Data: jpegBytes(t), InText: true}}}, appreading.SubmitOptions{})
+	if f, err := h.svc.Figure(ctx, "me", res.Article.ID, 0); err != nil || len(f.Data) == 0 {
+		t.Fatalf("own figure = %v", err)
+	}
+	if _, err := h.svc.Figure(ctx, "them", res.Article.ID, 0); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("foreign figure err = %v", err)
+	}
+	d, _ := h.svc.Edition(ctx, "me", res.Edition.ID)
+	if len(d.Figures) != 1 || d.Figures[0].Data != nil {
+		t.Fatalf("detail figures = %+v", d.Figures)
+	}
+}

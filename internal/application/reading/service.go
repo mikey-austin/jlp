@@ -95,6 +95,7 @@ type Deps struct {
 	Deliverer  publishing.Deliverer // nil: delivery not configured
 	Vocabulary VocabularyService
 	Anki       AnkiService
+	Cover      publishing.CoverDesigner // nil: no cover
 }
 
 // Service is the pipeline's application layer.
@@ -148,6 +149,9 @@ type SubmitResult struct {
 	// Delivery is set when Submit queued (or found in flight) a Kindle
 	// delivery for an edition that was already ready.
 	Delivery *reading.Delivery
+	// Figures is how many figures the article has after this submit;
+	// FiguresRejected how many of the submitted ones failed validation.
+	Figures, FiguresRejected int
 }
 
 // Submit ingests an article and queues its study edition. It never
@@ -165,6 +169,7 @@ func (s *Service) Submit(ctx context.Context, identity learner.IdentityID, d rea
 		return SubmitResult{}, fmt.Errorf("reading: store article: %w", err)
 	}
 	res := SubmitResult{Article: stored}
+	res.Figures, res.FiguresRejected = s.attachFigures(ctx, identity, stored, d.Figures)
 	deliver := opts.Deliver && s.DeliveryEnabled()
 
 	if !created {
@@ -193,6 +198,34 @@ func (s *Service) Submit(ctx context.Context, identity learner.IdentityID, d rea
 	}
 	res.Edition = e
 	return res, nil
+}
+
+// attachFigures validates and stores an article's figures. Images are
+// optional: every failure here is logged and swallowed.
+func (s *Service) attachFigures(ctx context.Context, identity learner.IdentityID, a reading.Article, drafts []reading.FigureDraft) (have, rejected int) {
+	log := slog.With("identity", identity, "article", a.ID)
+	if len(drafts) > 0 {
+		figs, bad := reading.NewFigures(drafts, a.Paragraphs)
+		for _, err := range bad {
+			log.Warn("reading: figure rejected", "err", err)
+		}
+		rejected = len(bad)
+		if len(figs) > 0 {
+			if _, err := s.d.Repo.AttachFigures(ctx, identity, a.ID, figs); err != nil {
+				log.Warn("reading: attach figures", "err", err)
+			}
+		}
+	}
+	list, err := s.d.Repo.ListFigures(ctx, identity, a.ID)
+	if err != nil {
+		log.Warn("reading: list figures", "err", err)
+	}
+	return len(list), rejected
+}
+
+// Figure returns one of an article's figures with its bytes.
+func (s *Service) Figure(ctx context.Context, identity learner.IdentityID, articleID string, ordinal int) (reading.Figure, error) {
+	return s.d.Repo.FigureData(ctx, identity, articleID, ordinal)
 }
 
 func (s *Service) queueEdition(ctx context.Context, identity learner.IdentityID, articleID string, deliver bool) (reading.StudyEdition, error) {
@@ -244,6 +277,8 @@ type EditionDetail struct {
 	// Known is the set of the lesson's vocabulary expressions already on
 	// the learner's vocabulary list.
 	Known map[string]bool
+	// Figures are the article's images, without their bytes.
+	Figures []reading.Figure
 }
 
 // Edition reads one edition with its article and deliveries.
@@ -261,6 +296,11 @@ func (s *Service) Edition(ctx context.Context, identity learner.IdentityID, edit
 		return EditionDetail{}, err
 	}
 	out := EditionDetail{Article: a, Edition: e, Deliveries: dls, Known: map[string]bool{}}
+	figs, err := s.d.Repo.ListFigures(ctx, identity, a.ID)
+	if err != nil {
+		slog.Warn("reading: list figures", "identity", identity, "article", a.ID, "err", err)
+	}
+	out.Figures = figs
 	if e.Lesson != nil && s.d.Vocabulary != nil {
 		exprs := make([]string, 0, len(e.Lesson.Vocabulary))
 		for _, v := range e.Lesson.Vocabulary {
@@ -307,11 +347,66 @@ func (s *Service) render(ctx context.Context, a reading.Article, e reading.Study
 	if e.Status != reading.EditionReady || e.Lesson == nil {
 		return Ebook{}, ErrNotReady
 	}
-	data, err := s.d.Renderer.Render(ctx, publishing.Ebook{ID: e.ID, Article: a, Lesson: *e.Lesson, GeneratedAt: e.UpdatedAt})
+	figs := s.figuresWithData(ctx, a)
+	book := publishing.Ebook{ID: e.ID, Article: a, Lesson: *e.Lesson, GeneratedAt: e.UpdatedAt, Figures: figs}
+	book.Cover = s.cover(ctx, a, figs)
+	data, err := s.d.Renderer.Render(ctx, book)
 	if err != nil {
 		return Ebook{}, fmt.Errorf("reading: render: %w", err)
 	}
 	return Ebook{Filename: Filename(a, e) + s.d.Renderer.Extension(), MediaType: s.d.Renderer.MediaType(), Data: data}, nil
+}
+
+// figuresWithData loads an article's figures with their bytes; one that
+// cannot be loaded is left out of the book.
+func (s *Service) figuresWithData(ctx context.Context, a reading.Article) []reading.Figure {
+	list, err := s.d.Repo.ListFigures(ctx, a.IdentityID, a.ID)
+	if err != nil {
+		slog.Warn("reading: list figures for render", "article", a.ID, "err", err)
+		return nil
+	}
+	out := make([]reading.Figure, 0, len(list))
+	for _, f := range list {
+		full, err := s.d.Repo.FigureData(ctx, a.IdentityID, a.ID, f.Ordinal)
+		if err != nil {
+			slog.Warn("reading: load figure for render", "article", a.ID, "ordinal", f.Ordinal, "err", err)
+			continue
+		}
+		out = append(out, full)
+	}
+	return out
+}
+
+// cover draws the book's cover from the lead figure, falling back to the
+// no-photo design and then to no cover: a cover never fails a book.
+func (s *Service) cover(ctx context.Context, a reading.Article, figs []reading.Figure) []byte {
+	if s.d.Cover == nil {
+		return nil
+	}
+	in := publishing.CoverInput{Title: a.Title, Source: a.SourceName}
+	if a.PublishedAt != nil {
+		in.Date = a.PublishedAt.Format("2006年1月2日")
+	}
+	for _, f := range figs {
+		if f.Lead {
+			in.Photo = f.Data
+			break
+		}
+	}
+	if in.Photo == nil && len(figs) > 0 {
+		in.Photo = figs[0].Data
+	}
+	img, err := s.d.Cover.Design(ctx, in)
+	if err != nil && in.Photo != nil {
+		slog.Warn("reading: cover with photo", "article", a.ID, "err", err)
+		in.Photo = nil
+		img, err = s.d.Cover.Design(ctx, in)
+	}
+	if err != nil {
+		slog.Warn("reading: cover", "article", a.ID, "err", err)
+		return nil
+	}
+	return img
 }
 
 // Filename is the download/attachment name, without extension:

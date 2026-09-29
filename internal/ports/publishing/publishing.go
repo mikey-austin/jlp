@@ -28,6 +28,26 @@ type Ebook struct {
 	// GeneratedAt is when the edition was analysed; it goes in the
 	// book's metadata and colophon.
 	GeneratedAt time.Time
+	// Figures are the article's images with their bytes, in order. The
+	// renderer places the in-text ones (see reading.Layout).
+	Figures []reading.Figure
+	// Cover is a JPEG to use as the book's cover; nil for none.
+	Cover []byte
+}
+
+// CoverInput is what a cover is drawn from.
+type CoverInput struct {
+	Title, Source, Date string
+	// Photo is the lead image (JPEG, PNG or GIF); nil draws the
+	// no-photo design.
+	Photo []byte
+}
+
+// CoverDesigner draws a book cover. Separate from Renderer so the EPUB
+// adapter never deals in fonts, and a failed cover can fall back without
+// failing the book.
+type CoverDesigner interface {
+	Design(ctx context.Context, in CoverInput) ([]byte, error)
 }
 
 // Renderer turns one edition into a complete ebook file.
