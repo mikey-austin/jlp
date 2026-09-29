@@ -284,6 +284,7 @@ const READING_POLL_LIMIT = 100; // ~5 minutes
 
 const IMAGE_ORIGINS = ["https://*/*", "http://*/*"];
 const MAX_EDGE = 1200;
+const MIN_EDGE = 200;
 const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
 const PNG_KEEP_BYTES = 500 * 1024;
 
@@ -310,13 +311,20 @@ async function fetchWithTimeout(url, ms) {
 // stays small (charts), else JPEG stepping down in quality until <= 2 MB.
 async function downscale(blob) {
   const bmp = await createImageBitmap(blob);
-  const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
-  const canvas = new OffscreenCanvas(Math.round(bmp.width * scale), Math.round(bmp.height * scale));
-  const ctx = canvas.getContext("2d");
-  ctx.fillStyle = "#fff"; // JPEG has no alpha
-  ctx.fillRect(0, 0, canvas.width, canvas.height);
-  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
-  bmp.close();
+  let canvas;
+  try {
+    // The capture cannot size-check a lazy image before it loads, so the
+    // decoded size is the real test: icons and avatars end here.
+    if (bmp.width < MIN_EDGE || bmp.height < MIN_EDGE) throw new Error("too small");
+    const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+    canvas = new OffscreenCanvas(Math.round(bmp.width * scale), Math.round(bmp.height * scale));
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "#fff"; // JPEG has no alpha
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  } finally {
+    bmp.close();
+  }
   if (blob.type === "image/png") {
     const png = await canvas.convertToBlob({ type: "image/png" });
     if (png.size < PNG_KEEP_BYTES) return png;

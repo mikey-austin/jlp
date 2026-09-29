@@ -98,20 +98,35 @@
     return { src, alt: (img.getAttribute("alt") || "").trim(), caption: cap ? text(cap) : "" };
   }
 
-  // bestSrc picks the largest candidate: the widest srcset entry, then
-  // what the browser chose, then src, then the lazy-loading attributes
-  // sites keep the real URL in until the image scrolls into view.
-  function bestSrc(img) {
-    const set = img.getAttribute("srcset") || img.getAttribute("data-srcset") || "";
+  // widest picks the widest candidate of one srcset. Candidates split on a
+  // comma followed by whitespace (or right after a width/density
+  // descriptor), because a URL may itself contain commas
+  // (.../w_600,h_400/x.jpg).
+  function widest(set) {
     let best = "", bestW = 0;
-    for (const part of set.split(",")) {
+    for (const part of (set || "").split(/(?<=\s\d+(?:\.\d+)?[wx]),|,\s+/)) {
       const [u, d] = part.trim().split(/\s+/);
-      const w = parseInt(d, 10) || 1;
+      const w = parseFloat(d) || 1;
       if (u && w >= bestW) { best = u; bestW = w; }
     }
-    const raw = best || img.currentSrc || img.getAttribute("data-src") || img.getAttribute("data-original") ||
-      img.getAttribute("data-lazy-src") || img.getAttribute("src") || "";
-    try { return raw ? new URL(raw, location.href).href : ""; } catch (_) { return ""; }
+    return best;
+  }
+
+  // bestSrc picks the largest candidate. A lazy image's src is a
+  // placeholder (1x1 gif, data: URI), so the lazy-loading attributes win
+  // for it; otherwise the widest srcset entry, then what the browser
+  // chose, then src. A data: URI is never a source: it is a placeholder or
+  // inline art, and cannot be fetched from the article's site anyway.
+  function bestSrc(img) {
+    const at = (n) => img.getAttribute(n) || "";
+    const lazy = widest(at("data-srcset")) || at("data-src") || at("data-original") || at("data-lazy-src");
+    const eager = widest(at("srcset")) || img.currentSrc || at("src");
+    const isLazy = !!lazy;
+    for (const raw of isLazy ? [lazy, eager] : [eager]) {
+      if (!raw || /^\s*data:/i.test(raw)) continue;
+      try { return new URL(raw, location.href).href; } catch (_) { /* next candidate */ }
+    }
+    return "";
   }
 
   // paragraphs keeps headings and paragraphs in document order, one per
@@ -152,7 +167,8 @@
     });
     // An image in the section of a dropped heading belongs to the same
     // furniture (a promo module in plain divs, NHK's 「最新・注目の動画」).
-    const figures = figs.filter((f) => f.heading < 0 || isKept[f.heading]).slice(0, 12).map((f, i) => {
+    const figures = figs.filter((f) => f.heading < 0 || isKept[f.heading])
+      .filter((f, i, all) => all.findIndex((g) => g.src === f.src) === i).slice(0, 12).map((f, i) => {
       const after = f.blockIndex < 0 ? -1 : keptIdx[f.blockIndex];
       return { src: f.src, caption: f.caption, alt: f.alt, after_paragraph: after,
                after_text: after >= 0 ? out[after].slice(0, 40) : "", lead: i === 0, in_text: true };
@@ -170,7 +186,9 @@
   let figures = body.figures;
   if (!figures.length) {
     const og = meta("meta[property='og:image']");
-    if (og) figures = [{ src: new URL(og, location.href).href, caption: "", alt: "", after_paragraph: -1, after_text: "", lead: true, in_text: false }];
+    let ogSrc = "";
+    try { ogSrc = og ? new URL(og, location.href).href : ""; } catch (_) { /* malformed: no fallback */ }
+    if (ogSrc) figures = [{ src: ogSrc, caption: "", alt: "", after_paragraph: -1, after_text: "", lead: true, in_text: false }];
   }
 
   return {
