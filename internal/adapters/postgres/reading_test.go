@@ -339,7 +339,13 @@ func TestReadingFiguresRacingAttachLandsOneSet(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			ok, err := r.AttachFigures(ctx, me, a.ID, testFigures(2+i%3))
+			// Each goroutine's set carries its index in every figure's
+			// alt text, so a mix of sets is detectable below.
+			figs := testFigures(2 + i%3)
+			for k := range figs {
+				figs[k].Alt = "set" + strconv.Itoa(i)
+			}
+			ok, err := r.AttachFigures(ctx, me, a.ID, figs)
 			if err != nil {
 				t.Errorf("attach %d: %v", i, err)
 			}
@@ -347,19 +353,23 @@ func TestReadingFiguresRacingAttachLandsOneSet(t *testing.T) {
 		}(i)
 	}
 	wg.Wait()
-	won := 0
-	for _, ok := range results {
+	won, winner := 0, -1
+	for i, ok := range results {
 		if ok {
 			won++
+			winner = i
 		}
 	}
 	list, _ := r.ListFigures(ctx, me, a.ID)
 	if won != 1 {
 		t.Fatalf("%d attaches reported success, want exactly 1", won)
 	}
+	if len(list) != 2+winner%3 {
+		t.Fatalf("stored %d figures, winner %d's set has %d", len(list), winner, 2+winner%3)
+	}
 	for i, f := range list {
-		if f.Ordinal != i {
-			t.Fatalf("figures are a mix of sets: %+v", list)
+		if f.Ordinal != i || f.Alt != "set"+strconv.Itoa(winner) {
+			t.Fatalf("figures are a mix of sets (winner %d): %+v", winner, list)
 		}
 	}
 }
