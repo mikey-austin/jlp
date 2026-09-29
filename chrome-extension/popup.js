@@ -34,10 +34,10 @@ async function jlpFetch(cfg, path, init = {}) {
     },
   });
   if (res.status === 401) {
-    throw new Error("APIトークンが無効か、取り消されています。");
+    throw Object.assign(new Error("APIトークンが無効か、取り消されています。"), { auth: true });
   }
   if (res.status === 403) {
-    throw new Error("このトークンにはこの操作の権限がありません（スコープ不足）。");
+    throw Object.assign(new Error("このトークンにはこの操作の権限がありません（スコープ不足）。"), { auth: true });
   }
   return res;
 }
@@ -336,18 +336,47 @@ async function downscale(blob) {
   throw new Error("too large");
 }
 
-// prepareImages fetches and downscales the captured figures. A figure
-// that fails is dropped, never the import.
+// The server caps a multipart request at 15 MiB; keep the images to 14
+// so the metadata part and framing fit.
+const UPLOAD_BUDGET = 14 * 1024 * 1024;
+
+// withinBudget keeps the prepared images in order while their running
+// total stays under the budget; the rest are dropped (counted by the caller).
+function withinBudget(ok, budget = UPLOAD_BUDGET) {
+  let total = 0;
+  const kept = [];
+  for (const x of ok) {
+    if (total + x.blob.size > budget) break;
+    total += x.blob.size;
+    kept.push(x);
+  }
+  return kept;
+}
+
+// prepareImages fetches and downscales the captured figures, all at once
+// (each has its own timeout, so the popup is not held open for the sum).
+// A figure that fails is dropped, never the import; results keep the
+// article's order.
 async function prepareImages(figures) {
-  const ok = [];
+  const list = figures || [];
+  const settled = await Promise.allSettled(
+    list.map(async (f) => downscale(await fetchWithTimeout(f.src, 10000))),
+  );
+  let ok = [];
   let failed = 0;
-  for (const f of figures || []) {
-    try {
-      ok.push({ meta: f, blob: await downscale(await fetchWithTimeout(f.src, 10000)) });
-    } catch (err) {
+  settled.forEach((r, i) => {
+    if (r.status === "fulfilled") {
+      ok.push({ meta: list[i], blob: r.value });
+    } else {
       failed++;
-      console.warn("[JLP] image skipped", f.src, String(err));
+      console.warn("[JLP] image skipped", list[i].src, String(r.reason));
     }
+  });
+  const kept = withinBudget(ok);
+  if (kept.length < ok.length) {
+    console.warn("[JLP] images over the upload budget dropped", ok.length - kept.length);
+    failed += ok.length - kept.length;
+    ok = kept;
   }
   return { ok, failed };
 }
@@ -391,8 +420,17 @@ async function submitArticle(article) {
       const form = new FormData();
       form.append("metadata", JSON.stringify({ ...fields, figures: images.ok.map((x) => x.meta) }));
       images.ok.forEach((x, i) => form.append(`image-${i}`, x.blob, `image-${i}`));
-      res = await jlpFetch(cfg, `/api/v1/reading/articles`, { method: "POST", body: form });
-      if (res.status === 400 || res.status === 413) {
+      // Anything that goes wrong with the upload — a reset, a gateway
+      // timeout, a rejection — retries once without images (the server
+      // dedupes by content hash). Only a bad token is the user's to see.
+      try {
+        res = await jlpFetch(cfg, `/api/v1/reading/articles`, { method: "POST", body: form });
+      } catch (err) {
+        if (err.auth) throw err; // jlpFetch's 401/403: retrying cannot help
+        console.warn("[JLP] image upload failed", String(err));
+        res = null;
+      }
+      if (!res || !res.ok) {
         imageNote = "画像を送れなかったため、本文のみで作成しました";
         res = await postJSON();
       }
@@ -648,6 +686,7 @@ window.jlpPopup = {
   saveVocabulary,
   createSession,
   submitArticle,
+  withinBudget,
   prepareImages,
   downscale,
   renderEdition,

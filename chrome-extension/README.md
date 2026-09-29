@@ -97,9 +97,13 @@ The **popup** fetches each image itself (the browser's own request, with
 your cookies — the server never contacts the article's site), shrinks
 it to **1200 px** on the long side and **2 MB** at most (a PNG stays PNG
 when it is under 500 KB, so charts stay sharp; otherwise JPEG), and
-uploads them with the article as `multipart/form-data`. A figure that
-cannot be fetched is skipped, never the import; if the server rejects
-the upload the article is created text-only. The status line ends with
+uploads them with the article as `multipart/form-data`. Images are
+fetched in parallel and kept, in article order, while their total stays
+under **14 MiB** (the server's request cap is 15 MiB); later ones are
+counted as skipped. A figure that cannot be fetched is skipped, never
+the import; if the upload fails for any reason other than a rejected
+token (server rejection, gateway error or timeout, network error) the
+article is created text-only. The status line ends with
 「画像 n/m枚」.
 
 Fetching images from every site needs host access, granted **once** with
