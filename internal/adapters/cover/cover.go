@@ -14,6 +14,7 @@ import (
 	_ "image/gif"
 	"image/jpeg"
 	_ "image/png"
+	"sync"
 
 	xdraw "golang.org/x/image/draw"
 	"golang.org/x/image/font"
@@ -47,6 +48,9 @@ var (
 
 // Designer implements publishing.CoverDesigner.
 type Designer struct {
+	// mu serializes Design: an opentype face caches glyphs and is not safe
+	// for concurrent use, and covers are rare and quick.
+	mu                              sync.Mutex
 	titleFace, kickerFace, metaFace font.Face
 }
 
@@ -82,6 +86,8 @@ func New() (*Designer, error) {
 // Design draws the cover. A photo that cannot be decoded is an error, so
 // the caller can retry without it.
 func (d *Designer) Design(_ context.Context, in publishing.CoverInput) ([]byte, error) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	img := image.NewRGBA(image.Rect(0, 0, Width, Height))
 	xdraw.Draw(img, img.Bounds(), image.NewUniform(paper), image.Point{}, xdraw.Src)
 	top := image.Rect(0, 0, Width, PhotoHeight)

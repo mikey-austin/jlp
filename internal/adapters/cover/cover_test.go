@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"image/png"
 	"strings"
+	"sync"
 	"testing"
 
 	"golang.org/x/image/math/fixed"
@@ -159,4 +160,27 @@ func TestWrapLinesPulledRuneMayNotStartLineEither(t *testing.T) {
 			t.Fatalf("line starts with a no-break-before character: %q", l)
 		}
 	}
+}
+
+// One Designer serves the delivery worker and EPUB downloads at once; its
+// font faces are not goroutine-safe, so Design must serialize.
+func TestDesignConcurrent(t *testing.T) {
+	d, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for i := 0; i < 6; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			out, err := d.Design(context.Background(), publishing.CoverInput{
+				Title: "電気料金が「過去最高」の水準へ", Source: "NHKニュース", Date: "2026年9月29日",
+			})
+			if err != nil || len(out) == 0 {
+				t.Errorf("Design = %d bytes, %v", len(out), err)
+			}
+		}()
+	}
+	wg.Wait()
 }

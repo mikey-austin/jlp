@@ -396,17 +396,28 @@ func (s *Service) cover(ctx context.Context, a reading.Article, figs []reading.F
 	if in.Photo == nil && len(figs) > 0 {
 		in.Photo = figs[0].Data
 	}
-	img, err := s.d.Cover.Design(ctx, in)
+	img, err := s.design(ctx, in)
 	if err != nil && in.Photo != nil {
 		slog.Warn("reading: cover with photo", "article", a.ID, "err", err)
 		in.Photo = nil
-		img, err = s.d.Cover.Design(ctx, in)
+		img, err = s.design(ctx, in)
 	}
 	if err != nil {
 		slog.Warn("reading: cover", "article", a.ID, "err", err)
 		return nil
 	}
 	return img
+}
+
+// design calls the cover designer, turning a panic into an error: a
+// cover never fails a book, and a crash here would take the worker down.
+func (s *Service) design(ctx context.Context, in publishing.CoverInput) (img []byte, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("cover: designer panicked: %v", r)
+		}
+	}()
+	return s.d.Cover.Design(ctx, in)
 }
 
 // Filename is the download/attachment name, without extension:

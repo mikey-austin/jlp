@@ -858,10 +858,14 @@ func jsonUnmarshal(b []byte, v any) error { return json.Unmarshal(b, v) }
 type fakeCover struct {
 	calls []publishing.CoverInput
 	fail  func(in publishing.CoverInput) bool
+	boom  bool // panic instead of returning
 }
 
 func (c *fakeCover) Design(_ context.Context, in publishing.CoverInput) ([]byte, error) {
 	c.calls = append(c.calls, in)
+	if c.boom {
+		panic("cover: font face exploded")
+	}
 	if c.fail != nil && c.fail(in) {
 		return nil, errors.New("cover: bad photo")
 	}
@@ -954,5 +958,20 @@ func TestFigureIsIdentityScoped(t *testing.T) {
 	d, _ := h.svc.Edition(ctx, "me", res.Edition.ID)
 	if len(d.Figures) != 1 || d.Figures[0].Data != nil {
 		t.Fatalf("detail figures = %+v", d.Figures)
+	}
+}
+
+func TestRenderSurvivesACoverPanic(t *testing.T) {
+	h := newHarness(t, false)
+	h.cover.boom = true
+	ctx := context.Background()
+	res, _ := h.svc.Submit(ctx, "me", reading.Draft{Title: "t", Content: "政府は新たな経済対策をまとめた。",
+		Figures: []reading.FigureDraft{{Data: jpegBytes(t), InText: true, Lead: true}}}, appreading.SubmitOptions{})
+	h.svc.Drain(ctx)
+	if _, err := h.svc.RenderEbook(ctx, "me", res.Edition.ID); err != nil {
+		t.Fatal(err)
+	}
+	if h.render.last.Cover != nil || len(h.cover.calls) != 2 {
+		t.Fatalf("cover=%q calls=%d, want no cover after photo and no-photo attempts", h.render.last.Cover, len(h.cover.calls))
 	}
 }
