@@ -6,7 +6,8 @@
 // Unlike internal/adapters/smtp — the deliberately minimal no-auth,
 // no-TLS adapter for the LAN Mailpit — this one talks to a real
 // submission server (Gmail, Fastmail, iCloud, SES …): STARTTLS or
-// implicit TLS, and PLAIN authentication. It refuses to send a password
+// implicit TLS, and PLAIN or LOGIN authentication (KPN offers only
+// LOGIN, and answers PLAIN with a 504). It refuses to send a password
 // over an unencrypted connection; net/smtp enforces that for any host
 // other than localhost, and config validation rejects the combination
 // up front.
@@ -132,7 +133,11 @@ func (s *Sender) Deliver(ctx context.Context, p publishing.Parcel) error {
 	// Close after a successful Quit only reports "already closed".
 	defer func() { _ = c.Close() }()
 	if s.cfg.Username != "" {
-		if err := c.Auth(smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.host())); err != nil {
+		a, err := s.auth(c)
+		if err != nil {
+			return err
+		}
+		if err := c.Auth(a); err != nil {
 			return classify("auth", err)
 		}
 	}
@@ -153,6 +158,64 @@ func (s *Sender) Deliver(ctx context.Context, p publishing.Parcel) error {
 		return classify("DATA", err)
 	}
 	return classify("QUIT", c.Quit())
+}
+
+// auth picks PLAIN when the server offers it and LOGIN otherwise. The
+// choice is the server's to make: sending a mechanism it did not
+// advertise earns a 5xx that looks exactly like a wrong password.
+func (s *Sender) auth(c *smtp.Client) (smtp.Auth, error) {
+	_, offered := c.Extension("AUTH")
+	mechs := strings.Fields(strings.ToUpper(offered))
+	has := func(m string) bool {
+		for _, x := range mechs {
+			if x == m {
+				return true
+			}
+		}
+		return false
+	}
+	switch {
+	case has("PLAIN"):
+		return smtp.PlainAuth("", s.cfg.Username, s.cfg.Password, s.host()), nil
+	case has("LOGIN"):
+		return loginAuth{username: s.cfg.Username, password: s.cfg.Password, host: s.host()}, nil
+	}
+	return nil, fmt.Errorf("%w: %s offers no PLAIN or LOGIN authentication (AUTH %q)", publishing.ErrPermanent, s.cfg.Addr, offered)
+}
+
+// loginAuth is the LOGIN mechanism, which net/smtp does not provide: the
+// server prompts for the username and then the password, each base64.
+// Like smtp.PlainAuth it refuses to send either over an unencrypted
+// connection to anything but localhost.
+type loginAuth struct {
+	username, password, host string
+}
+
+func (a loginAuth) Start(server *smtp.ServerInfo) (string, []byte, error) {
+	if !server.TLS && !isLocalhost(server.Name) {
+		return "", nil, errors.New("smtp: refusing LOGIN authentication over an unencrypted connection")
+	}
+	if server.Name != a.host {
+		return "", nil, errors.New("smtp: wrong host name")
+	}
+	return "LOGIN", nil, nil
+}
+
+func (a loginAuth) Next(fromServer []byte, more bool) ([]byte, error) {
+	if !more {
+		return nil, nil
+	}
+	switch strings.ToLower(strings.TrimSpace(string(fromServer))) {
+	case "username:", "user name", "username":
+		return []byte(a.username), nil
+	case "password:", "password":
+		return []byte(a.password), nil
+	}
+	return nil, fmt.Errorf("smtp: unexpected LOGIN challenge %q", fromServer)
+}
+
+func isLocalhost(name string) bool {
+	return name == "localhost" || name == "127.0.0.1" || name == "::1"
 }
 
 // classify marks an SMTP 5xx reply (the server's definitive "no": bad

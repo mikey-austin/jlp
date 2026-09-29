@@ -11,6 +11,7 @@ import (
 	"mime/multipart"
 	"net"
 	"net/mail"
+	"net/smtp"
 	"strings"
 	"sync"
 	"testing"
@@ -25,9 +26,12 @@ type fakeServer struct {
 	ln        net.Listener
 	rcptReply string
 	starttls  bool
+	auth      string // AUTH mechanisms to advertise; empty advertises none
 	mu        sync.Mutex
 	data      string
 	rcpts     []string
+	mech      string // the mechanism the client authenticated with
+	creds     string // "user:pass" as the server received them
 }
 
 func newFakeServer(t *testing.T) *fakeServer {
@@ -65,11 +69,23 @@ func (s *fakeServer) handle(c net.Conn) {
 		cmd := strings.ToUpper(strings.TrimSpace(line))
 		switch {
 		case strings.HasPrefix(cmd, "EHLO"):
+			exts := []string{"fake"}
 			if s.starttls {
-				w("250-fake")
-				w("250 STARTTLS")
-			} else {
-				w("250 fake")
+				exts = append(exts, "STARTTLS")
+			}
+			if s.auth != "" {
+				exts = append(exts, "AUTH "+s.auth)
+			}
+			for i, e := range exts {
+				if i == len(exts)-1 {
+					w("250 " + e)
+				} else {
+					w("250-" + e)
+				}
+			}
+		case strings.HasPrefix(cmd, "AUTH "):
+			if !s.authenticate(r, w, strings.Fields(strings.TrimSpace(line))[1:]) {
+				return
 			}
 		case strings.HasPrefix(cmd, "MAIL FROM"):
 			w("250 ok")
@@ -102,6 +118,59 @@ func (s *fakeServer) handle(c net.Conn) {
 			w("250 ok")
 		}
 	}
+}
+
+// authenticate plays the server side of AUTH PLAIN and AUTH LOGIN,
+// refusing any mechanism it did not advertise the way a real server
+// does (KPN answers PLAIN with 504 5.5.4).
+func (s *fakeServer) authenticate(r *bufio.Reader, w func(string), args []string) bool {
+	mech := strings.ToUpper(args[0])
+	if !strings.Contains(" "+strings.ToUpper(s.auth)+" ", " "+mech+" ") {
+		w(`504 5.5.4 Unsupported AUTH mechanism`)
+		return true
+	}
+	read := func(prompt string) (string, bool) {
+		w("334 " + base64.StdEncoding.EncodeToString([]byte(prompt)))
+		l, err := r.ReadString('\n')
+		if err != nil {
+			return "", false
+		}
+		b, _ := base64.StdEncoding.DecodeString(strings.TrimSpace(l))
+		return string(b), true
+	}
+	var creds string
+	switch mech {
+	case "PLAIN":
+		resp := ""
+		if len(args) > 1 {
+			b, _ := base64.StdEncoding.DecodeString(args[1])
+			resp = string(b)
+		} else {
+			var ok bool
+			if resp, ok = read(""); !ok {
+				return false
+			}
+		}
+		parts := strings.SplitN(resp, "\x00", 3)
+		if len(parts) == 3 {
+			creds = parts[1] + ":" + parts[2]
+		}
+	case "LOGIN":
+		user, ok := read("Username:")
+		if !ok {
+			return false
+		}
+		pass, ok := read("Password:")
+		if !ok {
+			return false
+		}
+		creds = user + ":" + pass
+	}
+	s.mu.Lock()
+	s.mech, s.creds = mech, creds
+	s.mu.Unlock()
+	w("235 2.7.0 authenticated")
+	return true
 }
 
 func parcel() publishing.Parcel {
@@ -220,5 +289,46 @@ func TestAddrOnly(t *testing.T) {
 		if got := addrOnly(in); got != want {
 			t.Fatalf("addrOnly(%q) = %q", in, got)
 		}
+	}
+}
+
+func TestDeliverAuthenticatesWithWhatTheServerOffers(t *testing.T) {
+	for _, tc := range []struct{ offered, want string }{
+		{"LOGIN", "LOGIN"},       // KPN: LOGIN only, PLAIN is a 504
+		{"PLAIN LOGIN", "PLAIN"}, // PLAIN stays the preference
+		{"LOGIN PLAIN", "PLAIN"}, // whatever the advertised order
+		{"CRAM-MD5 PLAIN", "PLAIN"},
+	} {
+		srv := newFakeServer(t)
+		srv.auth = tc.offered
+		s := New(Config{Addr: srv.ln.Addr().String(), From: "me@example.com", Username: "mikey@kpnmail.nl", Password: "s3cret", TLS: TLSNone, Timeout: 5 * time.Second})
+		if err := s.Deliver(context.Background(), parcel()); err != nil {
+			t.Fatalf("offered %q: %v", tc.offered, err)
+		}
+		srv.mu.Lock()
+		mech, creds := srv.mech, srv.creds
+		srv.mu.Unlock()
+		if mech != tc.want || creds != "mikey@kpnmail.nl:s3cret" {
+			t.Fatalf("offered %q: authenticated with %q as %q", tc.offered, mech, creds)
+		}
+	}
+}
+
+func TestDeliverWithNoUsableMechanismIsPermanent(t *testing.T) {
+	srv := newFakeServer(t)
+	srv.auth = "CRAM-MD5"
+	s := New(Config{Addr: srv.ln.Addr().String(), From: "me@example.com", Username: "u", Password: "p", TLS: TLSNone, Timeout: 5 * time.Second})
+	if err := s.Deliver(context.Background(), parcel()); !errors.Is(err, publishing.ErrPermanent) {
+		t.Fatalf("no PLAIN or LOGIN should be permanent: %v", err)
+	}
+}
+
+func TestLoginAuthRefusesAnUnencryptedRemoteServer(t *testing.T) {
+	a := loginAuth{username: "u", password: "p", host: "smtp.example.com"}
+	if _, _, err := a.Start(&smtp.ServerInfo{Name: "smtp.example.com", TLS: false, Auth: []string{"LOGIN"}}); err == nil {
+		t.Fatal("LOGIN must not send a password over plaintext to a remote host")
+	}
+	if _, _, err := a.Start(&smtp.ServerInfo{Name: "smtp.example.com", TLS: true, Auth: []string{"LOGIN"}}); err != nil {
+		t.Fatalf("over TLS: %v", err)
 	}
 }
