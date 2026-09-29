@@ -1,0 +1,16 @@
+{{define "article.xhtml.tmpl"}}{{template "head" .}}
+<section epub:type="bodymatter chapter" class="article">
+<p class="kicker">日本語読解</p>
+<h1>{{.Title}}</h1>
+<p class="byline">{{if .Source}}{{.Source}}{{end}}{{if .Author}}　{{.Author}}{{end}}{{if .Published}}<br/>{{.Published}}{{end}}</p>
+{{if .Lesson.SummaryJA}}<div class="summary">
+<p class="label">要旨{{if .Lesson.Level}}（{{.Lesson.Level}}）{{end}}</p>
+<p>{{.Lesson.SummaryJA}}</p>
+{{if .Lesson.SummaryEN}}<p class="en" lang="en" xml:lang="en">{{.Lesson.SummaryEN}}</p>{{end}}
+</div>{{end}}
+<hr/>
+{{range .Article}}<p class="body">{{range .}}{{if .Vocab}}<span class="vocab">{{template "ruby" .}}</span>{{else}}{{.Text}}{{end}}{{end}}</p>
+{{end}}
+<p class="colophon">{{if .SourceURL}}出典: {{.SourceURL}}<br/>{{end}}JLP 読解 — {{.Generated}}作成</p>
+</section>
+{{template "foot" .}}{{end}}

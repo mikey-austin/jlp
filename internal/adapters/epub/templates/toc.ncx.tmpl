@@ -1,0 +1,17 @@
+{{define "toc.ncx.tmpl"}}<ncx xmlns="http://www.daisy.org/z3986/2005/ncx/" version="2005-1" xml:lang="ja">
+  <head>
+    <meta name="dtb:uid" content="{{.UID}}"/>
+    <meta name="dtb:depth" content="1"/>
+    <meta name="dtb:totalPageCount" content="0"/>
+    <meta name="dtb:maxPageNumber" content="0"/>
+  </head>
+  <docTitle><text>{{.Title}}</text></docTitle>
+  <navMap>
+    {{range $i, $c := .Chapters}}<navPoint id="np-{{$c.ID}}" playOrder="{{inc $i}}">
+      <navLabel><text>{{$c.Title}}</text></navLabel>
+      <content src="{{$c.File}}"/>
+    </navPoint>
+    {{end}}
+  </navMap>
+</ncx>
+{{end}}

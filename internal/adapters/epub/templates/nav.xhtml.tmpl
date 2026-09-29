@@ -1,0 +1,22 @@
+{{define "nav.xhtml.tmpl"}}<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops" lang="ja" xml:lang="ja">
+<head>
+<meta charset="UTF-8"/>
+<title>目次</title>
+<link rel="stylesheet" type="text/css" href="style.css"/>
+</head>
+<body>
+<nav epub:type="toc" id="toc">
+<h1>目次</h1>
+<ol>
+{{range .Chapters}}<li><a href="{{.File}}">{{.Title}}</a></li>
+{{end}}</ol>
+</nav>
+<nav epub:type="landmarks" hidden="hidden">
+<ol>
+<li><a epub:type="bodymatter" href="article.xhtml">記事</a></li>
+</ol>
+</nav>
+</body>
+</html>
+{{end}}

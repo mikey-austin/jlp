@@ -1,0 +1,13 @@
+{{define "answers.xhtml.tmpl"}}{{template "head" .}}
+<section epub:type="chapter" class="review answers">
+<h1>解答</h1>
+{{if .Lesson.Review.Comprehension}}<h2>内容理解</h2>
+<ol>
+{{range .Lesson.Review.Comprehension}}<li><p class="q">{{.QuestionJA}}</p><p class="a">{{.AnswerJA}}</p></li>
+{{end}}</ol>{{end}}
+{{if .Lesson.Review.Vocabulary}}<h2>語彙</h2>
+<ol>
+{{range .Lesson.Review.Vocabulary}}<li><p class="q">{{.QuestionJA}}</p><p class="a">{{.AnswerJA}}</p></li>
+{{end}}</ol>{{end}}
+</section>
+{{template "foot" .}}{{end}}

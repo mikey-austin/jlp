@@ -1,0 +1,15 @@
+{{define "close-reading.xhtml.tmpl"}}{{template "head" .}}
+<section epub:type="chapter" class="close-reading">
+<h1>精読</h1>
+{{range $i, $s := .Lesson.SentenceAnalyses}}<div class="entry">
+<h2><span class="num">{{inc $i}}</span></h2>
+<p class="sentence">{{range $s.Chunks}}{{template "ruby" .}}{{end}}</p>
+<ol class="chunks">
+{{range $s.Chunks}}<li><span class="chunk">［{{.Text}}］</span><br/><span class="role" lang="en" xml:lang="en">{{.RoleEN}}</span></li>
+{{end}}</ol>
+<p class="translation" lang="en" xml:lang="en">{{$s.TranslationEN}}</p>
+{{if $s.NoteEN}}<p class="usage" lang="en" xml:lang="en">{{$s.NoteEN}}</p>{{end}}
+</div>
+{{end}}
+</section>
+{{template "foot" .}}{{end}}

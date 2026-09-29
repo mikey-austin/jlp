@@ -1,0 +1,14 @@
+{{define "review.xhtml.tmpl"}}{{template "head" .}}
+<section epub:type="chapter" class="review">
+<h1>復習</h1>
+{{if .Lesson.Review.Comprehension}}<h2>内容理解</h2>
+<ol>
+{{range .Lesson.Review.Comprehension}}<li>{{.QuestionJA}}</li>
+{{end}}</ol>{{end}}
+{{if .Lesson.Review.Vocabulary}}<h2>語彙</h2>
+<ol>
+{{range .Lesson.Review.Vocabulary}}<li>{{.QuestionJA}}</li>
+{{end}}</ol>{{end}}
+<p class="note">解答は次のページにあります。</p>
+</section>
+{{template "foot" .}}{{end}}

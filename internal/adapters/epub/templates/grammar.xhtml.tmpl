@@ -1,0 +1,14 @@
+{{define "grammar.xhtml.tmpl"}}{{template "head" .}}
+<section epub:type="chapter" class="grammar">
+<h1>表現・文法</h1>
+{{range .Lesson.Grammar}}<div class="entry">
+<h2>{{.Pattern}}</h2>
+<p class="meaning" lang="en" xml:lang="en">{{.MeaningEN}}</p>
+{{if .FromArticle}}<p class="quote"><span class="label">本文</span> {{.FromArticle}}</p>{{end}}
+<p class="usage" lang="en" xml:lang="en">{{.ExplanationEN}}</p>
+{{if .ExampleJA}}<p class="example"><span class="label">例文</span> {{.ExampleJA}}</p>
+{{if .ExampleEN}}<p class="example-en" lang="en" xml:lang="en">{{.ExampleEN}}</p>{{end}}{{end}}
+</div>
+{{end}}
+</section>
+{{template "foot" .}}{{end}}

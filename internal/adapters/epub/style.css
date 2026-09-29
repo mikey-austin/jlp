@@ -1,0 +1,40 @@
+/* Kindle-friendly Japanese styles. Deliberately modest: no fixed font
+   sizes, no colours, no margins in px — the reader's own settings must
+   win. Emphasis is typographic (weight, rules, indents), which survives
+   e-ink and every font choice. */
+html { -epub-line-break: strict; line-break: strict; }
+body { font-family: serif; line-height: 1.8; margin: 0; }
+h1 { font-size: 1.4em; line-height: 1.4; margin: 0.5em 0 1em 0; }
+h2 { font-size: 1.15em; margin: 1.4em 0 0.3em 0; }
+p { margin: 0 0 0.6em 0; }
+hr { border: 0; border-top: 1px solid; margin: 1.2em 0; }
+ruby rt { font-size: 0.5em; }
+[lang="en"] { font-family: sans-serif; line-height: 1.5; }
+
+.kicker { font-size: 0.85em; letter-spacing: 0.2em; margin-bottom: 0.2em; }
+.byline { font-size: 0.9em; }
+.summary { border-left: 3px solid; padding-left: 0.8em; margin: 1em 0; }
+.label { font-weight: bold; font-size: 0.85em; }
+.summary .en { font-size: 0.9em; }
+.article p.body { text-indent: 1em; }
+.vocab { font-weight: bold; }
+.colophon { font-size: 0.75em; margin-top: 2em; word-break: break-all; }
+
+.entry { margin-bottom: 1.2em; page-break-inside: avoid; }
+.num { font-size: 0.8em; font-weight: normal; }
+.reading { margin: 0; }
+.meaning { font-weight: bold; margin-bottom: 0.2em; }
+.usage, .example-en, .role, .translation, .note { font-size: 0.9em; }
+.example, .quote { margin-top: 0.3em; }
+.example .label, .quote .label { border: 1px solid; padding: 0 0.2em; }
+.example-en { margin-left: 1em; }
+
+.close-reading .sentence { font-size: 1.1em; line-height: 2.2; }
+.close-reading .chunks { padding-left: 1.5em; }
+.close-reading .chunks li { margin-bottom: 0.4em; }
+.chunk { font-weight: bold; }
+
+.review ol { padding-left: 1.5em; }
+.review li { margin-bottom: 0.8em; }
+.answers .q { font-size: 0.9em; margin-bottom: 0.1em; }
+.answers .a { font-weight: bold; }

@@ -1,0 +1,14 @@
+{{define "vocabulary.xhtml.tmpl"}}{{template "head" .}}
+<section epub:type="chapter" class="vocabulary">
+<h1>重要語彙</h1>
+{{range $i, $v := .Lesson.Vocabulary}}<div class="entry">
+<h2><span class="num">{{inc $i}}</span> {{$v.Expression}}</h2>
+{{if $v.Reading}}<p class="reading">{{$v.Reading}}</p>{{end}}
+<p class="meaning" lang="en" xml:lang="en">{{$v.MeaningEN}}</p>
+{{if $v.UsageEN}}<p class="usage" lang="en" xml:lang="en">{{$v.UsageEN}}</p>{{end}}
+{{if $v.ExampleJA}}<p class="example"><span class="label">例文</span> {{$v.ExampleJA}}</p>
+{{if $v.ExampleEN}}<p class="example-en" lang="en" xml:lang="en">{{$v.ExampleEN}}</p>{{end}}{{end}}
+</div>
+{{end}}
+</section>
+{{template "foot" .}}{{end}}
