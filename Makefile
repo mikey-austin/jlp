@@ -26,7 +26,7 @@ IMAGE_TAG ?= $(shell date +%Y%m%d)
 IMAGE     := $(REGISTRY)/$(IMAGE_NAME):$(IMAGE_TAG)
 
 .DEFAULT_GOAL := help
-.PHONY: help init build up up-auth up-mail up-mqtt up-signal up-speech down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat image image-push chat-image chat-image-push
+.PHONY: help init build up up-auth up-mail up-mqtt up-signal up-speech down restart logs ps test test-race tidy clean migrate migrate-new sqlc db-shell test-integration vendor-js vendor-fonts vendor-cover-fonts lint fmt arch-check seed rebuild-model demo-ingest deploy-local deploy deploy-logs ollama-pull eval ext-build send-summary mqtt-tap mqtt-demo slack-smoke signal-register a2a-chat image image-push chat-image chat-image-push
 
 help: ## Show available commands
 	@grep -hE '^[a-zA-Z0-9_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "\033[36m%-18s\033[0m %s\n",$$1,$$2}'
@@ -173,6 +173,11 @@ vendor-fonts: ## Vendor pinned Instrument Sans + JetBrains Mono woff2 into web/s
 	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/files/jetbrains-mono-latin-500-normal.woff2 -o web/static/fonts/jetbrains-mono-latin-500-normal.woff2 && \
 	                curl -fsSL https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.3.0/files/jetbrains-mono-latin-700-normal.woff2 -o web/static/fonts/jetbrains-mono-latin-700-normal.woff2"
 	@echo "vendored $$(du -ch web/static/fonts/*.woff2 | tail -1 | cut -f1) of woff2 into web/static/fonts/ — fonts.css is committed by hand, not generated"
+
+COVER_FONT_REV := d714b17ce2379f06daf6295617f961df605dccb5
+vendor-cover-fonts: ## Vendor pinned M PLUS 1p (OFL) into internal/adapters/cover/fonts for the 読解 cover
+	$(TOOLS) sh -c "mkdir -p internal/adapters/cover/fonts && for f in MPLUS1p-Bold.ttf MPLUS1p-Regular.ttf OFL.txt; do \
+	  curl -fsSL https://cdn.jsdelivr.net/gh/google/fonts@$(COVER_FONT_REV)/ofl/mplus1p/\$$f -o internal/adapters/cover/fonts/\$$f || exit 1; done"
 
 ext-build: ## Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
 	@mkdir -p dist
