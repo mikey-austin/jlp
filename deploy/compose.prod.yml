@@ -53,6 +53,23 @@ services:
       APP_AI_GEMINI_MODEL: ${APP_AI_GEMINI_MODEL:-}
       APP_AI_GEMINI_BASEURL: ${APP_AI_GEMINI_BASEURL:-}
       APP_AI_GEMINI_TIMEOUT: ${APP_AI_GEMINI_TIMEOUT:-}
+      # Per-prompt provider routing, e.g. reading.analyse=gemini to write
+      # 読解 study editions with Gemini while everything else uses
+      # APP_AI_PROVIDER. Empty: every prompt uses APP_AI_PROVIDER.
+      APP_AI_ROUTES: ${APP_AI_ROUTES:-}
+      # 読解 (reading) pipeline. The pipeline itself needs no config; its
+      # model is picked by APP_AI_ROUTES (reading.analyse=gemini, say).
+      # Kindle delivery stays dormant unless both TO and FROM are set —
+      # see internal/config.Kindle. SMTPADDR must be a real submission
+      # server (Amazon has to accept its mail), not the dev Mailpit.
+      APP_READING_MAXARTICLERUNES: ${APP_READING_MAXARTICLERUNES:-}
+      APP_READING_LEARNERLEVEL: ${APP_READING_LEARNERLEVEL:-}
+      APP_READING_KINDLE_TO: ${APP_READING_KINDLE_TO:-}
+      APP_READING_KINDLE_FROM: ${APP_READING_KINDLE_FROM:-}
+      APP_READING_KINDLE_SMTPADDR: ${APP_READING_KINDLE_SMTPADDR:-}
+      APP_READING_KINDLE_USERNAME: ${APP_READING_KINDLE_USERNAME:-}
+      APP_READING_KINDLE_PASSWORD: ${APP_READING_KINDLE_PASSWORD:-}
+      APP_READING_KINDLE_TLS: ${APP_READING_KINDLE_TLS:-}
     depends_on:
       postgres: { condition: service_healthy }
 

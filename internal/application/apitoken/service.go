@@ -60,8 +60,17 @@ const ScopeSessionsWrite = "sessions:write"
 // only files things away should not be able to run up a bill.
 const ScopeFeedbackRequest = "feedback:request"
 
+// ScopeReadingWrite lets a client send an article to the 読解 pipeline,
+// follow its study edition's progress, and ask for it to be sent to the
+// Kindle — the Chrome extension's 「JLPでKindle版を作成」. It is its own
+// scope, separate from sessions:write, because every submission queues
+// a model call: parking text costs nothing, a study edition costs money.
+// It grants no read of anything else, and the status it can read is
+// only that of editions the token's own identity owns.
+const ScopeReadingWrite = "reading:write"
+
 // Scopes is every scope a token may be minted with.
-var Scopes = []string{ScopeVocabularyWrite, ScopeSessionsWrite, ScopeFeedbackRequest, ScopeA2AUse}
+var Scopes = []string{ScopeVocabularyWrite, ScopeSessionsWrite, ScopeFeedbackRequest, ScopeReadingWrite, ScopeA2AUse}
 
 // tokenPrefix marks a JLP credential wherever it turns up — a log line,
 // a config file, a secret scanner's ruleset.

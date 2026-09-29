@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"time"
@@ -24,6 +25,7 @@ type Config struct {
 	Signal   Signal
 	Channels Channels
 	Speech   Speech
+	Reading  Reading
 }
 
 type Server struct {
@@ -485,6 +487,47 @@ type Signal struct {
 // stub instead would have been the dishonest choice). Task 8's own
 // Both halves are now wired: STTURL backs POST /speech/transcribe and
 // TTSURL backs POST /speech/say, each absent unless its URL is set.
+// Reading configures the 読解 pipeline (internal/application/reading):
+// article → AI study edition → EPUB → optional Send to Kindle. The
+// pipeline itself is always on — it is ordinary app functionality, and
+// its model calls route through APP_AI_ROUTES like every other prompt
+// (reading.analyse=gemini, say). Only Kindle delivery is opt-in.
+type Reading struct {
+	// MaxArticleRunes caps one submitted article's body, in characters.
+	// Bounds the cost of a single analysis call. Default 20000.
+	MaxArticleRunes int
+	// LearnerLevel is rendered into the analysis prompt to pitch which
+	// vocabulary is worth teaching — e.g. "N2", "advanced (N1)". Empty
+	// uses the agent's default ("advanced (JLPT N2–N1)").
+	LearnerLevel string
+	Kindle       Kindle
+}
+
+// Kindle configures Send to Kindle delivery (internal/adapters/kindle).
+// To and From both empty — the default — keep delivery dormant: no
+// sender is constructed, the 「Kindleに送信」 button is not rendered, and
+// the extension's auto-send option is ignored. That mirrors
+// Anki.ConnectURL's "dormant unless configured" contract. Once set:
+//
+//   - To is the device's Send-to-Kindle address (…@kindle.com).
+//   - From must be on the Amazon account's Approved Personal Document
+//     E-mail List, or Amazon silently drops the mail.
+//   - SMTPAddr is a real submission server (host:port), not the dev
+//     Mailpit: Amazon has to accept mail from it.
+//   - TLS is starttls (port 587, the default), tls (465) or none (a
+//     local relay only — a password is never sent in the clear).
+type Kindle struct {
+	To       string
+	From     string
+	SMTPAddr string
+	Username string
+	Password string
+	TLS      string
+}
+
+// Enabled reports whether Kindle delivery is configured.
+func (k Kindle) Enabled() bool { return k.To != "" && k.From != "" }
+
 type Speech struct {
 	STTURL string
 	TTSURL string
@@ -576,6 +619,7 @@ var a2aReservedPathPrefixes = map[string]bool{
 	"lessons":     true,
 	"api":         true,
 	"settings":    true,
+	"reading":     true,
 	// "auth" is reserved unconditionally, even though its routes only
 	// exist in oidc mode: A2A's mount path is validated once at boot,
 	// and letting it take /auth in static mode would silently break the
@@ -642,6 +686,8 @@ func Load() (Config, error) {
 	// who only sets APP_A2A_ENABLED=true doesn't also have to pick a
 	// mount path.
 	v.SetDefault("a2a.path", "/a2a")
+	v.SetDefault("reading.maxarticlerunes", 20000)
+	v.SetDefault("reading.kindle.tls", "starttls")
 	// slack.* and channels.allowfrom have no explicit defaults (Go's
 	// zero-value empty string IS the "dormant"/"nobody allowed" contract
 	// — see Slack's and Channels.AllowFrom's own doc comments).
@@ -666,7 +712,10 @@ func Load() (Config, error) {
 		"a2a.enabled", "a2a.path", "a2a.chaturl",
 		"slack.apptoken", "slack.bottoken", "slack.smokechannel",
 		"signal.rpcurl", "signal.number", "channels.allowfrom",
-		"speech.stturl", "speech.ttsurl"} {
+		"speech.stturl", "speech.ttsurl",
+		"reading.maxarticlerunes", "reading.learnerlevel",
+		"reading.kindle.to", "reading.kindle.from", "reading.kindle.smtpaddr",
+		"reading.kindle.username", "reading.kindle.password", "reading.kindle.tls"} {
 		if err := v.BindEnv(key); err != nil {
 			return Config{}, err
 		}
@@ -760,6 +809,9 @@ func (c Config) validate() error {
 		if _, err := cron.ParseStandard(c.Summary.Cron); err != nil {
 			return fmt.Errorf("config: invalid APP_SUMMARY_CRON %q: %w", c.Summary.Cron, err)
 		}
+	}
+	if err := c.Reading.validate(); err != nil {
+		return err
 	}
 	// A2A.Path is only validated once the adapter is actually live —
 	// same "a feature's config only needs to make sense once the
@@ -962,4 +1014,41 @@ func ParseRoutes(s string) (map[string][]string, error) {
 		routes[name] = chain
 	}
 	return routes, nil
+}
+
+// validate checks the reading pipeline's settings. Kindle's are checked
+// only once delivery is turned on, the same "a feature's config only
+// needs to make sense once the feature is live" rule Summary follows —
+// but a LONE To or From is rejected, since that is almost certainly a
+// half-finished setup rather than a deliberate dormant state.
+func (r Reading) validate() error {
+	// Zero is "unset" (a Config built in code rather than by Load), and
+	// means the domain default.
+	if r.MaxArticleRunes != 0 && (r.MaxArticleRunes < 500 || r.MaxArticleRunes > 200000) {
+		return fmt.Errorf("config: APP_READING_MAXARTICLERUNES must be between 500 and 200000, got %d", r.MaxArticleRunes)
+	}
+	k := r.Kindle
+	if (k.To == "") != (k.From == "") {
+		return fmt.Errorf("config: APP_READING_KINDLE_TO and APP_READING_KINDLE_FROM must both be set, or both left empty to keep Kindle delivery dormant")
+	}
+	if !k.Enabled() {
+		return nil
+	}
+	if !strings.Contains(k.To, "@") || !strings.Contains(k.From, "@") {
+		return fmt.Errorf("config: APP_READING_KINDLE_TO and APP_READING_KINDLE_FROM must be e-mail addresses")
+	}
+	if strings.ContainsAny(k.To+k.From, "\r\n") {
+		return fmt.Errorf("config: APP_READING_KINDLE_TO/FROM must not contain line breaks")
+	}
+	host, port, err := net.SplitHostPort(k.SMTPAddr)
+	if err != nil || host == "" || port == "" {
+		return fmt.Errorf("config: APP_READING_KINDLE_SMTPADDR must be host:port (e.g. smtp.gmail.com:587) when Kindle delivery is enabled, got %q", k.SMTPAddr)
+	}
+	if !slices.Contains([]string{"starttls", "tls", "none"}, k.TLS) {
+		return fmt.Errorf("config: APP_READING_KINDLE_TLS must be starttls|tls|none, got %q", k.TLS)
+	}
+	if k.TLS == "none" && k.Username != "" && host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		return fmt.Errorf("config: APP_READING_KINDLE_TLS=none would send APP_READING_KINDLE_PASSWORD in the clear — use starttls or tls")
+	}
+	return nil
 }

@@ -1081,3 +1081,61 @@ func TestA2APathCannotTakeTheAuthRoutes(t *testing.T) {
 		t.Fatal("APP_A2A_PATH=/auth was accepted, which would shadow the login routes")
 	}
 }
+
+func TestReadingDefaults(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Reading.MaxArticleRunes != 20000 || cfg.Reading.Kindle.TLS != "starttls" {
+		t.Fatalf("reading defaults = %+v", cfg.Reading)
+	}
+	if cfg.Reading.Kindle.Enabled() {
+		t.Fatal("Kindle delivery must be dormant by default")
+	}
+}
+
+func TestReadingKindleEnvAndValidation(t *testing.T) {
+	t.Setenv("APP_DATABASE_URL", "postgres://x")
+	t.Setenv("APP_READING_KINDLE_TO", "me@kindle.com")
+	t.Setenv("APP_READING_KINDLE_FROM", "me@example.com")
+	t.Setenv("APP_READING_KINDLE_SMTPADDR", "smtp.example.com:587")
+	t.Setenv("APP_READING_KINDLE_USERNAME", "me@example.com")
+	t.Setenv("APP_READING_KINDLE_PASSWORD", "secret")
+	t.Setenv("APP_READING_LEARNERLEVEL", "N1")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	k := cfg.Reading.Kindle
+	if !k.Enabled() || k.SMTPAddr != "smtp.example.com:587" || k.Password != "secret" || cfg.Reading.LearnerLevel != "N1" {
+		t.Fatalf("kindle = %+v", cfg.Reading)
+	}
+
+	bad := []struct {
+		name string
+		mut  func(*Reading)
+	}{
+		{"lone to", func(r *Reading) { r.Kindle.From = "" }},
+		{"no smtp addr", func(r *Reading) { r.Kindle.SMTPAddr = "" }},
+		{"bad tls", func(r *Reading) { r.Kindle.TLS = "ssl" }},
+		{"password in clear", func(r *Reading) { r.Kindle.TLS = "none" }},
+		{"not an address", func(r *Reading) { r.Kindle.To = "kindle" }},
+		{"header injection", func(r *Reading) { r.Kindle.To = "a@kindle.com\r\nBcc: x@y.z" }},
+		{"tiny limit", func(r *Reading) { r.MaxArticleRunes = 10 }},
+	}
+	for _, b := range bad {
+		r := cfg.Reading
+		b.mut(&r)
+		if err := r.validate(); err == nil {
+			t.Errorf("%s: want a validation error", b.name)
+		}
+	}
+	// A local relay without TLS is fine when nothing secret crosses it.
+	r := cfg.Reading
+	r.Kindle.TLS, r.Kindle.Username, r.Kindle.Password = "none", "", ""
+	if err := r.validate(); err != nil {
+		t.Fatalf("unauthenticated local relay rejected: %v", err)
+	}
+}

@@ -1,0 +1,137 @@
+{{/* ruby_segment renders one annotated run of article text: furigana
+     over the first occurrence of each 重要語彙 word, the same rule the
+     EPUB follows, so the page and the Kindle book read the same. */}}
+{{define "ruby_segment"}}{{if .Vocab}}<mark class="reading-vocab">{{if .Reading}}<ruby>{{.Text}}<rt>{{.Reading}}</rt></ruby>{{else}}{{.Text}}{{end}}</mark>{{else}}{{.Text}}{{end}}{{end}}
+
+{{define "content"}}<section class="reading-detail">
+  <p class="reading-kicker"><a href="/reading">← 読解</a></p>
+  <h1 lang="ja">{{.Article.Title}} <span class="badge badge--type reading-status reading-status--{{.Edition.Status}}">{{.StatusLabel}}</span></h1>
+  <p class="description">
+    {{if .Article.SourceName}}{{.Article.SourceName}}{{end}}{{if .Article.Author}} ・ {{.Article.Author}}{{end}}{{if .Published}} ・ {{.Published}}{{end}}
+    {{if .Article.SourceURL}}<br><a class="reading-url" href="{{.Article.SourceURL}}" rel="noopener noreferrer" target="_blank">{{.Article.SourceURL}}</a>{{end}}
+  </p>
+
+  {{if .Notice}}<div class="card reading-notice" role="status"><p>{{.Notice}}</p></div>{{end}}
+
+  {{if .Waiting}}
+  <div class="card reading-waiting" role="status" aria-live="polite">
+    <p>学習版を作成しています（{{.Edition.Attempts}}回目）。このページは自動で更新されます。</p>
+    {{if .Edition.LastError}}<p class="hint">前回の試行は失敗しました。自動で再試行します: {{.Edition.LastError}}</p>{{end}}
+  </div>
+  <script>setTimeout(function(){location.reload();}, 5000);</script>
+  {{end}}
+
+  {{if .Failed}}
+  <div class="card reading-failed" role="alert">
+    <p>学習版を作成できませんでした。</p>
+    {{if .Edition.LastError}}<p class="hint">{{.Edition.LastError}}</p>{{end}}
+    <form method="post" action="/reading/{{.Edition.ID}}/regenerate"><button type="submit" class="btn btn--sm">もう一度作成</button></form>
+  </div>
+  {{end}}
+
+  {{if .Ready}}
+  {{/* The actions a learner takes on a finished edition, first: this
+       page is a stop on the way to the Kindle, not the reading surface. */}}
+  <div class="reading-actions no-print">
+    <a class="btn" href="/reading/{{.Edition.ID}}/epub">EPUBをダウンロード</a>
+    {{if .DeliveryEnabled}}<form method="post" action="/reading/{{.Edition.ID}}/deliver"><button type="submit" class="btn">Kindleに送信</button></form>{{end}}
+    <form method="post" action="/reading/{{.Edition.ID}}/vocabulary"><button type="submit" class="btn btn--secondary">語彙リストに追加</button></form>
+    <form method="post" action="/reading/{{.Edition.ID}}/anki"><button type="submit" class="btn btn--secondary">Ankiカード作成</button></form>
+    <form method="post" action="/reading/{{.Edition.ID}}/regenerate"><button type="submit" class="btn btn--ghost">学習版を作り直す</button></form>
+  </div>
+
+  {{if .Deliveries}}
+  <ul class="reading-deliveries">
+    {{range .Deliveries}}<li><span class="badge">{{.Label}}</span> {{if .Sent}}{{.Sent}}{{else}}{{.Created}}{{end}}{{if .Error}} <span class="hint">{{.Error}}</span>{{end}}</li>{{end}}
+  </ul>
+  {{end}}
+
+  {{with .Lesson}}
+  <section class="card lesson-summary">
+    <h2>要旨{{if .Level}} <span class="badge badge--jlpt">{{.Level}}</span>{{end}}</h2>
+    <p lang="ja">{{.SummaryJA}}</p>
+    <p class="hint" lang="en">{{.SummaryEN}}</p>
+  </section>
+  {{end}}
+  {{end}}
+
+  <details class="panel" open>
+    <summary class="panel__summary"><span class="panel__title">記事</span></summary>
+    <div class="reading-body" lang="ja">
+      {{range .Body}}<p>{{range .}}{{template "ruby_segment" .}}{{end}}</p>{{end}}
+    </div>
+  </details>
+
+  {{if .Ready}}{{with .Lesson}}
+  <details class="panel" open>
+    <summary class="panel__summary"><span class="panel__title">重要語彙</span><span class="panel__meta">{{len .Vocabulary}}語</span></summary>
+    <ol class="reading-entries">
+      {{range $.Vocabulary}}
+      <li class="reading-entry">
+        <p class="reading-entry__head" lang="ja"><strong>{{.Expression}}</strong>{{if .Reading}} <span class="reading-entry__reading">{{.Reading}}</span>{{end}}{{if .Known}} <span class="chip">語彙リストにあり</span>{{end}}</p>
+        <p lang="en">{{.MeaningEN}}</p>
+        {{if .UsageEN}}<p class="hint" lang="en">{{.UsageEN}}</p>{{end}}
+        {{if .ExampleJA}}<p lang="ja">例文: {{.ExampleJA}}</p>{{end}}
+        {{if .ExampleEN}}<p class="hint" lang="en">{{.ExampleEN}}</p>{{end}}
+      </li>
+      {{end}}
+    </ol>
+  </details>
+
+  {{if .Grammar}}
+  <details class="panel" open>
+    <summary class="panel__summary"><span class="panel__title">表現・文法</span><span class="panel__meta">{{len .Grammar}}件</span></summary>
+    <ol class="reading-entries">
+      {{range .Grammar}}
+      <li class="reading-entry">
+        <p class="reading-entry__head" lang="ja"><strong>{{.Pattern}}</strong></p>
+        <p lang="en">{{.MeaningEN}}</p>
+        {{if .FromArticle}}<p lang="ja">本文: 「{{.FromArticle}}」</p>{{end}}
+        <p class="hint" lang="en">{{.ExplanationEN}}</p>
+        {{if .ExampleJA}}<p lang="ja">例文: {{.ExampleJA}}</p>{{end}}
+        {{if .ExampleEN}}<p class="hint" lang="en">{{.ExampleEN}}</p>{{end}}
+      </li>
+      {{end}}
+    </ol>
+  </details>
+  {{end}}
+
+  {{if .SentenceAnalyses}}
+  <details class="panel" open>
+    <summary class="panel__summary"><span class="panel__title">精読</span><span class="panel__meta">{{len .SentenceAnalyses}}文</span></summary>
+    <ol class="reading-entries">
+      {{range .SentenceAnalyses}}
+      <li class="reading-entry">
+        <p class="reading-sentence" lang="ja">{{range .Chunks}}{{if .Reading}}<ruby>{{.Text}}<rt>{{.Reading}}</rt></ruby>{{else}}{{.Text}}{{end}}{{end}}</p>
+        <ul class="reading-chunks">
+          {{range .Chunks}}<li><span lang="ja">［{{.Text}}］</span> <span class="hint" lang="en">{{.RoleEN}}</span></li>{{end}}
+        </ul>
+        <p lang="en">{{.TranslationEN}}</p>
+        {{if .NoteEN}}<p class="hint" lang="en">{{.NoteEN}}</p>{{end}}
+      </li>
+      {{end}}
+    </ol>
+  </details>
+  {{end}}
+
+  {{if or .Review.Comprehension .Review.Vocabulary}}
+  <details class="panel">
+    <summary class="panel__summary"><span class="panel__title">復習</span></summary>
+    {{/* Answers fold away under each question, like the EPUB puts them
+         on a separate page: reading the question should not show you
+         the answer. */}}
+    <ol class="reading-entries" lang="ja">
+      {{range .Review.Comprehension}}<li class="reading-entry"><p>{{.QuestionJA}}</p><details><summary class="hint">解答</summary><p>{{.AnswerJA}}</p></details></li>{{end}}
+      {{range .Review.Vocabulary}}<li class="reading-entry"><p>{{.QuestionJA}}</p><details><summary class="hint">解答</summary><p>{{.AnswerJA}}</p></details></li>{{end}}
+    </ol>
+  </details>
+  {{end}}
+  {{end}}{{end}}
+
+  <div class="no-print reading-danger">
+    <button type="button" class="btn btn--danger btn--sm"
+            data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Article.Title}}"
+            aria-haspopup="dialog" aria-controls="confirm-delete-modal">記事を削除</button>
+  </div>
+  {{template "confirm_delete" .}}
+</section>{{end}}

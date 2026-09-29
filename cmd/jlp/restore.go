@@ -9,6 +9,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/postgres"
 	"github.com/mikeyaustin/jlp/internal/application/learning"
 	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
+	appreading "github.com/mikeyaustin/jlp/internal/application/reading"
 	appsessions "github.com/mikeyaustin/jlp/internal/application/sessions"
 	appvocabulary "github.com/mikeyaustin/jlp/internal/application/vocabulary"
 	"github.com/mikeyaustin/jlp/internal/config"
@@ -17,7 +18,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/ports/storage"
 )
 
-// `jlp restore <session|word|lesson> <identity> <id>` is the durable
+// `jlp restore <session|word|lesson|reading> <identity> <id>` is the durable
 // half of soft delete's way back (Phase 4 Task D).
 //
 // The UI offers an undo affordance on the list immediately after a
@@ -35,7 +36,7 @@ import (
 // simply misses (ErrNotFound), exactly as it does over HTTP.
 func runRestore(ctx context.Context, cfg config.Config, args []string) error {
 	if len(args) != 3 {
-		return fmt.Errorf("usage: jlp restore <session|word|lesson> <identity> <id>")
+		return fmt.Errorf("usage: jlp restore <session|word|lesson|reading> <identity> <id>")
 	}
 	kind, identity, id := args[0], learner.IdentityID(args[1]), args[2]
 
@@ -69,8 +70,12 @@ func runRestore(ctx context.Context, cfg config.Config, args []string) error {
 		err = appvocabulary.NewService(postgres.NewVocabularyRepository(pool), rec).Restore(ctx, identity, id)
 	case "lesson":
 		err = applessons.NewService(postgres.NewLessonRepository(pool), nil, nil, nil, nil, nil, rec).Restore(ctx, identity, id)
+	case "reading", "article":
+		// Restore needs only the repository and the recorder (see
+		// appreading.Deps' doc comment).
+		err = appreading.NewService(appreading.Deps{Repo: postgres.NewReadingRepository(pool), Recorder: rec}, appreading.Config{}).Restore(ctx, identity, id)
 	default:
-		return fmt.Errorf("restore: unknown kind %q (want session, word or lesson)", kind)
+		return fmt.Errorf("restore: unknown kind %q (want session, word, lesson or reading)", kind)
 	}
 
 	if errors.Is(err, storage.ErrNotFound) {

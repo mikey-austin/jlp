@@ -15,9 +15,11 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/ankiconnect"
 	anthropicadapter "github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
+	epubadapter "github.com/mikeyaustin/jlp/internal/adapters/epub"
 	geminiadapter "github.com/mikeyaustin/jlp/internal/adapters/gemini"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
 	"github.com/mikeyaustin/jlp/internal/adapters/inprocbus"
+	kindleadapter "github.com/mikeyaustin/jlp/internal/adapters/kindle"
 	adaptermqtt "github.com/mikeyaustin/jlp/internal/adapters/mqtt"
 	oidcadapter "github.com/mikeyaustin/jlp/internal/adapters/oidc"
 	ollamaadapter "github.com/mikeyaustin/jlp/internal/adapters/ollama"
@@ -33,6 +35,7 @@ import (
 	agentconversation "github.com/mikeyaustin/jlp/internal/agent/conversation"
 	"github.com/mikeyaustin/jlp/internal/agent/drill"
 	agentlesson "github.com/mikeyaustin/jlp/internal/agent/lesson"
+	agentreading "github.com/mikeyaustin/jlp/internal/agent/reading"
 	agentsummary "github.com/mikeyaustin/jlp/internal/agent/summary"
 	"github.com/mikeyaustin/jlp/internal/agent/teacher"
 	"github.com/mikeyaustin/jlp/internal/application/agentrun"
@@ -48,6 +51,7 @@ import (
 	appoutcomes "github.com/mikeyaustin/jlp/internal/application/outcomes"
 	"github.com/mikeyaustin/jlp/internal/application/planner"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
+	appreading "github.com/mikeyaustin/jlp/internal/application/reading"
 	appretrieval "github.com/mikeyaustin/jlp/internal/application/retrieval"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appsettings "github.com/mikeyaustin/jlp/internal/application/settings"
@@ -59,6 +63,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/domain/event"
 	"github.com/mikeyaustin/jlp/internal/ports/ai"
 	"github.com/mikeyaustin/jlp/internal/ports/auth"
+	"github.com/mikeyaustin/jlp/internal/ports/publishing"
 	"github.com/mikeyaustin/jlp/internal/tools"
 )
 
@@ -498,6 +503,50 @@ func main() {
 		// learner's behalf rather than merely reviewing writing.
 		registerTools(toolRegistry, tools.LearningTools(recorder, practiceSvc, lessonSvc, ankiSvc))
 
+		// 読解 (reading): article → study edition → EPUB → Send to Kindle.
+		// The reading agent generates through the same always-observed,
+		// routed aiGen as every other agent, so APP_AI_ROUTES=
+		// reading.analyse=gemini picks its model and /ai records its cost.
+		// The pipeline's worker runs in this process (Run below): it
+		// claims work with SKIP LOCKED, so more than one replica is safe.
+		// Kindle delivery stays dormant — no sender constructed, no button
+		// rendered — unless APP_READING_KINDLE_TO/FROM are set.
+		var kindleSender publishing.Deliverer
+		if cfg.Reading.Kindle.Enabled() {
+			kindleSender = kindleadapter.New(kindleadapter.Config{
+				Addr:     cfg.Reading.Kindle.SMTPAddr,
+				From:     cfg.Reading.Kindle.From,
+				Username: cfg.Reading.Kindle.Username,
+				Password: cfg.Reading.Kindle.Password,
+				TLS:      cfg.Reading.Kindle.TLS,
+			})
+			slog.Info("reading: Kindle delivery enabled", "smtp", cfg.Reading.Kindle.SMTPAddr, "tls", cfg.Reading.Kindle.TLS)
+		}
+		readingSvc := appreading.NewService(appreading.Deps{
+			Repo:       postgres.NewReadingRepository(pool),
+			Recorder:   recorder,
+			Analyser:   agentreading.New(aiGen),
+			Renderer:   epubadapter.New(),
+			Deliverer:  kindleSender,
+			Vocabulary: vocabSvc,
+			Anki:       ankiSvc,
+		}, appreading.Config{
+			MaxArticleRunes: cfg.Reading.MaxArticleRunes,
+			LearnerLevel:    cfg.Reading.LearnerLevel,
+			KindleTo:        cfg.Reading.Kindle.To,
+		})
+		go func() {
+			// Same "a background failure must never take the app down"
+			// posture as the Slack/Signal goroutines above: Run already
+			// recovers per unit of work, this only guards the loop itself.
+			defer func() {
+				if r := recover(); r != nil {
+					slog.Error("reading: worker goroutine panicked", "panic", r, "stack", string(debug.Stack()))
+				}
+			}()
+			readingSvc.Run(context.Background())
+		}()
+
 		// Weekly email summary (Phase 3 Task 5, PRD §21/§65): summarySvc
 		// is always constructed (cheap — no network call happens until
 		// SendWeekly is actually invoked, matching smtpadapter.New's
@@ -593,6 +642,7 @@ func main() {
 			AnkiConnectEnabled: cfg.Anki.ConnectURL != "",
 			Lessons:            lessonSvc,
 			LessonsRepo:        lessonRepo,
+			Reading:            readingSvc,
 			AgentRuns:          agentRunRepo,
 			A2A:                a2aServer,
 			A2APath:            cfg.A2A.Path,
@@ -681,7 +731,7 @@ func main() {
 		slog.Info("slack-smoke: message sent")
 	case "restore":
 		// Soft delete's durable way back (Phase 4 Task D): `jlp restore
-		// <session|word|lesson> <identity> <id>`. The list's undo button
+		// <session|word|lesson|reading> <identity> <id>`. The list's undo button
 		// covers the misclick; this covers noticing a week later. See
 		// restore.go.
 		cfg, err := config.Load()

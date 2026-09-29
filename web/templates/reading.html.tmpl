@@ -1,0 +1,58 @@
+{{define "content"}}<section class="reading">
+  <h1>読解</h1>
+  <p class="description">読みたい日本語の記事から、語彙・文法・精読・復習つきの学習版を作ります。{{if .DeliveryEnabled}}完成した版はKindleに送信できます。{{else}}完成した版はEPUBでダウンロードできます。{{end}}
+    Chrome拡張機能の「JLPでKindle版を作成」からも追加できます。</p>
+
+  {{template "undo_delete" .}}
+
+  {{/* The paste form: the fallback for a page the extension cannot
+       read, and the way in without the extension at all. Open when it
+       has an error to show, so the learner's text is right there. */}}
+  <details class="panel no-print"{{if .FormError}} open{{end}}>
+    <summary class="panel__summary"><span class="panel__title">記事を貼り付けて追加</span></summary>
+    {{if .FormError}}<p class="error" role="alert">{{.FormError}}</p>{{end}}
+    <form method="post" action="/reading" class="session-form reading-form">
+      <label class="field">タイトル
+        <input class="input" type="text" name="title" value="{{.FormValues.Title}}" placeholder="空欄なら本文の冒頭">
+      </label>
+      <label class="field">出典
+        <input class="input" type="text" name="source" value="{{.FormValues.Source}}" placeholder="WSJ日本版">
+      </label>
+      <label class="field">URL
+        <input class="input" type="url" name="url" value="{{.FormValues.URL}}" placeholder="https://">
+      </label>
+      <label class="field">本文
+        <textarea class="textarea" name="content" rows="10" lang="ja" required>{{.FormValues.Content}}</textarea>
+      </label>
+      {{if .DeliveryEnabled}}<label class="field field--inline"><input type="checkbox" name="deliver"> 完成したらKindleに送信</label>{{end}}
+      <button type="submit" class="btn">学習版を作成</button>
+    </form>
+  </details>
+
+  <ul class="list list--card">
+    {{range .Articles}}
+    <li class="list__item" data-edition-id="{{.EditionID}}">
+      <details>
+        <summary class="list__line">
+          <span class="list__primary"><a href="/reading/{{.EditionID}}">{{.Title}}</a></span>
+          <span class="badge badge--type reading-status reading-status--{{.Status}}">{{.StatusLabel}}</span>
+          {{if .DeliveryLabel}}<span class="badge">{{.DeliveryLabel}}</span>{{end}}
+          <span class="list__meta">{{.Created}}</span>
+        </summary>
+        <div class="list__detail">
+          <p>{{if .Source}}{{.Source}}{{end}}{{if .Published}} ・ {{.Published}}{{end}}</p>
+          {{if .SourceURL}}<p class="reading-url"><a href="{{.SourceURL}}" rel="noopener noreferrer" target="_blank">{{.SourceURL}}</a></p>{{end}}
+          <p><a href="/reading/{{.EditionID}}">学習版を開く →</a></p>
+          <button type="button" class="btn btn--danger btn--sm no-print"
+                  data-confirm-delete="{{.DeleteAction}}" data-confirm-delete-label="{{.Title}}"
+                  aria-haspopup="dialog" aria-controls="confirm-delete-modal">削除</button>
+        </div>
+      </details>
+    </li>
+    {{else}}
+    <li class="list__item list__empty"><p class="empty">記事がありません。上のフォームか、Chrome拡張機能から追加できます。</p></li>
+    {{end}}
+  </ul>
+
+  {{template "confirm_delete" .}}
+</section>{{end}}

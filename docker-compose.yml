@@ -85,6 +85,19 @@ services:
       APP_SUMMARY_TO: ${APP_SUMMARY_TO:-}
       APP_SUMMARY_FROM: ${APP_SUMMARY_FROM:-}
       APP_SMTP_ADDR: ${APP_SMTP_ADDR:-}
+      # 読解 (reading) pipeline. The pipeline itself needs no config; its
+      # model is picked by APP_AI_ROUTES (reading.analyse=gemini, say).
+      # Kindle delivery stays dormant unless both TO and FROM are set —
+      # see internal/config.Kindle. SMTPADDR must be a real submission
+      # server (Amazon has to accept its mail), not the dev Mailpit.
+      APP_READING_MAXARTICLERUNES: ${APP_READING_MAXARTICLERUNES:-}
+      APP_READING_LEARNERLEVEL: ${APP_READING_LEARNERLEVEL:-}
+      APP_READING_KINDLE_TO: ${APP_READING_KINDLE_TO:-}
+      APP_READING_KINDLE_FROM: ${APP_READING_KINDLE_FROM:-}
+      APP_READING_KINDLE_SMTPADDR: ${APP_READING_KINDLE_SMTPADDR:-}
+      APP_READING_KINDLE_USERNAME: ${APP_READING_KINDLE_USERNAME:-}
+      APP_READING_KINDLE_PASSWORD: ${APP_READING_KINDLE_PASSWORD:-}
+      APP_READING_KINDLE_TLS: ${APP_READING_KINDLE_TLS:-}
       # Empty (the default) keeps the MQTT event bridge entirely
       # dormant — see internal/config.MQTT's doc comment. `make up-mqtt`
       # (the "mqtt" profile) sets this to the in-network mosquitto

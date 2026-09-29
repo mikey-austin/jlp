@@ -18,6 +18,7 @@ import (
 	applessons "github.com/mikeyaustin/jlp/internal/application/lessons"
 	"github.com/mikeyaustin/jlp/internal/application/outcomes"
 	"github.com/mikeyaustin/jlp/internal/application/practice"
+	appreading "github.com/mikeyaustin/jlp/internal/application/reading"
 	"github.com/mikeyaustin/jlp/internal/application/sessions"
 	appsettings "github.com/mikeyaustin/jlp/internal/application/settings"
 	appspeech "github.com/mikeyaustin/jlp/internal/application/speech"
@@ -128,6 +129,13 @@ type Options struct {
 	// PRD §18/§60): generating a tutor lesson guide and recording a
 	// human tutor's post-lesson observation.
 	Lessons *applessons.Service
+	// Reading drives the 読解 pipeline (/reading pages and
+	// /api/v1/reading/...): article submission, study editions, EPUB
+	// download and Send to Kindle. A service rather than a raw
+	// repository even for the reads, because "which editions exist" is
+	// joined with delivery state and known-vocabulary lookups that must
+	// not be re-derived in a handler.
+	Reading *appreading.Service
 	// LessonsRepo backs the /lessons list/detail pages' own read-only
 	// GET queries — the same "raw repository for a listing page,
 	// service for mutations" split AnkiCards/Anki above use.
@@ -415,6 +423,24 @@ func (s *Server) routes() http.Handler {
 		// Phase 4 Task D: soft delete — see /sessions/{id}/delete above.
 		r.Post("/lessons/{id}/delete", s.lessonsDelete)
 		r.Post("/lessons/{id}/restore", s.lessonsRestore)
+
+		// 読解: article → AI study edition → EPUB / Send to Kindle. The
+		// JSON surface for the extension is in the API group below; these
+		// are the learner's own pages. Deletes are per ARTICLE (an
+		// article and every edition of it), hence the /articles/ prefix,
+		// while everything else is per edition.
+		if s.opts.Reading != nil {
+			r.Get("/reading", s.readingList)
+			r.Post("/reading", s.readingCreate)
+			r.Get("/reading/{id}", s.readingDetail)
+			r.Get("/reading/{id}/epub", s.readingEpub)
+			r.Post("/reading/{id}/deliver", s.readingAction(s.readingDeliver))
+			r.Post("/reading/{id}/regenerate", s.readingAction(s.readingRegenerate))
+			r.Post("/reading/{id}/vocabulary", s.readingAction(s.readingAddVocabulary))
+			r.Post("/reading/{id}/anki", s.readingAction(s.readingAnki))
+			r.Post("/reading/articles/{id}/delete", s.readingDelete)
+			r.Post("/reading/articles/{id}/restore", s.readingRestore)
+		}
 	})
 
 	// The non-browser surfaces. These used to sit in the group above, on
@@ -459,6 +485,14 @@ func (s *Server) routes() http.Handler {
 			// no Origin header and passes Task 1's CSRF middleware
 			// unchanged.
 			r.Post("/words", s.apiWordsIngest)
+
+			// 読解 for the Chrome extension (reading:write — see
+			// apitoken.ScopeReadingWrite and requiredScope).
+			if s.opts.Reading != nil {
+				r.Post("/reading/articles", s.apiReadingSubmit)
+				r.Get("/reading/editions/{id}", s.apiReadingEdition)
+				r.Post("/reading/editions/{id}/deliver", s.apiReadingDeliver)
+			}
 		})
 
 		// Phase 4 Task 3: the A2A protocol adapter (PRD §29/§30, Rule
