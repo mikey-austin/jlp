@@ -810,3 +810,50 @@ func TestPushToAnkiConnectSurvivesEventRecordFailure(t *testing.T) {
 		t.Fatalf("Status = %q, want exported", h.cards.byID[card.ID].Status)
 	}
 }
+
+// --- CreateDraft ---
+
+// TestCreateDraftIsIdempotentPerSource: pre-written cards land as
+// drafts with one anki.card.created each, and a second call with the
+// same sources — even after a card was rejected — adds nothing.
+func TestCreateDraftIsIdempotentPerSource(t *testing.T) {
+	h := newTestHarness()
+	drafts := []appanki.Draft{
+		{SourceType: "reading_vocabulary", SourceID: "ed-1:金融引き締め", Front: "金融引き締め", Back: "きんゆうひきしめ\nmonetary tightening"},
+		{SourceType: "reading_vocabulary", SourceID: "ed-1:経済対策", Front: "経済対策", Back: "economic package"},
+		{SourceType: "reading_vocabulary", SourceID: "ed-1:empty", Front: "", Back: "skipped: no front"},
+	}
+	n, err := h.svc.CreateDraft(context.Background(), testIdentity, drafts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("created = %d, want 2", n)
+	}
+	cards, _ := h.cards.List(context.Background(), testIdentity, "")
+	if len(cards) != 2 || cards[0].Status != "draft" {
+		t.Fatalf("cards = %+v", cards)
+	}
+	if _, err := h.svc.SetStatus(context.Background(), testIdentity, cards[0].ID, "rejected"); err != nil {
+		t.Fatal(err)
+	}
+	n, err = h.svc.CreateDraft(context.Background(), testIdentity, drafts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 0 {
+		t.Fatalf("second call created %d, want 0", n)
+	}
+	created := 0
+	for _, ev := range h.events.appended {
+		if ev.Type == event.TypeAnkiCardCreated {
+			created++
+			if ev.SessionID != nil {
+				t.Fatal("a draft from a non-session source must be session-less")
+			}
+		}
+	}
+	if created != 2 {
+		t.Fatalf("anki.card.created events = %d, want 2", created)
+	}
+}

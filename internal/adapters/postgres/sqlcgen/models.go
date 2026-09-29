@@ -255,6 +255,53 @@ type LessonObservation struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type ReadingArticle struct {
+	ID          pgtype.UUID
+	IdentityID  string
+	SourceUrl   string
+	SourceName  string
+	Title       string
+	Author      string
+	PublishedAt pgtype.Timestamptz
+	Paragraphs  []byte
+	ContentHash string
+	CreatedAt   pgtype.Timestamptz
+	DeletedAt   pgtype.Timestamptz
+}
+
+type ReadingDelivery struct {
+	ID            pgtype.UUID
+	EditionID     pgtype.UUID
+	IdentityID    string
+	Destination   string
+	Status        string
+	Attempts      int32
+	LastError     string
+	NextAttemptAt pgtype.Timestamptz
+	ClaimedAt     pgtype.Timestamptz
+	CreatedAt     pgtype.Timestamptz
+	SentAt        pgtype.Timestamptz
+}
+
+type ReadingEdition struct {
+	ID               pgtype.UUID
+	ArticleID        pgtype.UUID
+	IdentityID       string
+	Status           string
+	PromptName       string
+	PromptVersion    string
+	SchemaName       string
+	Lesson           []byte
+	AiRequestID      string
+	Attempts         int32
+	LastError        string
+	DeliverWhenReady bool
+	NextAttemptAt    pgtype.Timestamptz
+	ClaimedAt        pgtype.Timestamptz
+	CreatedAt        pgtype.Timestamptz
+	UpdatedAt        pgtype.Timestamptz
+}
+
 type RetrievalItem struct {
 	IdentityID      string
 	SubjectType     string

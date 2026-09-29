@@ -65,6 +65,9 @@ const (
 	KindSession    Kind = "session"
 	KindVocabulary Kind = "vocabulary"
 	KindLesson     Kind = "lesson"
+	// KindReading is a 読解 article (and with it every study edition of
+	// it) — application/reading.Service.Delete.
+	KindReading Kind = "reading"
 )
 
 // RecordDeletion appends the content.deleted event for a soft delete

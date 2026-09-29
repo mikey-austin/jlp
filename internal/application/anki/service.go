@@ -175,6 +175,72 @@ func (s *Service) GenerateFromCorrection(ctx context.Context, identity learner.I
 	return card, nil
 }
 
+// Draft is a card whose text a caller already has — no model call
+// needed. SourceType/SourceID identify where it came from, exactly as
+// for a correction-sourced card, and are what makes CreateDraft
+// idempotent.
+type Draft struct {
+	SourceType, SourceID string
+	Front, Back, Notes   string
+}
+
+// CreateDraft queues pre-written cards as "draft" in the review queue,
+// for sources that already carry curated card content — a 読解 study
+// edition's vocabulary list, where asking the Anki agent to rewrite a
+// definition the reading agent just wrote would only add cost and
+// drift. Each card still goes through the same draft → approved →
+// exported review as a generated one: nothing reaches Anki unreviewed.
+//
+// Idempotent per (SourceType, SourceID): a draft whose source already
+// has a card for this identity, in any status, is skipped — so pressing
+// 「Ankiカード作成」 twice, or after rejecting half the cards, never
+// resurrects or duplicates them. created is how many were new. One
+// anki.card.created event is recorded per new card, session-less (the
+// source is not a writing session).
+func (s *Service) CreateDraft(ctx context.Context, identity learner.IdentityID, drafts []Draft) (created int, err error) {
+	existing, err := s.repo.List(ctx, identity, "")
+	if err != nil {
+		return 0, fmt.Errorf("anki: list cards: %w", err)
+	}
+	have := make(map[string]bool, len(existing))
+	for _, c := range existing {
+		have[c.SourceType+"\x00"+c.SourceID] = true
+	}
+	for _, d := range drafts {
+		key := d.SourceType + "\x00" + d.SourceID
+		if d.SourceType == "" || d.SourceID == "" || d.Front == "" || d.Back == "" || have[key] {
+			continue
+		}
+		have[key] = true
+		card := storage.AnkiCard{
+			ID:         uuid.New().String(),
+			IdentityID: identity,
+			SourceType: d.SourceType,
+			SourceID:   d.SourceID,
+			Front:      d.Front,
+			Back:       d.Back,
+			Notes:      d.Notes,
+			Status:     "draft",
+			CreatedAt:  time.Now().UTC(),
+		}
+		if err := s.repo.Insert(ctx, card); err != nil {
+			return created, fmt.Errorf("anki: persist card: %w", err)
+		}
+		created++
+		// Log-and-continue, for GenerateFromCorrection's reason: the card
+		// is already durable.
+		if err := s.rec.Record(ctx, event.LearningEvent{
+			IdentityID: identity,
+			Type:       event.TypeAnkiCardCreated,
+			Subject:    card.ID,
+			Evidence:   map[string]any{"source_type": card.SourceType, "source_id": card.SourceID},
+		}); err != nil {
+			slog.Error("record anki.card.created", "identity", identity, "card", card.ID, "err", err)
+		}
+	}
+	return created, nil
+}
+
 // SetStatus records the learner's approve/reject decision on a
 // previously generated draft card. repo.UpdateStatus is identity-
 // scoped, so a wrong identity misses with storage.ErrNotFound exactly
