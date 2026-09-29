@@ -131,3 +131,20 @@ WHERE id = $1 AND identity_id = $2;
 -- name: RestoreReadingArticle :execrows
 UPDATE reading_articles SET deleted_at = NULL
 WHERE id = $1 AND identity_id = $2;
+
+-- AttachFigures is not a sqlc query: sqlc cannot type a multi-array
+-- unnest, so the repository runs that insert through the pool (see
+-- attachFiguresSQL in adapters/postgres/reading.go).
+
+-- name: ListReadingFigures :many
+SELECT f.ordinal, f.after_paragraph, f.caption, f.alt, f.is_lead, f.in_text, f.media_type, f.width, f.height, f.sha256
+FROM reading_article_figures f
+JOIN reading_articles a ON a.id = f.article_id
+WHERE f.article_id = $1 AND a.identity_id = $2 AND a.deleted_at IS NULL
+ORDER BY f.ordinal;
+
+-- name: GetReadingFigure :one
+SELECT f.ordinal, f.after_paragraph, f.caption, f.alt, f.is_lead, f.in_text, f.media_type, f.width, f.height, f.sha256, f.data
+FROM reading_article_figures f
+JOIN reading_articles a ON a.id = f.article_id
+WHERE f.article_id = $1 AND a.identity_id = $2 AND a.deleted_at IS NULL AND f.ordinal = $3;

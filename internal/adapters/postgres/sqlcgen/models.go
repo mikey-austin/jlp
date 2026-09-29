@@ -269,6 +269,21 @@ type ReadingArticle struct {
 	DeletedAt   pgtype.Timestamptz
 }
 
+type ReadingArticleFigure struct {
+	ArticleID      pgtype.UUID
+	Ordinal        int32
+	AfterParagraph int32
+	Caption        string
+	Alt            string
+	IsLead         bool
+	InText         bool
+	MediaType      string
+	Width          int32
+	Height         int32
+	Sha256         string
+	Data           []byte
+}
+
 type ReadingDelivery struct {
 	ID            pgtype.UUID
 	EditionID     pgtype.UUID

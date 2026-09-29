@@ -60,6 +60,16 @@ type ReadingRepository interface {
 	SoftDeleteArticle(ctx context.Context, identity learner.IdentityID, id string, at time.Time) error
 	// RestoreArticle undoes SoftDeleteArticle.
 	RestoreArticle(ctx context.Context, identity learner.IdentityID, id string) error
+	// AttachFigures stores figs as articleID's figures unless it already
+	// has some; attached reports which. All or nothing, and safe against
+	// a racing attach. ErrNotFound-free: a foreign or deleted article
+	// simply attaches nothing.
+	AttachFigures(ctx context.Context, identity learner.IdentityID, articleID string, figs []reading.Figure) (attached bool, err error)
+	// ListFigures returns a visible article's figures in order, without
+	// their bytes.
+	ListFigures(ctx context.Context, identity learner.IdentityID, articleID string) ([]reading.Figure, error)
+	// FigureData returns one figure with its bytes, or ErrNotFound.
+	FigureData(ctx context.Context, identity learner.IdentityID, articleID string, ordinal int) (reading.Figure, error)
 
 	// InsertEdition queues a new pending edition, due at e.CreatedAt.
 	InsertEdition(ctx context.Context, e reading.StudyEdition) error

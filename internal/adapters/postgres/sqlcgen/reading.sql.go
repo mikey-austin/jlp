@@ -311,6 +311,52 @@ func (q *Queries) GetReadingEdition(ctx context.Context, arg GetReadingEditionPa
 	return i, err
 }
 
+const getReadingFigure = `-- name: GetReadingFigure :one
+SELECT f.ordinal, f.after_paragraph, f.caption, f.alt, f.is_lead, f.in_text, f.media_type, f.width, f.height, f.sha256, f.data
+FROM reading_article_figures f
+JOIN reading_articles a ON a.id = f.article_id
+WHERE f.article_id = $1 AND a.identity_id = $2 AND a.deleted_at IS NULL AND f.ordinal = $3
+`
+
+type GetReadingFigureParams struct {
+	ArticleID  pgtype.UUID
+	IdentityID string
+	Ordinal    int32
+}
+
+type GetReadingFigureRow struct {
+	Ordinal        int32
+	AfterParagraph int32
+	Caption        string
+	Alt            string
+	IsLead         bool
+	InText         bool
+	MediaType      string
+	Width          int32
+	Height         int32
+	Sha256         string
+	Data           []byte
+}
+
+func (q *Queries) GetReadingFigure(ctx context.Context, arg GetReadingFigureParams) (GetReadingFigureRow, error) {
+	row := q.db.QueryRow(ctx, getReadingFigure, arg.ArticleID, arg.IdentityID, arg.Ordinal)
+	var i GetReadingFigureRow
+	err := row.Scan(
+		&i.Ordinal,
+		&i.AfterParagraph,
+		&i.Caption,
+		&i.Alt,
+		&i.IsLead,
+		&i.InText,
+		&i.MediaType,
+		&i.Width,
+		&i.Height,
+		&i.Sha256,
+		&i.Data,
+	)
+	return i, err
+}
+
 const inFlightReadingDelivery = `-- name: InFlightReadingDelivery :one
 SELECT id, edition_id, identity_id, destination, status, attempts, last_error, created_at, sent_at
 FROM reading_deliveries
@@ -602,6 +648,67 @@ func (q *Queries) ListReadingEditions(ctx context.Context, identityID string) ([
 			&i.PublishedAt,
 			&i.ArticleCreatedAt,
 			&i.DeliveryStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listReadingFigures = `-- name: ListReadingFigures :many
+
+SELECT f.ordinal, f.after_paragraph, f.caption, f.alt, f.is_lead, f.in_text, f.media_type, f.width, f.height, f.sha256
+FROM reading_article_figures f
+JOIN reading_articles a ON a.id = f.article_id
+WHERE f.article_id = $1 AND a.identity_id = $2 AND a.deleted_at IS NULL
+ORDER BY f.ordinal
+`
+
+type ListReadingFiguresParams struct {
+	ArticleID  pgtype.UUID
+	IdentityID string
+}
+
+type ListReadingFiguresRow struct {
+	Ordinal        int32
+	AfterParagraph int32
+	Caption        string
+	Alt            string
+	IsLead         bool
+	InText         bool
+	MediaType      string
+	Width          int32
+	Height         int32
+	Sha256         string
+}
+
+// AttachFigures is not a sqlc query: sqlc cannot type a multi-array
+// unnest, so the repository runs that insert through the pool (see
+// attachFiguresSQL in adapters/postgres/reading.go).
+func (q *Queries) ListReadingFigures(ctx context.Context, arg ListReadingFiguresParams) ([]ListReadingFiguresRow, error) {
+	rows, err := q.db.Query(ctx, listReadingFigures, arg.ArticleID, arg.IdentityID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListReadingFiguresRow
+	for rows.Next() {
+		var i ListReadingFiguresRow
+		if err := rows.Scan(
+			&i.Ordinal,
+			&i.AfterParagraph,
+			&i.Caption,
+			&i.Alt,
+			&i.IsLead,
+			&i.InText,
+			&i.MediaType,
+			&i.Width,
+			&i.Height,
+			&i.Sha256,
 		); err != nil {
 			return nil, err
 		}

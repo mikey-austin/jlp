@@ -40,6 +40,7 @@ type memRepo struct {
 	mu         sync.Mutex
 	articles   map[string]*reading.Article
 	deleted    map[string]bool
+	figures    map[string][]reading.Figure
 	editions   map[string]*editionRow
 	deliveries map[string]*deliveryRow
 }
@@ -57,7 +58,7 @@ type deliveryRow struct {
 }
 
 func newMemRepo() *memRepo {
-	return &memRepo{articles: map[string]*reading.Article{}, deleted: map[string]bool{}, editions: map[string]*editionRow{}, deliveries: map[string]*deliveryRow{}}
+	return &memRepo{articles: map[string]*reading.Article{}, deleted: map[string]bool{}, figures: map[string][]reading.Figure{}, editions: map[string]*editionRow{}, deliveries: map[string]*deliveryRow{}}
 }
 
 func (m *memRepo) UpsertArticle(_ context.Context, a reading.Article) (reading.Article, bool, error) {
@@ -104,6 +105,47 @@ func (m *memRepo) RestoreArticle(_ context.Context, id learner.IdentityID, aid s
 	}
 	delete(m.deleted, aid)
 	return nil
+}
+
+func (m *memRepo) AttachFigures(_ context.Context, id learner.IdentityID, aid string, figs []reading.Figure) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.articles[aid]
+	if !ok || a.IdentityID != id || m.deleted[aid] || len(m.figures[aid]) > 0 || len(figs) == 0 {
+		return false, nil
+	}
+	m.figures[aid] = append([]reading.Figure(nil), figs...)
+	return true, nil
+}
+
+func (m *memRepo) ListFigures(_ context.Context, id learner.IdentityID, aid string) ([]reading.Figure, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.articles[aid]
+	if !ok || a.IdentityID != id || m.deleted[aid] {
+		return nil, nil
+	}
+	out := make([]reading.Figure, 0, len(m.figures[aid]))
+	for _, f := range m.figures[aid] {
+		f.Data = nil
+		out = append(out, f)
+	}
+	return out, nil
+}
+
+func (m *memRepo) FigureData(_ context.Context, id learner.IdentityID, aid string, ordinal int) (reading.Figure, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.articles[aid]
+	if !ok || a.IdentityID != id || m.deleted[aid] {
+		return reading.Figure{}, storage.ErrNotFound
+	}
+	for _, f := range m.figures[aid] {
+		if f.Ordinal == ordinal {
+			return f, nil
+		}
+	}
+	return reading.Figure{}, storage.ErrNotFound
 }
 
 func (m *memRepo) InsertEdition(_ context.Context, e reading.StudyEdition) error {

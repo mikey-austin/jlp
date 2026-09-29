@@ -3,9 +3,12 @@
 package postgres
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
+	"sync"
 	"testing"
 	"time"
 
@@ -41,6 +44,10 @@ func readingTestSetup(t *testing.T) (*ReadingRepository, learner.IdentityID, lea
 	// delivery and act on it — mail included. Registered after pool.Close,
 	// so it runs first.
 	t.Cleanup(func() {
+		// Figures carry no identity_id, and reference the articles.
+		if _, err := pool.Exec(context.Background(), "DELETE FROM reading_article_figures WHERE article_id IN (SELECT id FROM reading_articles WHERE identity_id = ANY($1))", []string{string(a.ID), string(b.ID)}); err != nil {
+			t.Errorf("cleanup reading_article_figures: %v", err)
+		}
 		for _, table := range []string{"reading_deliveries", "reading_editions", "reading_articles"} {
 			if _, err := pool.Exec(context.Background(), "DELETE FROM "+table+" WHERE identity_id = ANY($1)", []string{string(a.ID), string(b.ID)}); err != nil {
 				t.Errorf("cleanup %s: %v", table, err)
@@ -262,5 +269,97 @@ func TestReadingDeliveryInFlightUniqueness(t *testing.T) {
 	list, _ := r.ListEditions(ctx, me)
 	if len(list) != 1 || list[0].DeliveryStatus != reading.DeliveryPending {
 		t.Fatalf("list delivery status: %+v", list)
+	}
+}
+
+func testFigures(n int) []reading.Figure {
+	var out []reading.Figure
+	for i := 0; i < n; i++ {
+		out = append(out, reading.Figure{Ordinal: i, AfterParagraph: i - 1, Caption: "図" + strconv.Itoa(i), InText: true, Lead: i == 0,
+			MediaType: "image/jpeg", Width: 400, Height: 300, SHA256: strconv.Itoa(i), Data: []byte{0xFF, 0xD8, byte(i)}})
+	}
+	return out
+}
+
+func TestReadingFiguresAttachOnceScopedAndHidden(t *testing.T) {
+	r, me, them := readingTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC()
+	a, _, err := r.UpsertArticle(ctx, testArticle(t, me, "図のある記事です。日本語の本文。", now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := r.AttachFigures(ctx, them, a.ID, testFigures(2)); err != nil || ok {
+		t.Fatalf("foreign attach = %v %v, want false nil", ok, err)
+	}
+	if ok, err := r.AttachFigures(ctx, me, a.ID, testFigures(2)); err != nil || !ok {
+		t.Fatalf("attach = %v %v", ok, err)
+	}
+	if ok, err := r.AttachFigures(ctx, me, a.ID, testFigures(3)); err != nil || ok {
+		t.Fatalf("second attach = %v %v, want false nil", ok, err)
+	}
+	list, err := r.ListFigures(ctx, me, a.ID)
+	if err != nil || len(list) != 2 || list[1].Caption != "図1" || list[0].Data != nil || !list[0].Lead {
+		t.Fatalf("list = %+v %v", list, err)
+	}
+	f, err := r.FigureData(ctx, me, a.ID, 1)
+	if err != nil || !bytes.Equal(f.Data, []byte{0xFF, 0xD8, 1}) {
+		t.Fatalf("data = %+v %v", f, err)
+	}
+	if _, err := r.FigureData(ctx, them, a.ID, 1); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("foreign data err = %v", err)
+	}
+	if err := r.SoftDeleteArticle(ctx, me, a.ID, now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.FigureData(ctx, me, a.ID, 1); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("deleted article's figure err = %v", err)
+	}
+	if l, _ := r.ListFigures(ctx, me, a.ID); len(l) != 0 {
+		t.Fatalf("deleted article lists %d figures", len(l))
+	}
+	if err := r.RestoreArticle(ctx, me, a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if l, _ := r.ListFigures(ctx, me, a.ID); len(l) != 2 {
+		t.Fatalf("restored article lists %d figures", len(l))
+	}
+}
+
+func TestReadingFiguresRacingAttachLandsOneSet(t *testing.T) {
+	r, me, _ := readingTestSetup(t)
+	ctx := context.Background()
+	a, _, err := r.UpsertArticle(ctx, testArticle(t, me, "競合する記事です。日本語の本文。", time.Now().UTC()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	results := make([]bool, 8)
+	for i := range results {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			ok, err := r.AttachFigures(ctx, me, a.ID, testFigures(2+i%3))
+			if err != nil {
+				t.Errorf("attach %d: %v", i, err)
+			}
+			results[i] = ok
+		}(i)
+	}
+	wg.Wait()
+	won := 0
+	for _, ok := range results {
+		if ok {
+			won++
+		}
+	}
+	list, _ := r.ListFigures(ctx, me, a.ID)
+	if won != 1 {
+		t.Fatalf("%d attaches reported success, want exactly 1", won)
+	}
+	for i, f := range list {
+		if f.Ordinal != i {
+			t.Fatalf("figures are a mix of sets: %+v", list)
+		}
 	}
 }

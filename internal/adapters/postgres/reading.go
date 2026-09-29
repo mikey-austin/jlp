@@ -10,6 +10,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -24,11 +25,12 @@ import (
 // for why each query is shaped the way it is — the claim/complete pairs
 // in particular.
 type ReadingRepository struct {
-	q *sqlcgen.Queries
+	q    *sqlcgen.Queries
+	pool *pgxpool.Pool
 }
 
 func NewReadingRepository(pool *pgxpool.Pool) *ReadingRepository {
-	return &ReadingRepository{q: sqlcgen.New(pool)}
+	return &ReadingRepository{q: sqlcgen.New(pool), pool: pool}
 }
 
 var _ storage.ReadingRepository = (*ReadingRepository)(nil)
@@ -409,4 +411,93 @@ func (r *ReadingRepository) FailDeliveryAttempt(ctx context.Context, c storage.C
 		return storage.ErrNotFound
 	}
 	return nil
+}
+
+// attachFiguresSQL is one statement, so a set of figures lands whole or
+// not at all. NOT EXISTS makes a resubmission a no-op once an article has
+// figures; two racing attaches that both pass it collide on the primary
+// key, and the loser's whole statement fails — read as "already
+// attached". Scoped to a visible article of this identity. It lives here
+// rather than in db/queries because sqlc cannot type a multi-array unnest.
+const attachFiguresSQL = `
+INSERT INTO reading_article_figures (article_id, ordinal, after_paragraph, caption, alt, is_lead, in_text, media_type, width, height, sha256, data)
+SELECT a.id, f.ordinal, f.after_paragraph, f.caption, f.alt, f.is_lead, f.in_text, f.media_type, f.width, f.height, f.sha256, f.data
+FROM reading_articles a,
+     unnest($1::int[], $2::int[], $3::text[], $4::text[], $5::boolean[], $6::boolean[], $7::text[],
+            $8::int[], $9::int[], $10::text[], $11::bytea[])
+       AS f(ordinal, after_paragraph, caption, alt, is_lead, in_text, media_type, width, height, sha256, data)
+WHERE a.id = $12 AND a.identity_id = $13 AND a.deleted_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM reading_article_figures x WHERE x.article_id = a.id)`
+
+func (r *ReadingRepository) AttachFigures(ctx context.Context, identity learner.IdentityID, articleID string, figs []reading.Figure) (bool, error) {
+	if len(figs) == 0 {
+		return false, nil
+	}
+	id, err := parseUUID(articleID)
+	if err != nil {
+		return false, nil
+	}
+	var (
+		ordinals, afters, widths, heights []int32
+		captions, alts, mediaTypes, sums  []string
+		leads, inTexts                    []bool
+		datas                             [][]byte
+	)
+	for _, f := range figs {
+		ordinals = append(ordinals, int32(f.Ordinal))
+		afters = append(afters, int32(f.AfterParagraph))
+		captions = append(captions, f.Caption)
+		alts = append(alts, f.Alt)
+		leads = append(leads, f.Lead)
+		inTexts = append(inTexts, f.InText)
+		mediaTypes = append(mediaTypes, f.MediaType)
+		widths = append(widths, int32(f.Width))
+		heights = append(heights, int32(f.Height))
+		sums = append(sums, f.SHA256)
+		datas = append(datas, f.Data)
+	}
+	tag, err := r.pool.Exec(ctx, attachFiguresSQL, ordinals, afters, captions, alts, leads, inTexts, mediaTypes, widths, heights, sums, datas, id, string(identity))
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return false, nil // a racing attach won
+	}
+	if err != nil {
+		return false, err
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *ReadingRepository) ListFigures(ctx context.Context, identity learner.IdentityID, articleID string) ([]reading.Figure, error) {
+	id, err := parseUUID(articleID)
+	if err != nil {
+		return nil, nil
+	}
+	rows, err := r.q.ListReadingFigures(ctx, sqlcgen.ListReadingFiguresParams{ArticleID: id, IdentityID: string(identity)})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]reading.Figure, 0, len(rows))
+	for _, x := range rows {
+		out = append(out, reading.Figure{ArticleID: articleID, Ordinal: int(x.Ordinal), AfterParagraph: int(x.AfterParagraph),
+			Caption: x.Caption, Alt: x.Alt, Lead: x.IsLead, InText: x.InText, MediaType: x.MediaType,
+			Width: int(x.Width), Height: int(x.Height), SHA256: x.Sha256})
+	}
+	return out, nil
+}
+
+func (r *ReadingRepository) FigureData(ctx context.Context, identity learner.IdentityID, articleID string, ordinal int) (reading.Figure, error) {
+	id, err := parseUUID(articleID)
+	if err != nil {
+		return reading.Figure{}, storage.ErrNotFound
+	}
+	x, err := r.q.GetReadingFigure(ctx, sqlcgen.GetReadingFigureParams{ArticleID: id, IdentityID: string(identity), Ordinal: int32(ordinal)})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return reading.Figure{}, storage.ErrNotFound
+	}
+	if err != nil {
+		return reading.Figure{}, err
+	}
+	return reading.Figure{ArticleID: articleID, Ordinal: int(x.Ordinal), AfterParagraph: int(x.AfterParagraph),
+		Caption: x.Caption, Alt: x.Alt, Lead: x.IsLead, InText: x.InText, MediaType: x.MediaType,
+		Width: int(x.Width), Height: int(x.Height), SHA256: x.Sha256, Data: x.Data}, nil
 }
