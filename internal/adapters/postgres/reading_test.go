@@ -36,6 +36,17 @@ func readingTestSetup(t *testing.T) (*ReadingRepository, learner.IdentityID, lea
 			t.Fatal(err)
 		}
 	}
+	// These tests share the dev database with a running `jlp serve`,
+	// whose worker would otherwise pick up a leftover pending edition or
+	// delivery and act on it — mail included. Registered after pool.Close,
+	// so it runs first.
+	t.Cleanup(func() {
+		for _, table := range []string{"reading_deliveries", "reading_editions", "reading_articles"} {
+			if _, err := pool.Exec(context.Background(), "DELETE FROM "+table+" WHERE identity_id = ANY($1)", []string{string(a.ID), string(b.ID)}); err != nil {
+				t.Errorf("cleanup %s: %v", table, err)
+			}
+		}
+	})
 	return NewReadingRepository(pool), a.ID, b.ID
 }
 
@@ -208,7 +219,7 @@ func TestReadingDeliveryInFlightUniqueness(t *testing.T) {
 		t.Fatal(err)
 	}
 	mk := func() reading.Delivery {
-		return reading.Delivery{ID: uuid.NewString(), EditionID: e.ID, IdentityID: me, Destination: "me@kindle.com", Status: reading.DeliveryPending, CreatedAt: now}
+		return reading.Delivery{ID: uuid.NewString(), EditionID: e.ID, IdentityID: me, Destination: "me@kindle.invalid", Status: reading.DeliveryPending, CreatedAt: now}
 	}
 	d1, created, err := r.QueueDelivery(ctx, mk())
 	if err != nil || !created {
