@@ -25,7 +25,7 @@
     </label>
     <p class="hint">
       JLPの<a id="tokens-link" href="#" target="_blank" rel="noopener">設定 → APIトークン</a>で発行してください。
-      必要な権限: <code>vocabulary:write</code>、<code>sessions:write</code>、<code>feedback:request</code>。
+      必要な権限: <code>vocabulary:write</code>、<code>sessions:write</code>、<code>feedback:request</code>、<code>reading:write</code>（Kindle版）。
     </p>
     <label>デフォルトセッション ID（任意）
       <input type="text" id="session-id" placeholder="未設定なら最新のセッションを使用">
@@ -34,6 +34,8 @@
       <input type="url" id="chat-url" placeholder="https://a2a.lan.jackiemclean.net">
     </label>
     <p class="hint">未設定の場合、右クリックメニューに「JLPでチャット」は表示されません。</p>
+    <label class="inline"><span><input type="checkbox" id="auto-deliver"> Kindle版ができたら自動でKindleに送信</span></label>
+    <p class="hint">JLP側でKindle送信が設定されている場合のみ有効です。</p>
     <button type="submit">保存</button>
   </form>
   <p id="options-status" class="hint"></p>

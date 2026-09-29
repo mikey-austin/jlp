@@ -38,7 +38,21 @@
     <a id="session-link" href="#" target="_blank" rel="noopener" hidden>JLPで開く →</a>
   </section>
 
-  <p id="empty-state" class="hint">日本語テキストを選択して右クリックしてください。</p>
+  <section id="reading-view" hidden>
+    <p id="reading-title" class="reading-title"></p>
+    <p id="reading-status" class="hint"></p>
+    <progress id="reading-progress" hidden></progress>
+    <div id="reading-actions" class="reading-actions" hidden>
+      <a id="reading-page" href="#" target="_blank" rel="noopener">学習版を開く →</a>
+      <a id="reading-epub" href="#" target="_blank" rel="noopener" hidden>EPUBをダウンロード</a>
+      <button type="button" id="reading-deliver" hidden>Kindleに送信</button>
+    </div>
+  </section>
+
+  <div id="empty-state">
+    <p class="hint">日本語テキストを選択して右クリックしてください。</p>
+    <button type="button" id="reading-start">このページのKindle版を作成</button>
+  </div>
 </main>
 <script src="popup.js"></script>
 </body>

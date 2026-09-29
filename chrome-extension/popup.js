@@ -48,7 +48,7 @@ async function jlpFetch(cfg, path, init = {}) {
 // caller's first session", resolved below.
 async function loadConfig() {
   const [synced, local] = await Promise.all([
-    chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL, sessionId: "", chatUrl: "" }),
+    chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL, sessionId: "", chatUrl: "", autoDeliver: false }),
     // The token lives in storage.local, NOT sync: a credential that
     // replicates to every device signed into this Chrome profile is a
     // different security posture than a base URL, and keeping them in
@@ -270,10 +270,159 @@ async function saveVocabulary(expression, sourceTitle) {
   }
 }
 
+
+// --- Kindle edition (読解) flow --------------------------------------------
+
+// Poll cadence and patience for a study edition. Analysis is one model
+// call of up to a minute or two; the worker retries with minutes of
+// backoff, so past a few minutes the popup stops watching and points at
+// the page, which keeps going without it.
+const READING_POLL_MS = 3000;
+const READING_POLL_LIMIT = 100; // ~5 minutes
+
+// submitArticle runs 「JLPでKindle版を作成」 end to end: POST the captured
+// article, then follow the edition until it is finished. The server
+// decides everything — whether this text is a duplicate, when the edition
+// is ready, whether to mail it — the popup only shows what it says.
+async function submitArticle(article) {
+  showView("reading-view");
+  const statusEl = document.getElementById("reading-status");
+  document.getElementById("reading-title").textContent = article.title || "";
+  statusEl.classList.remove("error-banner");
+  statusEl.textContent = "送信中…";
+  try {
+    const cfg = await loadConfig();
+    const res = await jlpFetch(cfg, `/api/v1/reading/articles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: article.url || "",
+        title: article.title || "",
+        source: article.source || "",
+        author: article.author || "",
+        published_at: article.published_at || "",
+        content: article.content || "",
+        selection: article.selection || "",
+        deliver: !!cfg.autoDeliver,
+      }),
+    });
+    if (!res.ok) {
+      let msg = `送信に失敗しました (${res.status})`;
+      try { msg = (await res.json()).error || msg; } catch (_) { /* not JSON */ }
+      throw new Error(msg);
+    }
+    const out = await res.json();
+    document.getElementById("reading-title").textContent = out.article.title;
+    renderEdition(cfg, out.edition, out.duplicate);
+    if (!out.edition.terminal) await followEdition(cfg, out.edition.id);
+    return out;
+  } catch (err) {
+    statusEl.textContent = `エラー: ${err.message}`;
+    statusEl.classList.add("error-banner");
+    document.getElementById("reading-progress").hidden = true;
+    throw err;
+  }
+}
+
+async function followEdition(cfg, id) {
+  for (let i = 0; i < READING_POLL_LIMIT; i++) {
+    await new Promise((r) => setTimeout(r, READING_POLL_MS));
+    const res = await jlpFetch(cfg, `/api/v1/reading/editions/${encodeURIComponent(id)}`);
+    if (!res.ok) throw new Error(`状態の取得に失敗しました (${res.status})`);
+    const ed = await res.json();
+    renderEdition(cfg, ed, false);
+    // Stop once the edition is finished AND any delivery it queued has
+    // finished too, so an auto-send shows its outcome.
+    const sending = (ed.deliveries || []).some((d) => d.status === "pending" || d.status === "sending");
+    if (ed.terminal && !sending) return ed;
+  }
+  document.getElementById("reading-status").textContent =
+    "まだ作成中です。JLPのページで続きを確認できます。";
+  document.getElementById("reading-progress").hidden = true;
+  return null;
+}
+
+// renderEdition is a pure render of the server's edition DTO.
+function renderEdition(cfg, ed, duplicate) {
+  const statusEl = document.getElementById("reading-status");
+  const progress = document.getElementById("reading-progress");
+  const actions = document.getElementById("reading-actions");
+  const base = cfg.baseUrl.replace(/\/+$/, "");
+
+  const latest = (ed.deliveries || [])[0];
+  let line = ed.status_label;
+  if (ed.status === "pending" || ed.status === "analysing") {
+    line = duplicate ? "この記事はすでに作成中です…" : "学習版を作成しています…";
+  } else if (ed.status === "ready") {
+    line = duplicate ? "この記事の学習版はすでにあります。" : "学習版ができました。";
+  } else if (ed.status === "failed") {
+    line = `作成できませんでした: ${ed.last_error || ""}`;
+  }
+  if (latest) line += ` ${latest.status_label}${latest.last_error ? `（${latest.last_error}）` : ""}`;
+  statusEl.textContent = line;
+  statusEl.classList.toggle("error-banner", ed.status === "failed");
+  progress.hidden = ed.terminal;
+
+  actions.hidden = false;
+  document.getElementById("reading-page").href = base + ed.page_url;
+  const epub = document.getElementById("reading-epub");
+  epub.hidden = !ed.epub_url;
+  if (ed.epub_url) epub.href = base + ed.epub_url;
+
+  const deliver = document.getElementById("reading-deliver");
+  const inFlight = latest && (latest.status === "pending" || latest.status === "sending");
+  deliver.hidden = !(ed.delivery_enabled && ed.status === "ready");
+  deliver.disabled = !!inFlight;
+  deliver.dataset.editionId = ed.id;
+}
+
+async function deliverEdition(id) {
+  const cfg = await loadConfig();
+  const btn = document.getElementById("reading-deliver");
+  btn.disabled = true;
+  const res = await jlpFetch(cfg, `/api/v1/reading/editions/${encodeURIComponent(id)}/deliver`, { method: "POST" });
+  if (!res.ok) {
+    let msg = `送信に失敗しました (${res.status})`;
+    try { msg = (await res.json()).error || msg; } catch (_) { /* not JSON */ }
+    document.getElementById("reading-status").textContent = `エラー: ${msg}`;
+    btn.disabled = false;
+    return;
+  }
+  await followEdition(cfg, id);
+}
+
+// captureActiveTab is the toolbar button's path: the same article.js
+// background.js injects for the context menu, run against the tab the
+// toolbar was clicked on (activeTab covers it — the click is the gesture).
+async function captureActiveTab() {
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab || tab.id == null) throw new Error("タブが見つかりません");
+  const [{ result } = {}] = await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ["article.js"] });
+  if (!result) throw new Error("このページは読み取れません");
+  return result;
+}
+
+function wireReading() {
+  document.getElementById("reading-deliver").addEventListener("click", (e) => {
+    const id = e.currentTarget.dataset.editionId;
+    if (id) deliverEdition(id);
+  });
+  document.getElementById("reading-start").addEventListener("click", async () => {
+    try {
+      submitArticle(await captureActiveTab());
+    } catch (err) {
+      showView("reading-view");
+      const statusEl = document.getElementById("reading-status");
+      statusEl.textContent = `エラー: ${err.message}`;
+      statusEl.classList.add("error-banner");
+    }
+  });
+}
+
 // --- bootstrap -------------------------------------------------------------
 
 function showView(id) {
-  for (const el of document.querySelectorAll("main > section, #empty-state")) {
+  for (const el of document.querySelectorAll("main > section, main > #empty-state")) {
     el.hidden = el.id !== id;
   }
 }
@@ -365,14 +514,17 @@ function renderCreatedSession(cfg, sess, text) {
 
 async function init() {
   wireVocabForm();
-  const stored = await chrome.storage.session.get({ selection: "", title: "", mode: "" });
-  await chrome.storage.session.remove(["selection", "title", "mode"]);
+  wireReading();
+  const stored = await chrome.storage.session.get({ selection: "", title: "", mode: "", article: null });
+  await chrome.storage.session.remove(["selection", "title", "mode", "article"]);
   const params = new URLSearchParams(location.search);
   const text = stored.selection || params.get("text") || "";
   const title = stored.title || params.get("title") || "";
   const mode = stored.mode || params.get("mode") || "";
 
-  if (mode === "vocab" && text) {
+  if (mode === "reading" && stored.article) {
+    await submitArticle(stored.article);
+  } else if (mode === "vocab" && text) {
     await saveVocabulary(text, title);
   } else if (mode === "session" && text) {
     await createSession(text, title);
@@ -399,4 +551,6 @@ window.jlpPopup = {
   renderFeedback,
   saveVocabulary,
   createSession,
+  submitArticle,
+  renderEdition,
 };

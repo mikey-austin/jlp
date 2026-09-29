@@ -559,8 +559,9 @@ signal. `jlp eval` is a batch CLI command with no browser step.
 
 `chrome-extension/` is a pure client of the `/api/v1` JSON API (PRD
 §40 — no learning-domain logic lives there): right-click Japanese text
-on any page to get JLP corrections or save it to your vocabulary list,
-styled to match the app. No build tooling — plain ES modules loaded
+on any page to get JLP corrections, save it to your vocabulary list, or
+turn the article into a Kindle study edition (see 読解 below), styled to
+match the app. No build tooling — plain ES modules loaded
 straight off disk by Chrome.
 
 ```sh
@@ -573,6 +574,94 @@ the manual `chrome://extensions` install checklist, the
 `GET /api/v1/sessions/{id}/document` endpoint yet), and the CORS-vs-
 extension-host-permissions distinction that governs how its API calls
 work (and how they're verified without a real install).
+
+## 読解 — articles to Kindle study editions (`/reading`)
+
+Pick a Japanese article you actually want to read — a WSJ 日本版 story,
+a blog post — and JLP turns it into a short lesson built around it, then
+into a reflowable EPUB for your Kindle:
+
+- **記事** — the article, with furigana on the first occurrence of each
+  key word;
+- **重要語彙** — 10–20 words chosen for your level (`APP_READING_LEARNERLEVEL`),
+  each with its reading, meaning in this article's sense, a usage note
+  and an original example sentence;
+- **表現・文法** — constructions that actually occur in the article,
+  especially written/newspaper style (〜をめぐり, 〜に伴い …);
+- **精読** — the 3–5 hardest sentences, chunked, each chunk's role named;
+- **復習** — comprehension and vocabulary questions, with the answers on
+  their own page.
+
+**Getting an article in.** The Chrome extension's 「JLPでKindle版を作成」
+(right-click the page, or a selection, or the toolbar button) reads the
+article out of the tab you are looking at and posts it to
+`POST /api/v1/reading/articles` — it needs a token with the
+`reading:write` scope. JLP never fetches the page itself: for a
+subscription site, the text comes from your own logged-in session exactly
+as if you had copied it, and there is no server-side scraper to
+authenticate or to be mistaken for getting around a paywall. Without the
+extension, paste the text on `/reading`. See
+**[`docs/api/reading.md`](docs/api/reading.md)** for the API contract.
+
+**How it runs.** The pipeline is staged and durable, with every stage's
+state in Postgres (migration `00030_reading`): submitting only records the
+article and queues a *study edition*; a background worker in the app
+process does the model call, retries a failure with backoff (1m, 5m; three
+attempts), and picks up work a crashed process left half-done once its
+claim goes stale. Claims use `FOR UPDATE SKIP LOCKED`, so several app
+replicas are safe. Submitting the same text twice (a double click, a
+retry) returns the existing edition instead of paying for another model
+call — articles are idempotent on a hash of their normalised text. The
+article and its study material are separate records, so 「学習版を作り直す」
+regenerates the lesson (e.g. after a prompt upgrade) without re-ingesting
+anything, and a failed e-mail is retried without calling the model again.
+
+**Model.** The analysis is one structured-generation call
+(`reading.analyse` v1 → `study_edition.v1`) through the same observed,
+routed generator as every other agent, validated against the schema with
+the usual repair-and-retry, then checked semantically (no empty
+vocabulary, duplicates collapsed). Route it like any other prompt:
+
+```
+APP_AI_ROUTES=reading.analyse=gemini
+```
+
+Every call shows up on `/ai` with its cost.
+
+**EPUB.** Rendered on demand from the stored edition (nothing is stored
+as a blob), deterministic, EPUB 3 with both a nav document and an NCX,
+`lang="ja"` throughout, no fixed font sizes — your Kindle's own font,
+size, spacing and margin settings all work. It passes
+[EPUBCheck](https://www.w3.org/publishing/epubcheck/) with no errors or
+warnings; `EPUBCHECK_JAR=/path/to/epubcheck.jar go test ./internal/adapters/epub/`
+runs it.
+
+**Send to Kindle** is opt-in and dormant unless configured:
+
+```
+APP_READING_KINDLE_TO=yourname_abc123@kindle.com
+APP_READING_KINDLE_FROM=you@gmail.com          # must be on Amazon's Approved Personal Document E-mail List
+APP_READING_KINDLE_SMTPADDR=smtp.gmail.com:587
+APP_READING_KINDLE_USERNAME=you@gmail.com
+APP_READING_KINDLE_PASSWORD=app-password
+APP_READING_KINDLE_TLS=starttls                # or tls (465); none only for a local relay
+```
+
+With it set, editions get a 「Kindleに送信」 button and the extension can
+send automatically when an edition is ready. At most one delivery of an
+edition to an address is in flight at a time (a unique index, not a
+check-then-insert), so a double click never mails a book twice; SMTP 5xx
+replies are treated as permanent and not retried. The weekly summary's
+Mailpit adapter is deliberately not reused — Amazon has to accept the
+mail, so this one speaks STARTTLS/TLS and authenticates, and refuses to
+send a password in the clear.
+
+**Beyond the book.** 「語彙リストに追加」 puts an edition's words on your
+vocabulary list through the ordinary lookup path (idempotent per edition
+and word), so they join the lookup → production tracking — and
+「Ankiカード作成」 queues one draft card per word in `/anki`'s review
+queue. Deleting an article soft-deletes it and every edition of it;
+`jlp restore reading <identity> <article-id>` brings it back.
 
 ## Design system
 
@@ -1211,11 +1300,12 @@ docker compose run --rm -e APP_MQTT_URL=tcp://mosquitto:1883 tools \
 ```
 cmd/jlp/                     entrypoint: serve | migrate | seed
 internal/config/             viper -> typed Config, validation
-internal/domain/             learner, session, writing, correction, diff, event
-internal/application/        sessions, writing, feedback, learning, analytics
-internal/ports/               auth, ai, events, storage, notifications interfaces
-internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, gemini, clicmd, airouter, smtp
+internal/domain/             learner, session, writing, correction, diff, event, reading
+internal/application/        sessions, writing, feedback, learning, analytics, reading (読解 pipeline + worker)
+internal/ports/               auth, ai, events, storage, notifications, publishing interfaces
+internal/adapters/           http, postgres, staticauth, authelia, inprocbus, fakeai, anthropic, ollama, gemini, clicmd, airouter, smtp, epub, kindle
 internal/agent/teacher/      the Teacher AI agent (ReviewWriting)
+internal/agent/reading/      the 読解 agent (article -> study_edition.v1)
 internal/observability/      AI request/cost/latency recording decorator
 internal/prompts/            embedded, versioned prompt templates
 internal/schemas/            embedded JSON Schemas + validator

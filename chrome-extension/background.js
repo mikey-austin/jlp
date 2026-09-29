@@ -12,6 +12,7 @@ const MENU_FEEDBACK = "jlp-feedback";
 const MENU_VOCAB = "jlp-vocab";
 const MENU_SESSION = "jlp-session";
 const MENU_CHAT = "jlp-chat";
+const MENU_READING = "jlp-reading";
 
 // The three that go through the popup. Chat is not one of them: it opens
 // a tab straight at the deployed chat and needs no UI of ours.
@@ -26,6 +27,10 @@ chrome.runtime.onInstalled.addListener(() => {
     chrome.contextMenus.create({ id: MENU_FEEDBACK, title: "JLPで添削", contexts: ["selection"] });
     chrome.contextMenus.create({ id: MENU_SESSION, title: "JLPで新しいセッション", contexts: ["selection"] });
     chrome.contextMenus.create({ id: MENU_VOCAB, title: "JLPに語彙を保存", contexts: ["selection"] });
+    // The one item offered on the PAGE as well as on a selection: a
+    // Kindle edition is usually of the whole article. With a selection,
+    // the selection is what gets studied.
+    chrome.contextMenus.create({ id: MENU_READING, title: "JLPでKindle版を作成", contexts: ["page", "selection"] });
     // Only offered when a chat URL is configured. An item that cannot
     // work is worse than an absent one — the same rule the app's own nav
     // follows for its chat link.
@@ -38,8 +43,36 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (!POPUP_MENUS[info.menuItemId] && info.menuItemId !== MENU_CHAT) return;
   if (!tab || tab.id == null) return;
+
+  if (info.menuItemId === MENU_READING) {
+    // article.js reads the article body and metadata out of the tab the
+    // learner is looking at (see its doc comment); the popup submits it.
+    // Stashed like a selection, and consumed one-shot the same way.
+    let article = null;
+    try {
+      const [{ result } = {}] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ["article.js"],
+      });
+      article = result || null;
+    } catch (err) {
+      console.warn("jlp: article capture failed, falling back to the selection", err);
+    }
+    if (!article) {
+      article = { url: tab.url || "", title: tab.title || "", selection: info.selectionText || "", content: "" };
+    }
+    await chrome.storage.session.set({ article, mode: "reading" });
+    await chrome.windows.create({
+      url: chrome.runtime.getURL("popup.html?mode=reading"),
+      type: "popup",
+      width: 420,
+      height: 620,
+    });
+    return;
+  }
+
+  if (!POPUP_MENUS[info.menuItemId] && info.menuItemId !== MENU_CHAT) return;
 
   let text = info.selectionText || "";
   let title = tab.title || "";

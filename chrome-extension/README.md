@@ -27,13 +27,14 @@ extension was dead from the OIDC cutover until this change. No amount of
 host permissions fixes that; it was never a CORS problem.
 
 **Setup:** mint a token in JLP under 設定 → APIトークン and paste it into
-this extension's options page. It needs three scopes:
+this extension's options page. It needs one scope per action you use:
 
 | Scope | Used by |
 |---|---|
 | `vocabulary:write` | JLPに語彙を保存 |
 | `sessions:write` | JLPで新しいセッション |
 | `feedback:request` | JLPで添削 |
+| `reading:write` | JLPでKindle版を作成 |
 
 `sessions:write` and `feedback:request` are separate on purpose: parking
 text costs nothing, while every feedback request spends real money on a
@@ -44,7 +45,7 @@ where the base URL and default session live — a credential replicated to
 every device signed into the Chrome profile is a different posture than
 a URL.
 
-## The four actions
+## The actions
 
 Select text anywhere, right-click:
 
@@ -54,9 +55,33 @@ Select text anywhere, right-click:
 | JLPで新しいセッション | Creates a new session with the selection as its text. No AI call, nothing to wait for — the "work on this later" action. |
 | JLPに語彙を保存 | Saves the selection as a vocabulary lookup. |
 | JLPでチャット | Opens the deployed A2A chat with the selection pre-filled. |
+| JLPでKindle版を作成 | Turns the article into a 読解 study edition (vocabulary, grammar, 精読, review) as an EPUB, and optionally sends it to your Kindle. Also on the page's own right-click menu and the toolbar popup. Costs a model call. |
 
 「JLPでチャット」 appears **only when a chat URL is configured** in the
 options page — a menu item that cannot work is worse than an absent one.
+
+### JLPでKindle版を作成
+
+Right-click the page (or a selection, or use the toolbar popup's
+「このページのKindle版を作成」). `article.js` is injected into the tab —
+on demand, like `content.js` — and reads the article out of what you
+can see: the `[itemprop=articleBody]`, else `<article>`, else `<main>`
+element, else the block with the most paragraph text; navigation,
+asides, figures and captions are skipped. With a selection, the
+selection is what gets studied. It also reads the canonical URL, the
+`og:title`/`og:site_name`, the author and `article:published_time`.
+
+The page is never fetched by the server: for a subscription site the
+text comes from **your** logged-in tab, just as if you had copied it.
+
+The popup posts to `POST /api/v1/reading/articles` and follows the
+edition (`GET /api/v1/reading/editions/{id}`, every 3 s for up to ~5
+minutes) until it is ready, then links to the page and the EPUB and —
+when the server has Kindle delivery configured — offers 「Kindleに送信」.
+Tick 「Kindle版ができたら自動でKindleに送信」 in the options to have it
+sent without the click. Sending the same article twice returns the
+existing edition; the server decides that, not the extension. See
+`docs/api/reading.md` for the contract.
 
 ### Known failure mode for the chat action
 

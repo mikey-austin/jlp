@@ -1,4 +1,4 @@
-// options.js — stores {baseUrl, sessionId} in chrome.storage.sync
+// options.js — stores {baseUrl, sessionId, chatUrl, autoDeliver} in chrome.storage.sync
 // (chrome.storage.sync, not .local: small, textual, and worth carrying
 // across a signed-in Chrome profile's devices, same rationale as any
 // other extension's settings page). No API calls happen here; popup.js
@@ -7,13 +7,14 @@
 const DEFAULT_BASE_URL = "http://localhost:8080";
 
 async function loadOptions() {
-  const cfg = await chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL, sessionId: "", chatUrl: "" });
+  const cfg = await chrome.storage.sync.get({ baseUrl: DEFAULT_BASE_URL, sessionId: "", chatUrl: "", autoDeliver: false });
   // The token is read from storage.local, where saveOptions puts it —
   // see there for why it does not live in sync with the rest.
   const { apiToken } = await chrome.storage.local.get({ apiToken: "" });
   document.getElementById("base-url").value = cfg.baseUrl;
   document.getElementById("session-id").value = cfg.sessionId;
   document.getElementById("chat-url").value = cfg.chatUrl;
+  document.getElementById("auto-deliver").checked = !!cfg.autoDeliver;
   document.getElementById("api-token").value = apiToken;
   updateTokensLink(cfg.baseUrl);
 }
@@ -52,10 +53,11 @@ async function saveOptions(e) {
   const sessionId = document.getElementById("session-id").value.trim();
   const chatUrl = document.getElementById("chat-url").value.trim().replace(/\/+$/, "");
   const apiToken = document.getElementById("api-token").value.trim();
+  const autoDeliver = document.getElementById("auto-deliver").checked;
   const statusEl = document.getElementById("options-status");
 
   await requestOriginPermission(baseUrl);
-  await chrome.storage.sync.set({ baseUrl, sessionId, chatUrl });
+  await chrome.storage.sync.set({ baseUrl, sessionId, chatUrl, autoDeliver });
   // The token goes to storage.local, NOT sync. sync replicates to every
   // device signed into this Chrome profile, which is a reasonable place
   // for a base URL and an unreasonable one for a credential — and
