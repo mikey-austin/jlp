@@ -44,11 +44,14 @@ For each `<img>` in the root it records:
 | `caption` | the enclosing `<figure>`'s `<figcaption>` text |
 | `after_paragraph` | index of the last paragraph emitted before it, `-1` if before the first |
 | `lead` | true for the first kept figure |
+| `after_text` | the first 40 characters of that paragraph, so the server can anchor the figure even when its paragraph split differs from the client's |
 
 Images whose rendered or natural size is under 200 px on either side
 are skipped (tracking pixels, icons, logos, avatars). When the root has
-no figure, `og:image` becomes the lead image with `after_paragraph: -1`
-and is used for the cover only, not placed in the text.
+no figure, `og:image` becomes the lead image with `in_text: false`: used
+for the cover only, not placed in the text. With a selection, only the
+lead image is sent, as cover-only — in-text positions refer to the whole
+article.
 
 ### Fetch and downscale (`chrome-extension/popup.js`)
 
@@ -109,7 +112,7 @@ type Figure struct {
 
 `NewFigure` validates the way `NewArticle` validates text:
 
-- the media type is **sniffed from the bytes** (`http.DetectContentType`),
+- the media type is **recognised from the bytes** (`image.DecodeConfig`),
   whatever the client claims; only JPEG, PNG and GIF are accepted;
 - at most 2 MB of data;
 - dimensions come from `image.DecodeConfig` before anything is decoded,
@@ -131,7 +134,8 @@ CREATE TABLE reading_article_figures (
     after_paragraph int  NOT NULL,
     caption         text NOT NULL DEFAULT '',
     alt             text NOT NULL DEFAULT '',
-    lead            boolean NOT NULL DEFAULT false,
+    is_lead         boolean NOT NULL DEFAULT false,
+    in_text         boolean NOT NULL DEFAULT true,
     media_type      text NOT NULL,
     width           int  NOT NULL,
     height          int  NOT NULL,
@@ -205,11 +209,12 @@ A 1600×2560 JPEG (Amazon's recommended 1:1.6):
 - no lead photo: the same layout with a solid colour band instead of
   the photo.
 
-Font: **Noto Sans JP**, embedded in the binary because titles can
-contain any kanji. The whole font goes in: about 5 MB added to the
-binary and image. It is TrueType-outline, so `golang.org/x/image`'s
-`opentype` renders it without external tools. Its licence (OFL) ships
-alongside it.
+Font: **M PLUS 1p** Bold and Regular, embedded in the binary because
+titles can contain any kanji (about 3.5 MB for both). Chosen over Noto
+Sans JP, which Google Fonts ships only as a variable font that
+`golang.org/x/image`'s `opentype` renders at its default weight; M PLUS
+1p's static TrueType weights were verified to render through it
+(2026-09-29), rare kanji included. Its licence (OFL) ships alongside it.
 
 ### Web page
 
