@@ -83,6 +83,29 @@ sent without the click. Sending the same article twice returns the
 existing edition; the server decides that, not the extension. See
 `docs/api/reading.md` for the contract.
 
+**Images.** `article.js` also captures the article's photos, in
+document order with the paragraph each follows. A figure is an `<img>`
+in the article body that is not inside nav/aside/footer/header/form, not
+inside a link (a thumbnail to another story), not SVG, and not under
+200 px either way (tracking pixels, icons, avatars). The widest `srcset`
+entry wins, then `currentSrc`/`src`, then lazy-load attributes
+(`data-src`…); the caption is the enclosing `<figure>`'s `<figcaption>`.
+At most **12** figures are kept; the first is the lead. With no photo in
+the body, `og:image` is used as a lead only.
+
+The **popup** fetches each image itself (the browser's own request, with
+your cookies — the server never contacts the article's site), shrinks
+it to **1200 px** on the long side and **2 MB** at most (a PNG stays PNG
+when it is under 500 KB, so charts stay sharp; otherwise JPEG), and
+uploads them with the article as `multipart/form-data`. A figure that
+cannot be fetched is skipped, never the import; if the server rejects
+the upload the article is created text-only. The status line ends with
+「画像 n/m枚」.
+
+Fetching images from every site needs host access, granted **once** with
+the checkbox 「記事の画像も取り込む」 in the options (it is requested
+from the click). Without it the import is text-only and says so.
+
 ### Known failure mode for the chat action
 
 It opens the deployed chat, so it needs that service running AND an
@@ -228,6 +251,18 @@ The verification protocol this task's brief mandates:
    it exactly the way `correction_card.html.tmpl` does server-side.
 5. Assert a vocabulary save shows up at `http://localhost:PORT/vocabulary`.
 6. Assert zero browser console errors throughout.
+
+Images (article capture and upload):
+
+- `article.js` runs on any page: eval its source there and read
+  `.figures`.
+- `window.jlpPopup.prepareImages(figures)` fetches and downscales, so it
+  needs CORS on the image host in shim mode (only the installed
+  extension, with host permission, bypasses CORS). Serve test images from
+  a local static server sending `Access-Control-Allow-Origin: *`, then
+  from an app-origin tab call `prepareImages` / `submitArticle` with the
+  captured `figures`. `chrome.permissions.remove(...)` on the shim
+  switches the popup to its text-only path.
 
 ## `make ext-build`
 

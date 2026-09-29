@@ -57,6 +57,14 @@
   // drives popup.js through this shim) could not exercise the extension
   // at all.
   window.chrome.storage = { sync: makeArea(), session: makeArea(), local: makeArea() };
+  // Toggleable stand-in for the optional host permission the options page
+  // asks for; popup.js only fetches images when contains() says yes.
+  let granted = true;
+  window.chrome.permissions = {
+    contains: async () => granted,
+    request: async () => (granted = true),
+    remove: async () => { granted = false; return true; },
+  };
   window.chrome.runtime = {
     getURL: (path) => path,
     sendMessage: () => {},

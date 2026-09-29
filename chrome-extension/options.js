@@ -73,3 +73,21 @@ document.addEventListener("DOMContentLoaded", () => {
   loadOptions();
   document.getElementById("options-form").addEventListener("submit", saveOptions);
 });
+
+// The image permission is its own checkbox, outside the form's save: it
+// must be requested from the click itself (permissions.request needs the
+// user gesture), and popup.js re-checks it on every import.
+const IMAGE_ORIGINS = ["https://*/*", "http://*/*"];
+
+async function syncImagesCheckbox() {
+  const box = document.getElementById("images-allowed");
+  box.checked = !!(chrome.permissions && await chrome.permissions.contains({ origins: IMAGE_ORIGINS }));
+}
+
+document.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("images-allowed").addEventListener("change", async (e) => {
+    if (e.target.checked) e.target.checked = await chrome.permissions.request({ origins: IMAGE_ORIGINS });
+    else await chrome.permissions.remove({ origins: IMAGE_ORIGINS });
+  });
+  syncImagesCheckbox();
+});

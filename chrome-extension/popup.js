@@ -280,6 +280,73 @@ async function saveVocabulary(expression, sourceTitle) {
 const READING_POLL_MS = 3000;
 const READING_POLL_LIMIT = 100; // ~5 minutes
 
+// --- article images --------------------------------------------------------
+
+const IMAGE_ORIGINS = ["https://*/*", "http://*/*"];
+const MAX_EDGE = 1200;
+const MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const PNG_KEEP_BYTES = 500 * 1024;
+
+// imagesAllowed: image capture needs host access to every image CDN,
+// granted once from the options page. Without it the import is text-only.
+async function imagesAllowed() {
+  if (!chrome.permissions || !chrome.permissions.contains) return false;
+  return chrome.permissions.contains({ origins: IMAGE_ORIGINS });
+}
+
+async function fetchWithTimeout(url, ms) {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  try {
+    const res = await fetch(url, { credentials: "include", signal: ctl.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.blob();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+// downscale re-encodes one image: long side <= 1200 px; PNG kept when it
+// stays small (charts), else JPEG stepping down in quality until <= 2 MB.
+async function downscale(blob) {
+  const bmp = await createImageBitmap(blob);
+  const scale = Math.min(1, MAX_EDGE / Math.max(bmp.width, bmp.height));
+  const canvas = new OffscreenCanvas(Math.round(bmp.width * scale), Math.round(bmp.height * scale));
+  const ctx = canvas.getContext("2d");
+  ctx.fillStyle = "#fff"; // JPEG has no alpha
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height);
+  bmp.close();
+  if (blob.type === "image/png") {
+    const png = await canvas.convertToBlob({ type: "image/png" });
+    if (png.size < PNG_KEEP_BYTES) return png;
+  }
+  for (const quality of [0.82, 0.72, 0.62]) {
+    const jpg = await canvas.convertToBlob({ type: "image/jpeg", quality });
+    if (jpg.size <= MAX_IMAGE_BYTES) return jpg;
+  }
+  throw new Error("too large");
+}
+
+// prepareImages fetches and downscales the captured figures. A figure
+// that fails is dropped, never the import.
+async function prepareImages(figures) {
+  const ok = [];
+  let failed = 0;
+  for (const f of figures || []) {
+    try {
+      ok.push({ meta: f, blob: await downscale(await fetchWithTimeout(f.src, 10000)) });
+    } catch (err) {
+      failed++;
+      console.warn("[JLP] image skipped", f.src, String(err));
+    }
+  }
+  return { ok, failed };
+}
+
+// The "画像 n/m枚" line submitArticle records for renderEdition to append.
+let readingImageNote = "";
+
 // submitArticle runs 「JLPでKindle版を作成」 end to end: POST the captured
 // article, then follow the edition until it is finished. The server
 // decides everything — whether this text is a duplicate, when the edition
@@ -290,28 +357,48 @@ async function submitArticle(article) {
   document.getElementById("reading-title").textContent = article.title || "";
   statusEl.classList.remove("error-banner");
   statusEl.textContent = "送信中…";
+  readingImageNote = "";
   try {
     const cfg = await loadConfig();
-    const res = await jlpFetch(cfg, `/api/v1/reading/articles`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        url: article.url || "",
-        title: article.title || "",
-        source: article.source || "",
-        author: article.author || "",
-        published_at: article.published_at || "",
-        content: article.content || "",
-        selection: article.selection || "",
-        deliver: !!cfg.autoDeliver,
-      }),
+    const fields = {
+      url: article.url || "", title: article.title || "", source: article.source || "",
+      author: article.author || "", published_at: article.published_at || "",
+      content: article.content || "", selection: article.selection || "", deliver: !!cfg.autoDeliver,
+    };
+    let images = { ok: [], failed: 0 };
+    let imageNote = "";
+    if ((article.figures || []).length) {
+      if (await imagesAllowed()) {
+        statusEl.textContent = "画像を準備中…";
+        images = await prepareImages(article.figures);
+      } else {
+        imageNote = "画像は取り込まれません（オプションで許可してください）";
+      }
+    }
+    const postJSON = () => jlpFetch(cfg, `/api/v1/reading/articles`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields),
     });
+    let res;
+    if (images.ok.length) {
+      const form = new FormData();
+      form.append("metadata", JSON.stringify({ ...fields, figures: images.ok.map((x) => x.meta) }));
+      images.ok.forEach((x, i) => form.append(`image-${i}`, x.blob, `image-${i}`));
+      res = await jlpFetch(cfg, `/api/v1/reading/articles`, { method: "POST", body: form });
+      if (res.status === 400 || res.status === 413) {
+        imageNote = "画像を送れなかったため、本文のみで作成しました";
+        res = await postJSON();
+      }
+    } else {
+      res = await postJSON();
+    }
     if (!res.ok) {
       let msg = `送信に失敗しました (${res.status})`;
       try { msg = (await res.json()).error || msg; } catch (_) { /* not JSON */ }
       throw new Error(msg);
     }
     const out = await res.json();
+    const total = (article.figures || []).length;
+    readingImageNote = imageNote || (total ? `画像 ${out.figures ?? 0}/${total}枚` : "");
     document.getElementById("reading-title").textContent = out.article.title;
     renderEdition(cfg, out.edition, out.duplicate);
     if (!out.edition.terminal) await followEdition(cfg, out.edition.id);
@@ -359,6 +446,7 @@ function renderEdition(cfg, ed, duplicate) {
     line = `作成できませんでした: ${ed.last_error || ""}`;
   }
   if (latest) line += ` ${latest.status_label}${latest.last_error ? `（${latest.last_error}）` : ""}`;
+  if (readingImageNote) line += `　${readingImageNote}`;
   statusEl.textContent = line;
   statusEl.classList.toggle("error-banner", ed.status === "failed");
   progress.hidden = ed.terminal;
@@ -552,5 +640,7 @@ window.jlpPopup = {
   saveVocabulary,
   createSession,
   submitArticle,
+  prepareImages,
+  downscale,
   renderEdition,
 };
