@@ -215,6 +215,8 @@ func TestTopicForEveryAllTypesEntry(t *testing.T) {
 		event.TypeSpeechTranscribed:           "speech",
 		event.TypeContentDeleted:              "content",
 		event.TypeContentRestored:             "content",
+		event.TypeReadingEditionCreated:       "reading",
+		event.TypeReadingEditionDelivered:     "reading",
 	}
 
 	all := event.AllTypes()

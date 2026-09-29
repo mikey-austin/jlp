@@ -1,0 +1,110 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "StudyEditionV1",
+  "description": "A Japanese reading lesson built around one article: key vocabulary, grammar, close reading of difficult sentences, and review questions.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["summary_en", "summary_ja", "level", "vocabulary", "grammar", "sentence_analyses", "review"],
+  "properties": {
+    "summary_en": { "type": "string", "minLength": 1, "description": "Two or three sentences in English on what the article says." },
+    "summary_ja": { "type": "string", "minLength": 1, "description": "The same gist in plain Japanese, two or three sentences." },
+    "level": { "type": "string", "description": "Estimated JLPT difficulty of the article, e.g. N1." },
+    "vocabulary": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 25,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["expression", "reading", "meaning_en", "usage_en", "example_ja", "example_en"],
+        "properties": {
+          "expression": { "type": "string", "minLength": 1, "description": "Dictionary form exactly as it should be looked up; must appear in the article (possibly conjugated)." },
+          "reading": { "type": "string", "description": "Hiragana reading; empty if the expression is kana only." },
+          "meaning_en": { "type": "string", "minLength": 1 },
+          "usage_en": { "type": "string", "description": "Register, typical collocations or where this word is used; one sentence." },
+          "example_ja": { "type": "string", "minLength": 1, "description": "An ORIGINAL example sentence, not copied from the article." },
+          "example_en": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "grammar": {
+      "type": "array",
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["pattern", "meaning_en", "explanation_en", "from_article", "example_ja", "example_en"],
+        "properties": {
+          "pattern": { "type": "string", "minLength": 1, "description": "The construction, e.g. 〜をめぐり." },
+          "meaning_en": { "type": "string", "minLength": 1 },
+          "explanation_en": { "type": "string", "minLength": 1 },
+          "from_article": { "type": "string", "description": "The phrase from the article where it occurs, verbatim." },
+          "example_ja": { "type": "string", "minLength": 1, "description": "An original example sentence." },
+          "example_en": { "type": "string", "minLength": 1 }
+        }
+      }
+    },
+    "sentence_analyses": {
+      "type": "array",
+      "maxItems": 6,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["sentence", "translation_en", "chunks", "note_en"],
+        "properties": {
+          "sentence": { "type": "string", "minLength": 1, "description": "A difficult sentence copied verbatim from the article." },
+          "translation_en": { "type": "string", "minLength": 1 },
+          "chunks": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 12,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["text", "reading", "role_en"],
+              "properties": {
+                "text": { "type": "string", "minLength": 1, "description": "A contiguous piece of the sentence; the chunks in order reproduce the sentence." },
+                "reading": { "type": "string", "description": "Hiragana reading of the chunk if it contains kanji, else empty." },
+                "role_en": { "type": "string", "minLength": 1, "description": "The grammatical role, e.g. 'relative clause modifying 対策'." }
+              }
+            }
+          },
+          "note_en": { "type": "string", "description": "What makes this sentence hard and how to parse it." }
+        }
+      }
+    },
+    "review": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["comprehension", "vocabulary"],
+      "properties": {
+        "comprehension": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["question_ja", "answer_ja"],
+            "properties": {
+              "question_ja": { "type": "string", "minLength": 1 },
+              "answer_ja": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "vocabulary": {
+          "type": "array",
+          "maxItems": 6,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["question_ja", "answer_ja"],
+            "properties": {
+              "question_ja": { "type": "string", "minLength": 1 },
+              "answer_ja": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

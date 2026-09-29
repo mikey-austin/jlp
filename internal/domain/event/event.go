@@ -155,6 +155,21 @@ const (
 	// deletes would file the record inside the thing it is a record of.
 	TypeContentDeleted  Type = "content.deleted"
 	TypeContentRestored Type = "content.restored"
+
+	// The two 読解 (reading) pipeline events. TypeReadingEditionCreated
+	// fires once per study edition whose analysis succeeded
+	// (application/reading's worker), Subject the edition id, Evidence
+	// carrying the article id and how many vocabulary/grammar entries
+	// the lesson has. TypeReadingEditionDelivered fires once per
+	// successful Send-to-Kindle delivery. Session-less (SessionID nil),
+	// like TypeVocabularyImported: reading an article happens outside any
+	// writing session. Neither is consumed by the learner model yet —
+	// they are recorded now so the reading history exists when a later
+	// task teaches the model what "read an article about X" means; the
+	// vocabulary a learner chooses to keep from an edition already flows
+	// in through the ordinary vocabulary.looked-up path.
+	TypeReadingEditionCreated   Type = "reading.edition.created"
+	TypeReadingEditionDelivered Type = "reading.edition.delivered"
 )
 
 // LearningEvent is an immutable, append-only record of something a learner

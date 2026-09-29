@@ -43,5 +43,7 @@ func AllTypes() []Type {
 		TypeSpeechTranscribed,
 		TypeContentDeleted,
 		TypeContentRestored,
+		TypeReadingEditionCreated,
+		TypeReadingEditionDelivered,
 	}
 }

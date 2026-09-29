@@ -85,6 +85,15 @@ const (
 	// untestable through the fake.
 	schemaExampleV1 = "example.v1"
 
+	// schemaStudyEditionV1 backs internal/agent/reading (the 読解 Kindle
+	// pipeline): one fixed canned lesson, keyed purely on SchemaName, like
+	// the lesson/anki fixtures. It is written about a monetary-policy
+	// article so the /reading page and the EPUB renderer have realistic
+	// content to show offline; 金融引き締め is its first vocabulary item,
+	// which the reading tests' sample article contains, so furigana
+	// annotation is exercised end to end through the fake.
+	schemaStudyEditionV1 = "study_edition.v1"
+
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
@@ -120,6 +129,7 @@ var supportedSchemas = map[string]bool{
 	schemaConversationTurnV1: true,
 	schemaPassageV1:          true,
 	schemaExampleV1:          true,
+	schemaStudyEditionV1:     true,
 }
 
 // cannedPassage mirrors schemas/defs/passage.v1.json field-for-field.
@@ -134,6 +144,69 @@ var cannedPassage = map[string]any{
 	},
 	"choices": []string{"また行きたい", "もう行きたくない", "映画は退屈だった"},
 	"answer":  "また行きたい",
+}
+
+// cannedStudyEdition mirrors schemas/defs/study_edition.v1.json.
+var cannedStudyEdition = map[string]any{
+	"summary_en": "The central bank signalled it will keep tightening monetary policy while inflation stays high, and the government announced a new economic package to soften the impact on households.",
+	"summary_ja": "物価が高いため、中央銀行は金融引き締めを続ける考えだ。政府は家計を助ける新しい経済対策を発表した。",
+	"level":      "N1",
+	"vocabulary": []map[string]any{
+		{
+			"expression": "金融引き締め",
+			"reading":    "きんゆうひきしめ",
+			"meaning_en": "monetary tightening",
+			"usage_en":   "Standard term in economic and central-bank reporting; often with 続ける or 強化する.",
+			"example_ja": "中央銀行はインフレを抑えるため、金融引き締めを強化した。",
+			"example_en": "The central bank stepped up monetary tightening to curb inflation.",
+		},
+		{
+			"expression": "経済対策",
+			"reading":    "けいざいたいさく",
+			"meaning_en": "economic stimulus package; economic measures",
+			"usage_en":   "Government policy packages; typically 経済対策を発表する／打ち出す.",
+			"example_ja": "政府は来月、大規模な経済対策を打ち出す方針だ。",
+			"example_en": "The government plans to unveil a large economic package next month.",
+		},
+		{
+			"expression": "めぐる",
+			"reading":    "",
+			"meaning_en": "to concern; to surround (an issue)",
+			"usage_en":   "In news mostly as 〜をめぐる／〜をめぐり, introducing the topic of a dispute.",
+			"example_ja": "予算をめぐる議論が続いている。",
+			"example_en": "The debate over the budget continues.",
+		},
+	},
+	"grammar": []map[string]any{
+		{
+			"pattern":        "〜をめぐり",
+			"meaning_en":     "concerning; over (a contested issue)",
+			"explanation_en": "Written-style topic marker for an issue under debate; the 連用中止 form of 〜をめぐって.",
+			"from_article":   "新たな経済対策をめぐり",
+			"example_ja":     "新しい法案をめぐり、与野党が対立している。",
+			"example_en":     "The ruling and opposition parties are at odds over the new bill.",
+		},
+	},
+	"sentence_analyses": []map[string]any{
+		{
+			"sentence":       "政府が発表した新たな経済対策をめぐり、議論が続いている。",
+			"translation_en": "Debate continues over the new economic package the government announced.",
+			"chunks": []map[string]any{
+				{"text": "政府が発表した", "reading": "せいふがはっぴょうした", "role_en": "relative clause modifying 経済対策"},
+				{"text": "新たな経済対策をめぐり、", "reading": "あらたなけいざいたいさくをめぐり", "role_en": "topic of the debate (〜をめぐり)"},
+				{"text": "議論が続いている。", "reading": "ぎろんがつづいている", "role_en": "main clause"},
+			},
+			"note_en": "Find the noun the long clause modifies (経済対策) before reading the main clause.",
+		},
+	},
+	"review": map[string]any{
+		"comprehension": []map[string]any{
+			{"question_ja": "中央銀行はなぜ金融引き締めを続けるのですか。", "answer_ja": "物価が高い状態が続いているから。"},
+		},
+		"vocabulary": []map[string]any{
+			{"question_ja": "「経済対策」を使って文を一つ作ってください。", "answer_ja": "政府は新しい経済対策を発表した。"},
+		},
+	},
 }
 
 // cannedExample mirrors schemas/defs/example.v1.json.
@@ -420,6 +493,8 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 		return g.respond(start, req, cannedPassage)
 	case schemaExampleV1:
 		return g.respond(start, req, cannedExample)
+	case schemaStudyEditionV1:
+		return g.respond(start, req, cannedStudyEdition)
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own
