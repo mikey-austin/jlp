@@ -23,7 +23,9 @@ import (
 	"github.com/mikeyaustin/jlp/internal/ports/publishing"
 )
 
-//go:embed fonts/MPLUS1p-Bold.ttf fonts/MPLUS1p-Regular.ttf
+// The licence travels inside the binary with the fonts it covers.
+//
+//go:embed fonts/MPLUS1p-Bold.ttf fonts/MPLUS1p-Regular.ttf fonts/OFL.txt
 var fonts embed.FS
 
 // Geometry: Amazon's recommended 1:1.6, photo on the top 60%.
@@ -33,6 +35,7 @@ const (
 	PhotoHeight = 1536
 	margin      = 120
 	titleSize   = 108
+	minCrop     = 8 // smaller than this is not a picture, whatever its bytes say
 )
 
 var (
@@ -87,7 +90,15 @@ func (d *Designer) Design(_ context.Context, in publishing.CoverInput) ([]byte, 
 		if err != nil {
 			return nil, fmt.Errorf("cover: decode photo: %w", err)
 		}
-		xdraw.CatmullRom.Scale(img, top, photo, cropToFill(photo.Bounds(), top.Dx(), top.Dy()), xdraw.Src, nil)
+		crop := cropToFill(photo.Bounds(), top.Dx(), top.Dy())
+		if crop.Dx() < minCrop || crop.Dy() < minCrop {
+			// An extreme aspect ratio crops to nothing (or a pixel); treat it like an
+			// undecodable photo so the caller falls back.
+			return nil, fmt.Errorf("cover: photo %v cannot fill the cover", photo.Bounds())
+		}
+		// Over, on the paper already drawn, so transparency shows paper
+		// rather than the black JPEG makes of alpha 0.
+		xdraw.CatmullRom.Scale(img, top, photo, crop, xdraw.Over, nil)
 	} else {
 		xdraw.Draw(img, top, image.NewUniform(accent), image.Point{}, xdraw.Src)
 	}

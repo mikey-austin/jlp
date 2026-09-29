@@ -120,3 +120,43 @@ func TestWrapLinesEllipsisAndKinsoku(t *testing.T) {
 		t.Fatalf("short = %q", got)
 	}
 }
+
+func TestDesignRejectsDegeneratePhotoAspect(t *testing.T) {
+	d, _ := New()
+	for _, sz := range [][2]int{{1, 2000}, {2000, 1}} {
+		if _, err := d.Design(context.Background(), publishing.CoverInput{Title: "t", Photo: solid(t, color.RGBA{0, 0, 255, 255}, sz[0], sz[1])}); err == nil {
+			t.Fatalf("%dx%d photo must be an error so the caller falls back", sz[0], sz[1])
+		}
+	}
+}
+
+func TestDesignFlattensTransparentPhotoOntoPaper(t *testing.T) {
+	d, _ := New()
+	out, err := d.Design(context.Background(), publishing.CoverInput{Title: "t", Photo: solid(t, color.RGBA{}, 800, 600)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if img := decode(t, out); !near(img.At(Width/2, PhotoHeight/2), 0xfa, 0xf7, 0xf2) {
+		t.Fatalf("transparent photo = %v, want paper", img.At(Width/2, PhotoHeight/2))
+	}
+}
+
+func TestLicenceIsEmbeddedWithFonts(t *testing.T) {
+	b, err := fonts.ReadFile("fonts/OFL.txt")
+	if err != nil || len(b) == 0 {
+		t.Fatalf("OFL.txt not embedded: %v", err)
+	}
+}
+
+func TestWrapLinesPulledRuneMayNotStartLineEither(t *testing.T) {
+	d, _ := New()
+	face := d.titleFace
+	const n = 6
+	width := textWidth(face, strings.Repeat("日", n))
+	s := strings.Repeat("日", n-1) + "。」日日日日"
+	for _, l := range wrapLines(face, s, width, 10) {
+		if strings.ContainsRune(noBreakBefore, []rune(l)[0]) {
+			t.Fatalf("line starts with a no-break-before character: %q", l)
+		}
+	}
+}

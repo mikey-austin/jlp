@@ -22,17 +22,18 @@ func wrapLines(face font.Face, s string, width fixed.Int26_6, maxLines int) []st
 	for _, r := range strings.TrimSpace(s) {
 		next := append(append([]rune{}, cur...), r)
 		if len(cur) > 0 && textWidth(face, string(next)) > width {
-			// With a single rune there is nothing to pull down without
-			// emitting an empty line, so break normally.
-			if strings.ContainsRune(noBreakBefore, r) && len(cur) >= 2 {
-				// Pull the last character down with this one.
-				last := cur[len(cur)-1]
-				lines = append(lines, string(cur[:len(cur)-1]))
-				cur = []rune{last, r}
-			} else {
-				lines = append(lines, string(cur))
-				cur = []rune{r}
+			// A line must keep at least one rune, or we would emit an
+			// empty line; short of that, break normally.
+			carry := []rune{r}
+			head := cur
+			for len(head) >= 2 && strings.ContainsRune(noBreakBefore, carry[0]) {
+				// Pull the last character down; it may itself be one that
+				// cannot start a line ("。」"), so keep going.
+				carry = append([]rune{head[len(head)-1]}, carry...)
+				head = head[:len(head)-1]
 			}
+			lines = append(lines, string(head))
+			cur = carry
 			continue
 		}
 		cur = next
