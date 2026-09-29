@@ -15,6 +15,7 @@ import (
 	"github.com/mikeyaustin/jlp/internal/adapters/ankiconnect"
 	anthropicadapter "github.com/mikeyaustin/jlp/internal/adapters/anthropic"
 	"github.com/mikeyaustin/jlp/internal/adapters/authelia"
+	coveradapter "github.com/mikeyaustin/jlp/internal/adapters/cover"
 	epubadapter "github.com/mikeyaustin/jlp/internal/adapters/epub"
 	geminiadapter "github.com/mikeyaustin/jlp/internal/adapters/gemini"
 	httpx "github.com/mikeyaustin/jlp/internal/adapters/http"
@@ -522,6 +523,13 @@ func main() {
 			})
 			slog.Info("reading: Kindle delivery enabled", "smtp", cfg.Reading.Kindle.SMTPAddr, "tls", cfg.Reading.Kindle.TLS)
 		}
+		coverDesigner, err := coveradapter.New()
+		if err != nil {
+			// The fonts are embedded, so this is a build defect, not a
+			// runtime condition — but a missing cover must never stop
+			// the app: books go out without one.
+			slog.Error("reading: cover designer unavailable", "err", err)
+		}
 		readingSvc := appreading.NewService(appreading.Deps{
 			Repo:       postgres.NewReadingRepository(pool),
 			Recorder:   recorder,
@@ -530,6 +538,7 @@ func main() {
 			Deliverer:  kindleSender,
 			Vocabulary: vocabSvc,
 			Anki:       ankiSvc,
+			Cover:      coverDesignerOrNil(coverDesigner),
 		}, appreading.Config{
 			MaxArticleRunes: cfg.Reading.MaxArticleRunes,
 			LearnerLevel:    cfg.Reading.LearnerLevel,
@@ -748,6 +757,15 @@ func main() {
 		slog.Error("unknown command", "cmd", cmd)
 		os.Exit(2)
 	}
+}
+
+// coverDesignerOrNil keeps a nil *cover.Designer from becoming a non-nil
+// interface holding nil.
+func coverDesignerOrNil(d *coveradapter.Designer) publishing.CoverDesigner {
+	if d == nil {
+		return nil
+	}
+	return d
 }
 
 // registerTools registers every tools.Tool in ts into reg — a small
