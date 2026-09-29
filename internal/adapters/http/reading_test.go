@@ -766,3 +766,32 @@ func TestAPIReadingSubmitSelectionKeepsOnlyCoverFigure(t *testing.T) {
 		t.Fatalf("cover-only figure must not appear in the text")
 	}
 }
+
+func TestReadingFigureRouteSoftDeletedAndOutOfRangeAre404(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	meta := `{"title":"t","content":"政府は新たな経済対策をまとめた。","figures":[{"after_paragraph":0}]}`
+	out := submitFigures(t, h, meta, smallJPEG(t))
+	path := "/reading/articles/" + out.Edition.ArticleID + "/figures/0"
+	if r := get(h, path); r.Code != http.StatusOK {
+		t.Fatalf("before delete = %d", r.Code)
+	}
+	if r := get(h, "/reading/articles/"+out.Edition.ArticleID+"/figures/5"); r.Code != http.StatusNotFound {
+		t.Fatalf("ordinal past the last figure = %d, want 404", r.Code)
+	}
+	if r := readingPostForm(h, "/reading/articles/"+out.Edition.ArticleID+"/delete", nil); r.Code >= 400 {
+		t.Fatalf("delete = %d", r.Code)
+	}
+	if r := get(h, path); r.Code != http.StatusNotFound {
+		t.Fatalf("deleted article's figure = %d, want 404", r.Code)
+	}
+}
+
+func TestAPIReadingSubmitMultipartOversizeImageRejected(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	big := append(smallJPEG(t), make([]byte, reading.MaxFigureBytes+1)...)[:reading.MaxFigureBytes+1]
+	meta := `{"title":"t","content":"政府は新たな経済対策をまとめた。","figures":[{"after_paragraph":0},{"after_paragraph":0}]}`
+	out := submitFigures(t, h, meta, smallJPEG(t), big)
+	if out.Figures != 1 || out.FiguresRejected != 1 {
+		t.Fatalf("figures=%d rejected=%d, want 1/1", out.Figures, out.FiguresRejected)
+	}
+}
