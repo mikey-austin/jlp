@@ -12,7 +12,6 @@
     "vocabulary": {
       "type": "array",
       "minItems": 1,
-      "maxItems": 25,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -29,7 +28,6 @@
     },
     "grammar": {
       "type": "array",
-      "maxItems": 10,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -46,7 +44,6 @@
     },
     "sentence_analyses": {
       "type": "array",
-      "maxItems": 6,
       "items": {
         "type": "object",
         "additionalProperties": false,
@@ -57,7 +54,6 @@
           "chunks": {
             "type": "array",
             "minItems": 1,
-            "maxItems": 12,
             "items": {
               "type": "object",
               "additionalProperties": false,
@@ -80,7 +76,6 @@
       "properties": {
         "comprehension": {
           "type": "array",
-          "maxItems": 6,
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -93,7 +88,6 @@
         },
         "vocabulary": {
           "type": "array",
-          "maxItems": 6,
           "items": {
             "type": "object",
             "additionalProperties": false,

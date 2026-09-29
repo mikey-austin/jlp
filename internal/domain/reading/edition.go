@@ -104,6 +104,18 @@ type Delivery struct {
 	SentAt      *time.Time
 }
 
+// Section limits. They were maxItems in study_edition.v1 until Gemini
+// was measured rejecting the schema over them (see the gemini adapter's
+// TestStudyEditionCarriesNoMaxItems), so Normalise enforces them instead:
+// the prompt asks for fewer, and these are the backstop that keeps the
+// page and the EPUB the length they are laid out for.
+const (
+	MaxVocabulary       = 25
+	MaxGrammar          = 10
+	MaxSentenceAnalyses = 6
+	MaxReviewQuestions  = 6
+)
+
 // Lesson is a validated study_edition.v1 document, field for field. The
 // JSON tags ARE the schema's property names: adapters/http and the EPUB
 // renderer decode stored editions straight into this type, so a field
@@ -257,6 +269,14 @@ func (l *Lesson) Normalise() error {
 
 	l.Review.Comprehension = cleanQA(l.Review.Comprehension)
 	l.Review.Vocabulary = cleanQA(l.Review.Vocabulary)
+
+	// Capped after cleaning, so a discarded duplicate or blank never
+	// takes a slot, and from the front, keeping the article's order.
+	l.Vocabulary = capped(l.Vocabulary, MaxVocabulary)
+	l.Grammar = capped(l.Grammar, MaxGrammar)
+	l.SentenceAnalyses = capped(l.SentenceAnalyses, MaxSentenceAnalyses)
+	l.Review.Comprehension = capped(l.Review.Comprehension, MaxReviewQuestions)
+	l.Review.Vocabulary = capped(l.Review.Vocabulary, MaxReviewQuestions)
 	return nil
 }
 
@@ -271,4 +291,11 @@ func cleanQA(in []QA) []QA {
 		out = append(out, q)
 	}
 	return out
+}
+
+func capped[T any](s []T, n int) []T {
+	if len(s) > n {
+		return s[:n]
+	}
+	return s
 }

@@ -2,6 +2,7 @@ package reading
 
 import (
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -177,5 +178,43 @@ func equalSegs(a, b []Segment) bool {
 func TestRetryDelayGrows(t *testing.T) {
 	if RetryDelay(1) >= RetryDelay(2) || RetryDelay(2) >= RetryDelay(3) {
 		t.Fatal("backoff must grow")
+	}
+}
+
+// The schema carries no maxItems (Gemini rejects study_edition.v1 with
+// them — see the gemini adapter's tests), so Normalise is where a lesson
+// is held to the sizes the page and the EPUB are laid out for.
+func TestLessonNormaliseCapsSections(t *testing.T) {
+	var l Lesson
+	for i := 0; i < 40; i++ {
+		n := strconv.Itoa(i)
+		l.Vocabulary = append(l.Vocabulary, VocabularyItem{Expression: "語" + n, MeaningEN: "word " + n})
+		l.Grammar = append(l.Grammar, GrammarPoint{Pattern: "〜" + n})
+		l.SentenceAnalyses = append(l.SentenceAnalyses, SentenceAnalysis{Sentence: "文" + n + "。"})
+		l.Review.Comprehension = append(l.Review.Comprehension, QA{QuestionJA: "問" + n, AnswerJA: "答"})
+		l.Review.Vocabulary = append(l.Review.Vocabulary, QA{QuestionJA: "語問" + n, AnswerJA: "答"})
+	}
+	var chunks []Chunk
+	for i := 0; i < 20; i++ {
+		chunks = append(chunks, Chunk{Text: "片" + strconv.Itoa(i)})
+	}
+	l.SentenceAnalyses[0].Chunks = chunks
+	if err := l.Normalise(); err != nil {
+		t.Fatal(err)
+	}
+	got := []int{len(l.Vocabulary), len(l.Grammar), len(l.SentenceAnalyses), len(l.Review.Comprehension), len(l.Review.Vocabulary)}
+	want := []int{MaxVocabulary, MaxGrammar, MaxSentenceAnalyses, MaxReviewQuestions, MaxReviewQuestions}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("section sizes = %v, want %v", got, want)
+		}
+	}
+	if l.Vocabulary[0].Expression != "語0" || l.Vocabulary[MaxVocabulary-1].Expression != "語"+strconv.Itoa(MaxVocabulary-1) {
+		t.Fatal("capping must keep the first items, in the model's (article) order")
+	}
+	// Cutting chunks would break "the chunks in order reproduce the
+	// sentence", so a long sentence keeps all of them.
+	if len(l.SentenceAnalyses[0].Chunks) != 20 {
+		t.Fatalf("chunks = %d, want all 20", len(l.SentenceAnalyses[0].Chunks))
 	}
 }

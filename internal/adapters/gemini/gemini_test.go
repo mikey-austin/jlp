@@ -159,6 +159,17 @@ func TestTranslateAcceptsEverySchemaExceptExerciseV1(t *testing.T) {
 	}
 }
 
+// TestStudyEditionCarriesNoMaxItems pins a measured fact (2026-09-29,
+// gemini-3-flash-preview): study_edition.v1 with its six maxItems bounds
+// is rejected with a bare 400 INVALID_ARGUMENT, and the same schema
+// without them — minItems kept — is accepted. Only maxItems mattered;
+// the limits live in domain/reading's Lesson.Normalise instead.
+func TestStudyEditionCarriesNoMaxItems(t *testing.T) {
+	if n := strings.Count(string(realSchema(t, "study_edition.v1")), `"maxItems"`); n != 0 {
+		t.Fatalf("study_edition.v1 has %d maxItems; Gemini answers the whole request with a 400", n)
+	}
+}
+
 // TestTranslateIgnoresPropertyNamesThatLookLikeKeywords: a property
 // legitimately CALLED "if" or "additionalProperties" is data, not a
 // schema keyword. Walking blindly would both mangle the schema and
