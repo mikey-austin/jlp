@@ -81,6 +81,10 @@ type Draft struct {
 	Author      string
 	PublishedAt *time.Time
 	Content     string
+	// Figures are the article's images. They never reach NewArticle's
+	// text or ContentHash: an article is the same article with or
+	// without its pictures.
+	Figures []FigureDraft
 }
 
 // NewArticle validates d and builds the Article it describes. Content is
