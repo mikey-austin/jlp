@@ -1,12 +1,14 @@
 -- name: UpsertReadingArticle :one
 -- Idempotent ingestion keyed on (identity_id, content_hash). A repeat
--- submission returns the EXISTING row untouched except for clearing a
--- soft delete — sending an article you deleted is a clear signal you
--- want it back. inserted is true only for a genuinely new row (xmax = 0
--- is postgres' marker for "this row version was inserted, not updated").
+-- submission returns the EXISTING live row untouched; the no-op update
+-- exists only so RETURNING yields it. A soft-deleted match never reaches
+-- here: the repository purges it first, so re-importing a deleted
+-- article starts fresh instead of resurrecting the old one. inserted is
+-- true only for a genuinely new row (xmax = 0 is postgres' marker for
+-- "this row version was inserted, not updated").
 INSERT INTO reading_articles (id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-ON CONFLICT (identity_id, content_hash) DO UPDATE SET deleted_at = NULL
+ON CONFLICT (identity_id, content_hash) DO UPDATE SET identity_id = EXCLUDED.identity_id
 RETURNING id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, (xmax = 0)::boolean AS inserted;
 
 -- name: GetReadingArticle :one

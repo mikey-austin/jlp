@@ -129,7 +129,7 @@ func TestReadingArticleUpsertIsIdempotentAndScoped(t *testing.T) {
 		t.Fatalf("cross-identity read: %v", err)
 	}
 
-	// Soft delete hides; re-submitting restores.
+	// Soft delete hides.
 	if err := r.SoftDeleteArticle(ctx, me, a.ID, now); err != nil {
 		t.Fatal(err)
 	}
@@ -139,11 +139,67 @@ func TestReadingArticleUpsertIsIdempotentAndScoped(t *testing.T) {
 	if err := r.SoftDeleteArticle(ctx, other, a.ID, now); !errors.Is(err, storage.ErrNotFound) {
 		t.Fatalf("cross-identity delete: %v", err)
 	}
-	if _, _, err := r.UpsertArticle(ctx, testArticle(t, me, body, now)); err != nil {
+	// Undo is RestoreArticle's job; a re-import does not bring it back.
+	if err := r.RestoreArticle(ctx, me, a.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.GetArticle(ctx, me, a.ID); err != nil {
-		t.Fatalf("resubmission did not restore: %v", err)
+		t.Fatalf("restore: %v", err)
+	}
+}
+
+// A deleted article stays deleted: importing it again purges the old
+// article with everything hanging off it and inserts a new one.
+func TestReadingReimportOfDeletedArticleStartsFresh(t *testing.T) {
+	r, me, _ := readingTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Add(-time.Hour).Truncate(time.Microsecond)
+	body := "財務省は来年度の予算案を発表した。" + uuid.NewString()
+
+	old, _, err := r.UpsertArticle(ctx, testArticle(t, me, body, now))
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := testEdition(me, old.ID, now, true)
+	if err := r.InsertEdition(ctx, e); err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := r.AttachFigures(ctx, me, old.ID, []reading.Figure{{Ordinal: 0, MediaType: "image/png", Width: 1, Height: 1, SHA256: "x", Data: []byte{1}}}); err != nil || !ok {
+		t.Fatalf("attach: %v %v", ok, err)
+	}
+	if _, _, err := r.QueueDelivery(ctx, reading.Delivery{ID: uuid.NewString(), EditionID: e.ID, IdentityID: me, Destination: "k@example.com", CreatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SoftDeleteArticle(ctx, me, old.ID, now); err != nil {
+		t.Fatal(err)
+	}
+
+	fresh, created, err := r.UpsertArticle(ctx, testArticle(t, me, body, now))
+	if err != nil || !created || fresh.ID == old.ID {
+		t.Fatalf("re-import: created=%v id=%s (old %s) err=%v", created, fresh.ID, old.ID, err)
+	}
+	if _, err := r.GetEdition(ctx, me, e.ID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("old edition: %v", err)
+	}
+	if figs, err := r.ListFigures(ctx, me, old.ID); err != nil || len(figs) != 0 {
+		t.Fatalf("old figures: %v %v", figs, err)
+	}
+	for _, c := range []struct{ query, id string }{
+		{"SELECT count(*) FROM reading_deliveries WHERE edition_id = $1", e.ID},
+		{"SELECT count(*) FROM reading_editions WHERE article_id = $1", old.ID},
+		{"SELECT count(*) FROM reading_article_figures WHERE article_id = $1", old.ID},
+		{"SELECT count(*) FROM reading_articles WHERE id = $1", old.ID},
+	} {
+		var n int
+		if err := r.pool.QueryRow(ctx, c.query, c.id).Scan(&n); err != nil || n != 0 {
+			t.Fatalf("%s = %d, %v", c.query, n, err)
+		}
+	}
+
+	// A live duplicate is still just the existing row.
+	dup, created, err := r.UpsertArticle(ctx, testArticle(t, me, body, now))
+	if err != nil || created || dup.ID != fresh.ID {
+		t.Fatalf("live duplicate: created=%v id=%s (want %s) err=%v", created, dup.ID, fresh.ID, err)
 	}
 }
 

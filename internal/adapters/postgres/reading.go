@@ -63,7 +63,18 @@ func (r *ReadingRepository) UpsertArticle(ctx context.Context, a reading.Article
 	if err != nil {
 		return reading.Article{}, false, err
 	}
-	row, err := r.q.UpsertReadingArticle(ctx, sqlcgen.UpsertReadingArticleParams{
+	// One transaction: purging the deleted match and inserting its
+	// replacement must not be seen half-done (the unique index would
+	// otherwise resurrect the old row, or a failed insert lose both).
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return reading.Article{}, false, err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := purgeDeletedArticle(ctx, tx, string(a.IdentityID), a.ContentHash); err != nil {
+		return reading.Article{}, false, err
+	}
+	row, err := r.q.WithTx(tx).UpsertReadingArticle(ctx, sqlcgen.UpsertReadingArticleParams{
 		ID:          id,
 		IdentityID:  string(a.IdentityID),
 		SourceUrl:   a.SourceURL,
@@ -78,8 +89,38 @@ func (r *ReadingRepository) UpsertArticle(ctx context.Context, a reading.Article
 	if err != nil {
 		return reading.Article{}, false, err
 	}
+	if err := tx.Commit(ctx); err != nil {
+		return reading.Article{}, false, err
+	}
 	stored, err := articleFrom(row.ID, row.IdentityID, row.SourceUrl, row.SourceName, row.Title, row.Author, row.PublishedAt, row.Paragraphs, row.ContentHash, row.CreatedAt)
 	return stored, row.Inserted, err
+}
+
+// purgeDeletedArticle removes a soft-deleted article matching
+// (identity, hash) together with its editions, their deliveries and its
+// figures, so a re-import of deleted text is a new article with a new
+// edition rather than the old one coming back. A live match is left
+// alone. Undo is RestoreArticle's job and never reaches here.
+func purgeDeletedArticle(ctx context.Context, tx pgx.Tx, identity, hash string) error {
+	var id pgtype.UUID
+	err := tx.QueryRow(ctx, `SELECT id FROM reading_articles WHERE identity_id = $1 AND content_hash = $2 AND deleted_at IS NOT NULL`, identity, hash).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	for _, stmt := range []string{
+		`DELETE FROM reading_deliveries WHERE edition_id IN (SELECT id FROM reading_editions WHERE article_id = $1)`,
+		`DELETE FROM reading_editions WHERE article_id = $1`,
+		`DELETE FROM reading_article_figures WHERE article_id = $1`,
+		`DELETE FROM reading_articles WHERE id = $1`,
+	} {
+		if _, err := tx.Exec(ctx, stmt, id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *ReadingRepository) GetArticle(ctx context.Context, identity learner.IdentityID, id string) (reading.Article, error) {

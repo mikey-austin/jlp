@@ -66,8 +66,25 @@ func (m *fakeReadingRepo) UpsertArticle(_ context.Context, a reading.Article) (r
 	defer m.mu.Unlock()
 	for _, x := range m.articles {
 		if x.IdentityID == a.IdentityID && x.ContentHash == a.ContentHash {
+			if !m.deleted[x.ID] {
+				return *x, false, nil
+			}
+			// A deleted match is purged with everything hanging off it.
+			for eid, e := range m.editions {
+				if e.ArticleID != x.ID {
+					continue
+				}
+				for did, d := range m.deliveries {
+					if d.EditionID == eid {
+						delete(m.deliveries, did)
+					}
+				}
+				delete(m.editions, eid)
+			}
+			delete(m.figures, x.ID)
 			delete(m.deleted, x.ID)
-			return *x, false, nil
+			delete(m.articles, x.ID)
+			break
 		}
 	}
 	c := a

@@ -69,8 +69,25 @@ func (m *memRepo) UpsertArticle(_ context.Context, a reading.Article) (reading.A
 	defer m.mu.Unlock()
 	for _, x := range m.articles {
 		if x.IdentityID == a.IdentityID && x.ContentHash == a.ContentHash {
+			if !m.deleted[x.ID] {
+				return *x, false, nil
+			}
+			// A deleted match is purged with everything hanging off it.
+			for eid, e := range m.editions {
+				if e.ArticleID != x.ID {
+					continue
+				}
+				for did, d := range m.deliveries {
+					if d.EditionID == eid {
+						delete(m.deliveries, did)
+					}
+				}
+				delete(m.editions, eid)
+			}
+			delete(m.figures, x.ID)
 			delete(m.deleted, x.ID)
-			return *x, false, nil
+			delete(m.articles, x.ID)
+			break
 		}
 	}
 	c := a
@@ -836,6 +853,29 @@ func TestDeleteHidesAndRestoreBringsBack(t *testing.T) {
 	}
 	if h.events.count(event.TypeContentDeleted) != 1 || h.events.count(event.TypeContentRestored) != 1 {
 		t.Fatal("content.deleted/restored not recorded")
+	}
+}
+
+// Delete is undoable (Restore), but re-importing a deleted article is
+// not an undo: it starts over, with a fresh article and edition, and the
+// deleted ones are gone for good.
+func TestReimportingADeletedArticleStartsFresh(t *testing.T) {
+	h := newHarness(t, false)
+	ctx := context.Background()
+	first := h.submit(t, appreading.SubmitOptions{})
+	h.svc.Drain(ctx)
+	if err := h.svc.Delete(ctx, me, first.Article.ID); err != nil {
+		t.Fatal(err)
+	}
+	again := h.submit(t, appreading.SubmitOptions{})
+	if again.Duplicate || again.Edition.ID == first.Edition.ID || again.Article.ID == first.Article.ID {
+		t.Fatalf("re-import = duplicate %v, article %s (was %s), edition %s (was %s)", again.Duplicate, again.Article.ID, first.Article.ID, again.Edition.ID, first.Edition.ID)
+	}
+	if list, _ := h.svc.List(ctx, me); len(list) != 1 {
+		t.Fatalf("list = %+v", list)
+	}
+	if _, err := h.repo.GetEdition(ctx, me, first.Edition.ID); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("deleted edition survived a re-import: %v", err)
 	}
 }
 
