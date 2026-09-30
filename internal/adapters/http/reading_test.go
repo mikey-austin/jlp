@@ -1051,7 +1051,7 @@ func TestReadingDetailKindleDeliveryStates(t *testing.T) {
 	if rec := readingPostForm(h, manual+"/deliver", nil); rec.Code != http.StatusSeeOther {
 		t.Fatalf("deliver = %d", rec.Code)
 	}
-	check("sending", get(h, manual).Body.String(), []string{sending, "disabled"}, []string{auto, sent, again})
+	check("sending", get(h, manual).Body.String(), []string{sending, `<button type="submit" class="btn" disabled>Kindleに送信</button>`}, []string{auto, sent, again})
 	svc.Drain(context.Background())
 	check("sent", get(h, manual).Body.String(), []string{sent, again}, []string{sending, auto})
 }

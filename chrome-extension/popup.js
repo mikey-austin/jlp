@@ -375,6 +375,24 @@ async function followEdition(cfg, id) {
   return null;
 }
 
+// sentTime formats an ISO time as the web page does: YYYY-MM-DD HH:MM, local.
+function sentTime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+// deliveryLine words the newest Kindle delivery for the status line.
+function deliveryLine(dl) {
+  if (dl.status === "pending" || dl.status === "sending") return "Kindleに送信中…";
+  if (dl.status === "sent") {
+    const t = dl.sent_at ? sentTime(dl.sent_at) : "";
+    return `Kindleに送信済み${t ? `（${t}）` : ""}`;
+  }
+  return `${dl.status_label}${dl.last_error ? `（${dl.last_error}）` : ""}`;
+}
+
 // renderEdition is a pure render of the server's edition DTO.
 function renderEdition(cfg, ed, duplicate) {
   const statusEl = document.getElementById("reading-status");
@@ -391,9 +409,8 @@ function renderEdition(cfg, ed, duplicate) {
   } else if (ed.status === "failed") {
     line = `作成できませんでした: ${ed.last_error || ""}`;
   }
-  const autoPending = ed.deliver_when_ready && ed.delivery_enabled && !latest && ed.status !== "failed";
-  if (autoPending) line += " 完成したらKindleに自動で送ります";
-  if (latest) line += ` ${latest.status_label}${latest.last_error ? `（${latest.last_error}）` : ""}`;
+  if (ed.deliver_when_ready && ed.delivery_enabled && !ed.terminal && !latest) line += "　完成したらKindleに自動で送ります";
+  if (latest) line += `　${deliveryLine(latest)}`;
   if (readingImageNote) line += `　${readingImageNote}`;
   statusEl.textContent = line;
   statusEl.classList.toggle("error-banner", ed.status === "failed");
