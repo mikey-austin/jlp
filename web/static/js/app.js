@@ -527,6 +527,15 @@ document.addEventListener("click", function (evt) {
   });
 })();
 
+// Prevent Enter in fields with data-no-enter-submit from submitting the
+// form, while still allowing IME composition (event.isComposing === true)
+// to complete normally.
+document.addEventListener("keydown", function (evt) {
+  if (evt.key === "Enter" && !evt.isComposing && evt.target.matches("[data-no-enter-submit]")) {
+    evt.preventDefault();
+  }
+});
+
 // The 練習 controls that must travel with every request.
 //
 // The adapter select and the drill-type checkboxes live OUTSIDE

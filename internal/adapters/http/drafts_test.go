@@ -285,6 +285,15 @@ func TestDraftTitleIsClipped(t *testing.T) {
 	}
 }
 
+func TestDraftTitleNoEnterSubmit(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	a := addPart(t, h, "https://x.jp/1", "政府は新たな経済対策をまとめた。")
+	body := get(h, a.ReviewURL).Body.String()
+	if !strings.Contains(body, `data-no-enter-submit`) {
+		t.Fatal("title input lacks data-no-enter-submit attribute")
+	}
+}
+
 func TestDraftHTMXOnGoneDraftRedirects(t *testing.T) {
 	h, _, _ := readingTestServer(t, false)
 	a := addPart(t, h, "https://x.jp/1", "政府は新たな経済対策をまとめた。")

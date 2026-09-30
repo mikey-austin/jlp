@@ -9,7 +9,7 @@
 
   <label class="field">タイトル
     <input class="input" type="text" name="title" form="draft-send-form" value="{{.DraftTitle}}" placeholder="空欄なら本文の冒頭" lang="ja"
-           hx-post="/reading/drafts/{{.Draft.ID}}/title" hx-trigger="change" hx-swap="none">
+           hx-post="/reading/drafts/{{.Draft.ID}}/title" hx-trigger="change" hx-swap="none" data-no-enter-submit>
   </label>
 
   {{template "reading_draft_summary" .Status}}
