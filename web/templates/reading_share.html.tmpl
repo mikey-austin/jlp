@@ -1,6 +1,11 @@
 {{define "content"}}<section class="reading-capture">
   <h1>読解に送る</h1>
   {{if .WorkerMissing}}<p class="card">共有を受け取れませんでした。JLPアプリを一度開いてから、もう一度共有してください。</p>
-  {{else}}<p id="share-status" class="hint">共有された記事を送信しています…</p>{{end}}
+  {{else}}<p id="share-status" class="hint">共有された内容を読み込んでいます…</p>
+  <div id="share-card" class="card" hidden>
+    <p class="reading-title" id="share-title"></p>
+    <p class="hint" id="share-meta"></p>
+    <button type="button" class="btn" id="share-send">作成してKindleに送る</button>
+  </div>{{end}}
 </section>
 {{if not .WorkerMissing}}<script src="{{asset "/static/js/reading-share.js"}}"></script>{{end}}{{end}}

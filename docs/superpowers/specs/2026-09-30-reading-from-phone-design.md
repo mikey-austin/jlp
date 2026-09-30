@@ -82,9 +82,14 @@ POST with the share page and a message asking to reopen JLP and share
 again.
 
 **Share page.** `/reading/share` reads and deletes the stored entry and
-submits at once — an Android share is already a deliberate act by the
-learner — as text-only JSON with `deliver: true`, then goes to
-`/reading/{edition}`.
+shows a confirm card like the capture page's — title, character count,
+the source URL if any, a note that it is text only — and submits only on
+the learner's tap of 「作成してKindleに送る」 (text-only JSON with
+`deliver: true`, then `/reading/{edition}`). Ruling (final review): the
+worker parks *any* POST to `/reading/share`, including a hostile
+cross-site one that bypasses the server's CSRF check, so arriving at the
+page proves no intent; the tap is what keeps "a hostile page cannot
+spend model calls or mail the Kindle" true.
 
 - A trailing line that is only a URL becomes the source URL; the title
   is the shared `title`, else the first line (clipped to 80 runes).
@@ -94,9 +99,10 @@ learner — as text-only JSON with `deliver: true`, then goes to
 
 ## Server changes
 
-- `Options.PublicURL` (from `APP_SERVER_BASEURL`) so the bookmarklet
-  names the right JLP; if empty, derived from the request
-  (`X-Forwarded-Proto`, else TLS, and `Host`).
+- The bookmarklet's origin is derived from the request alone (scheme
+  from the first `X-Forwarded-Proto` value if `http`/`https`, else TLS,
+  and `Host`). There is no `PublicURL` option: `server.baseurl` has a
+  dev default that is wrong for every other deployment.
 - `GET /settings/phone`, `GET /reading/capture`, `GET` and
   `POST /reading/share` — all behind the normal session login.
 - `GET /static/ext/{article.js|imaging.js}` serving the embedded

@@ -41,7 +41,7 @@
     const figs = (article.figures || []).slice(0, 12);
     document.getElementById("capture-title").textContent = article.title;
     document.getElementById("capture-meta").textContent =
-      `${article.source || ""}　${Array.from(article.content).length}字　画像 ${figs.length}枚`;
+      `${article.source || ""}　${Array.from(article.content).length}字　画像 最大${figs.length}枚`;
     status.textContent = "";
     help.hidden = true; // a late article can arrive after the give-up message
     card.hidden = false;

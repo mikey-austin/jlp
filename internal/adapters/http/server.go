@@ -30,11 +30,7 @@ import (
 )
 
 type Options struct {
-	Addr string
-	// PublicURL is where the learner's phone reaches this server (the
-	// configured base URL). The bookmarklet embeds it; empty means derive
-	// it from the request.
-	PublicURL  string
+	Addr       string
 	Auth       auth.Authenticator
 	Identities storage.IdentityRepository
 	// APITokens authenticates non-browser clients on /api/v1 and /a2a

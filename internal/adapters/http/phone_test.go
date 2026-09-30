@@ -1,6 +1,7 @@
 package httpx
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -67,17 +68,31 @@ func TestSettingsPhonePageShowsBookmarklet(t *testing.T) {
 	}
 }
 
-func TestPublicOriginPrefersConfiguredURL(t *testing.T) {
-	s := &Server{opts: Options{PublicURL: "https://jlp.lan.example/"}}
-	r := httptest.NewRequest("GET", "http://other/settings/phone", nil)
-	if got := s.publicOrigin(r); got != "https://jlp.lan.example" {
-		t.Fatalf("got %q", got)
-	}
-	s.opts.PublicURL = ""
-	r.Header.Set("X-Forwarded-Proto", "https")
-	r.Host = "jlp.fromhost.example"
-	if got := s.publicOrigin(r); got != "https://jlp.fromhost.example" {
-		t.Fatalf("got %q", got)
+func TestPublicOriginComesFromTheRequest(t *testing.T) {
+	s := &Server{}
+	for _, c := range []struct {
+		name, host, xfp string
+		tls             bool
+		want            string
+	}{
+		{"plain", "localhost:28080", "", false, "http://localhost:28080"},
+		{"tls", "jlp.example", "", true, "https://jlp.example"},
+		{"xfp", "jlp.example", "https", false, "https://jlp.example"},
+		{"xfp multi-value", "jlp.example", "https, http", false, "https://jlp.example"},
+		{"xfp junk", "jlp.example", "javascript", false, "http://jlp.example"},
+		{"xfp junk with tls", "jlp.example", "gopher", true, "https://jlp.example"},
+	} {
+		r := httptest.NewRequest("GET", "http://ignored/settings/phone", nil)
+		r.Host = c.host
+		if c.xfp != "" {
+			r.Header.Set("X-Forwarded-Proto", c.xfp)
+		}
+		if c.tls {
+			r.TLS = &tls.ConnectionState{}
+		}
+		if got := s.publicOrigin(r); got != c.want {
+			t.Errorf("%s: got %q, want %q", c.name, got, c.want)
+		}
 	}
 }
 
@@ -126,6 +141,15 @@ func TestReadingSharePages(t *testing.T) {
 	h, _, _ := readingTestServer(t, false)
 	if rec := get(h, "/reading/share?pending=x"); rec.Code != 200 || !strings.Contains(rec.Body.String(), "reading-share.") {
 		t.Fatalf("GET /reading/share: %d", rec.Code)
+	} else if !strings.Contains(rec.Body.String(), `id="share-send"`) {
+		// A cross-site POST can park an entry via the worker, so the page
+		// must wait for a tap instead of submitting on load.
+		t.Fatalf("share page has no confirm button")
+	}
+	if js, err := os.ReadFile(repoPath("web", "static", "js", "reading-share.js")); err != nil {
+		t.Fatal(err)
+	} else if !strings.Contains(string(js), `getElementById("share-send").addEventListener("click"`) {
+		t.Fatalf("reading-share.js must submit from the confirm tap only")
 	}
 
 	form := url.Values{"title": {"共有記事"}, "text": {"本文です。"}, "url": {"https://example.test/a"}}

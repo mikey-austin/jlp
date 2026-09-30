@@ -623,7 +623,6 @@ func main() {
 		}
 		srv := httpx.NewServer(httpx.Options{
 			Addr:       fmt.Sprintf(":%d", cfg.Server.Port),
-			PublicURL:  cfg.Server.BaseURL,
 			Auth:       authn,
 			Identities: identities,
 			APITokens:  apiTokens,

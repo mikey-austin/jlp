@@ -37,15 +37,19 @@ func bookmarklet(origin string) string {
 	return "javascript:" + url.PathEscape(js)
 }
 
+// publicOrigin is the origin the learner's browser used to reach us. It
+// comes from the request alone: a configured base URL has a dev default
+// that is wrong for every other deployment, and the bookmarklet's
+// origin check fails silently when it is.
 func (s *Server) publicOrigin(r *http.Request) string {
-	if u := strings.TrimRight(s.opts.PublicURL, "/"); u != "" {
-		return u
-	}
 	scheme := "http"
-	if p := r.Header.Get("X-Forwarded-Proto"); p != "" {
-		scheme = p
-	} else if r.TLS != nil {
+	if r.TLS != nil {
 		scheme = "https"
+	}
+	// A proxy chain may append values; the first is the client-facing one.
+	first, _, _ := strings.Cut(r.Header.Get("X-Forwarded-Proto"), ",")
+	if p := strings.TrimSpace(first); p == "http" || p == "https" {
+		scheme = p
 	}
 	return scheme + "://" + r.Host
 }
