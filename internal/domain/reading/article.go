@@ -56,7 +56,8 @@ var (
 	ErrTranslationMismatch = errors.New("reading: translation does not match the original paragraphs")
 )
 
-// Article is one piece of Japanese text the learner chose to study.
+// Article is one piece of text the learner chose to study. It holds
+// Japanese, or the original foreign text until the worker translates it.
 // Paragraphs is the body after normalisation (see NormaliseParagraphs);
 // ContentHash is a SHA-256 over those paragraphs, and is what makes
 // ingestion idempotent: the same identity submitting the same text twice
@@ -285,7 +286,8 @@ func collapseSpace(s string) string {
 
 // looksJapanese requires at least a fifth of the letters to be kana or
 // kanji. It decides whether an article is studied as it is or translated
-// first, and is not a language detector: mixed articles full of English company names pass easily.
+// first, and is not a language detector: mixed articles full of English
+// company names pass easily.
 func looksJapanese(paras []string) bool {
 	ja, letters := 0, 0
 	for _, p := range paras {

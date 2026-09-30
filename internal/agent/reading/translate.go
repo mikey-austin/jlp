@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/mikeyaustin/jlp/internal/agent/aiutil"
@@ -32,8 +33,20 @@ const (
 )
 
 // echoedNumber matches the "[3] " paragraph number a model may copy from
-// the numbered input into its output.
-var echoedNumber = regexp.MustCompile(`^\s*\[\d+\]\s*`)
+// the numbered input into its output. Only paragraph i's own number is
+// stripped (see stripOwnNumber): a genuine leading citation like "[5]"
+// belongs to the text.
+var echoedNumber = regexp.MustCompile(`^\s*\[(\d+)\]\s*`)
+
+// stripOwnNumber removes the leading "[n]" from paragraph p only when n
+// is the paragraph's own 1-based number.
+func stripOwnNumber(p string, n int) string {
+	m := echoedNumber.FindStringSubmatch(p)
+	if m == nil || m[1] != strconv.Itoa(n) {
+		return p
+	}
+	return p[len(m[0]):]
+}
 
 // Translator turns a non-Japanese article into Japanese, paragraph for
 // paragraph, so the lesson agent can work from Japanese text.
@@ -123,11 +136,11 @@ func (t *Translator) Translate(ctx context.Context, identity learner.IdentityID,
 		}
 		tr := domain.Translation{
 			SourceLanguage: strings.TrimSpace(doc.SourceLanguage),
-			Title:          strings.TrimSpace(echoedNumber.ReplaceAllString(doc.Title, "")),
+			Title:          strings.TrimSpace(doc.Title),
 			Paragraphs:     make([]string, len(doc.Paragraphs)),
 		}
 		for i, p := range doc.Paragraphs {
-			tr.Paragraphs[i] = echoedNumber.ReplaceAllString(p, "")
+			tr.Paragraphs[i] = stripOwnNumber(p, i+1)
 		}
 		if tr.SourceLanguage == "" {
 			tr.SourceLanguage = unknownLanguage

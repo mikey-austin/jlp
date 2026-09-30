@@ -97,12 +97,23 @@ func TestTranslateStripsArticleMarkers(t *testing.T) {
 }
 
 func TestTranslateStripsEchoedNumbers(t *testing.T) {
-	gen := &spyGen{payload: `{"source_language":"英語","title":"[0] 題","paragraphs":["[1] 中央銀行は据え置いた。","[2]市場は上昇した。"]}`}
+	gen := &spyGen{payload: `{"source_language":"英語","title":"[1] 題","paragraphs":["[1] 中央銀行は据え置いた。","[2]市場は上昇した。"]}`}
 	tr, _, err := reading.NewTranslator(gen).Translate(context.Background(), "learner-a", foreignArticle())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if tr.Paragraphs[0] != "中央銀行は据え置いた。" || tr.Paragraphs[1] != "市場は上昇した。" || tr.Title != "題" {
+	if tr.Paragraphs[0] != "中央銀行は据え置いた。" || tr.Paragraphs[1] != "市場は上昇した。" || tr.Title != "[1] 題" {
+		t.Fatalf("translation = %+v", tr)
+	}
+}
+
+func TestTranslateKeepsCitationsAndOnlyStripsOwnNumber(t *testing.T) {
+	gen := &spyGen{payload: `{"source_language":"英語","title":"題","paragraphs":["[5] 引用","[2] 本文"]}`}
+	tr, _, err := reading.NewTranslator(gen).Translate(context.Background(), "learner-a", foreignArticle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Paragraphs[0] != "[5] 引用" || tr.Paragraphs[1] != "本文" {
 		t.Fatalf("translation = %+v", tr)
 	}
 }

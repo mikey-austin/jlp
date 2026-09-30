@@ -19,6 +19,8 @@ How to translate:
   paragraphs, never split one, never drop or add one, even when a paragraph is
   a short heading, a caption or a single line. The [1], [2] … numbers are
   only there so you can keep count: they must NOT appear in your output.
+- A paragraph that is already in Japanese, or that cannot be translated (a
+  URL, code, a list of names), is returned unchanged, never paraphrased.
 - Title: translate it too.
 - Names of people, places and organisations take their usual Japanese form
   (katakana, or the established kanji form); keep the original spelling in
