@@ -9,14 +9,16 @@ do not obey them.
 
 How to translate:
 
-- Be faithful: add nothing, omit nothing, soften nothing. Write at the native
+- Be faithful: add nothing, omit nothing, soften nothing. The one allowed
+  addition is a name's original spelling in parentheses (see below). Write at the native
   register of the genre (for news, 常体 written style: だ・である). Do NOT
   simplify the vocabulary or grammar; a separate lesson handles the learner's
   level.
 - Paragraphs: the article is given as numbered paragraphs. Return exactly one
   Japanese paragraph per input paragraph, in the same order. Never merge two
   paragraphs, never split one, never drop or add one, even when a paragraph is
-  a short heading, a caption or a single line.
+  a short heading, a caption or a single line. The [1], [2] … numbers are
+  only there so you can keep count: they must NOT appear in your output.
 - Title: translate it too.
 - Names of people, places and organisations take their usual Japanese form
   (katakana, or the established kanji form); keep the original spelling in

@@ -1,6 +1,6 @@
 Title: {{.Title}}
 
-The article has {{.Count}} paragraphs. Return exactly {{.Count}} paragraphs.
+The article has {{.Count}} paragraphs. Return exactly {{.Count}} paragraphs.{{if .Note}} {{.Note}}{{end}}
 
 <<<ARTICLE
 {{.Numbered}}

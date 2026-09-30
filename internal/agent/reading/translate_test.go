@@ -95,3 +95,37 @@ func TestTranslateStripsArticleMarkers(t *testing.T) {
 		t.Fatalf("markers not neutralised:\n%s", gen.req.User)
 	}
 }
+
+func TestTranslateStripsEchoedNumbers(t *testing.T) {
+	gen := &spyGen{payload: `{"source_language":"英語","title":"[0] 題","paragraphs":["[1] 中央銀行は据え置いた。","[2]市場は上昇した。"]}`}
+	tr, _, err := reading.NewTranslator(gen).Translate(context.Background(), "learner-a", foreignArticle())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if tr.Paragraphs[0] != "中央銀行は据え置いた。" || tr.Paragraphs[1] != "市場は上昇した。" || tr.Title != "題" {
+		t.Fatalf("translation = %+v", tr)
+	}
+}
+
+type captureGen struct {
+	seqGen
+	users []string
+}
+
+func (c *captureGen) GenerateStructured(ctx context.Context, r ai.StructuredRequest) (ai.StructuredResponse, error) {
+	c.users = append(c.users, r.User)
+	return c.seqGen.GenerateStructured(ctx, r)
+}
+
+func TestTranslateRetryNamesTheMiscount(t *testing.T) {
+	gen := &captureGen{seqGen: seqGen{payloads: []string{
+		`{"source_language":"英語","title":"t","paragraphs":["一つだけ。"]}`,
+		`{"source_language":"英語","title":"t","paragraphs":["一。","二。"]}`,
+	}}}
+	if _, _, err := reading.NewTranslator(gen).Translate(context.Background(), "learner-a", foreignArticle()); err != nil {
+		t.Fatal(err)
+	}
+	if gen.users[0] == gen.users[1] || !strings.Contains(gen.users[1], "had 1 paragraphs") {
+		t.Fatalf("retry prompt not amended:\n%s", gen.users[1])
+	}
+}

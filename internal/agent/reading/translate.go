@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/mikeyaustin/jlp/internal/agent/aiutil"
@@ -30,6 +31,10 @@ const (
 	unknownLanguage = "外国語"
 )
 
+// echoedNumber matches the "[3] " paragraph number a model may copy from
+// the numbered input into its output.
+var echoedNumber = regexp.MustCompile(`^\s*\[\d+\]\s*`)
+
 // Translator turns a non-Japanese article into Japanese, paragraph for
 // paragraph, so the lesson agent can work from Japanese text.
 type Translator struct {
@@ -43,6 +48,7 @@ type translatePromptData struct {
 	Title    string
 	Count    int
 	Numbered string
+	Note     string // set on the retry after a wrong paragraph count
 }
 
 type translationDoc struct {
@@ -66,35 +72,43 @@ func (t *Translator) Translate(ctx context.Context, identity learner.IdentityID,
 		}
 		fmt.Fprintf(&numbered, "[%d] %s", i+1, articleMarkers.Replace(p))
 	}
-	rendered, err := prompts.Render(TranslatePromptName, TranslatePromptVersion, translatePromptData{
-		Title:    articleMarkers.Replace(a.Title),
-		Count:    len(a.Paragraphs),
-		Numbered: numbered.String(),
-	})
-	if err != nil {
-		return domain.Translation{}, ai.StructuredResponse{}, fmt.Errorf("reading: render translate prompt: %w", err)
-	}
 	schema, err := schemas.Get(TranslateSchemaName)
 	if err != nil {
 		return domain.Translation{}, ai.StructuredResponse{}, fmt.Errorf("reading: get translate schema: %w", err)
 	}
-	req := ai.StructuredRequest{
-		PromptName:    TranslatePromptName,
-		PromptVersion: TranslatePromptVersion,
-		System:        rendered.System,
-		User:          rendered.User,
-		SchemaName:    TranslateSchemaName,
-		Schema:        schema,
-		MaxTokens:     translateMaxTokens,
-		IdentityID:    identity,
-		Agent:         agentName,
+	request := func(note string) (ai.StructuredRequest, error) {
+		rendered, err := prompts.Render(TranslatePromptName, TranslatePromptVersion, translatePromptData{
+			Title:    articleMarkers.Replace(a.Title),
+			Count:    len(a.Paragraphs),
+			Numbered: numbered.String(),
+			Note:     note,
+		})
+		if err != nil {
+			return ai.StructuredRequest{}, fmt.Errorf("reading: render translate prompt: %w", err)
+		}
+		return ai.StructuredRequest{
+			PromptName:    TranslatePromptName,
+			PromptVersion: TranslatePromptVersion,
+			System:        rendered.System,
+			User:          rendered.User,
+			SchemaName:    TranslateSchemaName,
+			Schema:        schema,
+			MaxTokens:     translateMaxTokens,
+			IdentityID:    identity,
+			Agent:         agentName,
+		}, nil
 	}
 
 	var (
 		resp    ai.StructuredResponse
 		lastErr error
 	)
+	note := ""
 	for attempt := 0; attempt < 2; attempt++ {
+		req, err := request(note)
+		if err != nil {
+			return domain.Translation{}, ai.StructuredResponse{}, err
+		}
 		resp, err = t.gen.GenerateStructured(ctx, req)
 		if err != nil {
 			return domain.Translation{}, resp, fmt.Errorf("reading: translate: %w", err)
@@ -109,8 +123,11 @@ func (t *Translator) Translate(ctx context.Context, identity learner.IdentityID,
 		}
 		tr := domain.Translation{
 			SourceLanguage: strings.TrimSpace(doc.SourceLanguage),
-			Title:          strings.TrimSpace(doc.Title),
-			Paragraphs:     doc.Paragraphs,
+			Title:          strings.TrimSpace(echoedNumber.ReplaceAllString(doc.Title, "")),
+			Paragraphs:     make([]string, len(doc.Paragraphs)),
+		}
+		for i, p := range doc.Paragraphs {
+			tr.Paragraphs[i] = echoedNumber.ReplaceAllString(p, "")
 		}
 		if tr.SourceLanguage == "" {
 			tr.SourceLanguage = unknownLanguage
@@ -118,6 +135,7 @@ func (t *Translator) Translate(ctx context.Context, identity learner.IdentityID,
 		if _, lastErr = a.WithTranslation(tr); lastErr == nil {
 			return tr, resp, nil
 		}
+		note = fmt.Sprintf("Your previous answer had %d paragraphs. You must return exactly %d, one per numbered input paragraph.", len(tr.Paragraphs), len(a.Paragraphs))
 	}
 	return domain.Translation{}, resp, fmt.Errorf("reading: translate: %w", lastErr)
 }
