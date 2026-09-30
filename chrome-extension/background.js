@@ -21,9 +21,11 @@ const POPUP_MENUS = { [MENU_FEEDBACK]: "feedback", [MENU_VOCAB]: "vocab", [MENU_
 const TITLE_ONESHOT = "JLPでKindle版を作成";
 const TITLE_DRAFT = "JLPの下書きにこのページを追加";
 
-// draftOpen asks the API whether a draft is open. A menu item must never
-// fail because the server is unreachable or no token is set, so any
-// trouble reads as "no draft" and the one-shot wording stays.
+// draftOpen asks the API whether a draft is open: true (200), false (404 or
+// no token — nothing to ask), or null when the answer is indeterminate
+// (offline, timeout, 5xx). Only a definite "no" may mean one-shot: reading an
+// outage as "no draft" would run the one-shot flow, which can auto-deliver to
+// the Kindle, on a page meant for the open draft.
 async function draftOpen() {
   try {
     const [{ baseUrl }, { apiToken }] = await Promise.all([
@@ -31,18 +33,31 @@ async function draftOpen() {
       chrome.storage.local.get({ apiToken: "" }),
     ]);
     if (!apiToken) return false;
-    const res = await fetch(`${baseUrl}/api/v1/reading/drafts/active`, { headers: { Authorization: `Bearer ${apiToken}` } });
-    return res.status === 200;
+    const res = await fetch(`${baseUrl}/api/v1/reading/drafts/active`, {
+      headers: { Authorization: `Bearer ${apiToken}` },
+      signal: AbortSignal.timeout(4000), // a hung server must not delay the popup
+    });
+    if (res.status === 200) return true;
+    if (res.status === 404) return false;
+    return null;
   } catch (_) {
-    return false;
+    return null;
   }
 }
 
-// syncReadingTitle re-words the reading item to match the draft state. The
-// popup does the same after it changes the state; this covers browser
-// start and drafts changed elsewhere (phone, review page).
+// syncReadingTitle re-words the reading item to match the draft state and
+// resolves whether a draft is (believed) open. The popup does the same after
+// it changes the state; this covers browser start and drafts changed
+// elsewhere (phone, review page). The last known state lives in
+// storage.session (the worker sleeps; the menu title outlives it), and is
+// what an indeterminate answer falls back to, leaving the title as it was.
 async function syncReadingTitle() {
-  const open = await draftOpen();
+  let open = await draftOpen();
+  if (open === null) {
+    const { draftOpen: last } = await chrome.storage.session.get({ draftOpen: false });
+    return !!last;
+  }
+  await chrome.storage.session.set({ draftOpen: open });
   chrome.contextMenus.update(MENU_READING, { title: open ? TITLE_DRAFT : TITLE_ONESHOT }, () => void chrome.runtime.lastError);
   return open;
 }

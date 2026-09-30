@@ -446,6 +446,8 @@ const MENU_TITLE_DRAFT = "JLPの下書きにこのページを追加";
 // a draft is open. background.js's MENU_READING id never changes; only the
 // title does. Absent (the shim) or failing, it is a no-op.
 function setReadingMenuTitle(open) {
+  // background.js falls back to this when the server cannot be asked.
+  try { chrome.storage.session.set({ draftOpen: open }); } catch (_) { /* best effort */ }
   try {
     if (!chrome.contextMenus || !chrome.contextMenus.update) return;
     chrome.contextMenus.update("jlp-reading", { title: open ? MENU_TITLE_DRAFT : MENU_TITLE_ONESHOT }, () => void chrome.runtime.lastError);
@@ -513,9 +515,19 @@ async function addToDraft(article) {
     renderDraft(cfg, d, imageNote ? `追加しました。${imageNote}` : "追加しました。");
     return d;
   } catch (err) {
-    // The status line would otherwise be stuck on the page title.
-    try { const d = await fetchDraft(await loadConfig()); if (d) statusEl.textContent = draftStatusLine(d); } catch (_) { /* keep the title */ }
-    showDraftError(err);
+    // With no draft behind it, a draft view would be dead buttons: fall back
+    // to the empty state and carry the error there.
+    let d = null;
+    try { d = await fetchDraft(await loadConfig()); } catch (_) { /* treat as none */ }
+    if (d) {
+      statusEl.textContent = draftStatusLine(d); // not stuck on the page title
+      showDraftError(err);
+    } else {
+      showView("empty-state");
+      const e = document.getElementById("empty-error");
+      e.textContent = `エラー: ${err.message}`;
+      e.hidden = false;
+    }
     throw err;
   }
 }
@@ -537,12 +549,14 @@ async function discardDraft() {
 
 function wireDraft() {
   document.getElementById("draft-add").addEventListener("click", async () => {
+    let article;
     try {
-      await addToDraft(await captureActiveTab());
+      article = await captureActiveTab();
     } catch (err) {
-      showView("draft-view");
-      showDraftError(err);
+      showDraftError(err); // addToDraft reports its own failures
+      return;
     }
+    addToDraft(article).catch(() => {});
   });
   document.getElementById("draft-review").addEventListener("click", (e) => {
     const url = e.currentTarget.dataset.url;
@@ -576,6 +590,7 @@ async function showStart() {
   const { collectMode } = await chrome.storage.sync.get({ collectMode: false });
   document.getElementById("collect-mode").checked = !!collectMode;
   setCollectLabel();
+  document.getElementById("empty-error").hidden = true;
   try {
     const cfg = await loadConfig();
     renderDraft(cfg, await fetchDraft(cfg));
