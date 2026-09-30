@@ -83,6 +83,12 @@ sent without the click. Sending the same article twice returns the
 existing edition; the server decides that, not the extension. See
 `docs/api/reading.md` for the contract.
 
+**Note:** `article.js` and `imaging.js` are also embedded by the Go server
+(via the `extension` package in this directory) and served to JLP's
+`/reading/capture` page on the phone, so edits to either file change desktop
+and phone together. Keep `article.js` free of multi-line `/* */` comments —
+the bookmarklet builder strips only whole-line `//` comments.
+
 **Images.** `article.js` also captures the article's photos, in
 document order with the paragraph each follows. A figure is an `<img>`
 in the article body that is not inside nav/aside/footer/header/form, not

@@ -592,6 +592,22 @@ into a reflowable EPUB for your Kindle:
 - **復習** — comprehension and vocabulary questions, with the answers on
   their own page.
 
+### スマホから
+
+Two ways to send an article from your phone:
+
+1. **Bookmarklet.** Set up at 設定 → 「スマホで読解」 — save the bookmark to your
+   Chrome for Android home screen, open an article, tap the address bar and
+   select the bookmark, then tap 「作成してKindleに送る」 on the JLP page. The
+   bookmarklet captures the full article — text, metadata, and images
+   (from servers that permit cross-origin image requests, like WSJ; NHK's
+   images cannot be fetched yet, so NHK articles arrive text-only). The
+   server never fetches the article page: the text comes from your own
+   logged-in session just as on desktop.
+2. **Share sheet.** After installing the JLP PWA, select article text →
+   Share → JLP — text only, sent to your Kindle automatically with zero
+   setup. The server never fetches the page.
+
 **Getting an article in.** The Chrome extension's 「JLPでKindle版を作成」
 (right-click the page, or a selection, or the toolbar button) reads the
 article out of the tab you are looking at and posts it to
