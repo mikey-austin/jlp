@@ -260,6 +260,9 @@ Images (article capture and upload):
 
 - `article.js` runs on any page: eval its source there and read
   `.figures`.
+- `imaging.js` (`JLPImaging`) holds the fetch/downscale/budget code, shared
+  with JLP's phone pages; `popup.html` loads it before `popup.js`, and the
+  Go package in this directory embeds it with `article.js`.
 - `window.jlpPopup.prepareImages(figures)` fetches and downscales, so it
   needs CORS on the image host in shim mode (only the installed
   extension, with host permission, bypasses CORS). Serve test images from

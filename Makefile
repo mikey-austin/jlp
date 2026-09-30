@@ -189,7 +189,7 @@ epubcheck-sample: ## Render a sample edition with figures + cover and run EPUBCh
 
 ext-build: ## Zip chrome-extension/ (excluding shim/ and README) into dist/jlp-extension.zip
 	@mkdir -p dist
-	$(TOOLS_AS_ME) sh -c "rm -f dist/jlp-extension.zip && cd chrome-extension && zip -r ../dist/jlp-extension.zip . -x 'shim/*' -x 'README.md'"
+	$(TOOLS_AS_ME) sh -c "rm -f dist/jlp-extension.zip && cd chrome-extension && zip -r ../dist/jlp-extension.zip . -x 'shim/*' -x 'README.md' -x '*.go'"
 	@echo "wrote dist/jlp-extension.zip — for distribution; chrome://extensions wants the unpacked chrome-extension/ directory (see its README)"
 
 send-summary: up-mail ## Trigger one weekly summary send immediately (needs APP_SUMMARY_TO set; brings up Mailpit + postgres first)
