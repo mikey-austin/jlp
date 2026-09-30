@@ -1,0 +1,9 @@
+{{/* The three pieces of a draft review a toggle can change. Each takes a
+     draftStatusView; with OOB set they are htmx out-of-band swaps. */}}
+{{define "reading_draft_summary"}}<p id="draft-summary" class="draft-summary"{{if .OOB}} hx-swap-oob="true"{{end}}>{{.Summary}}</p>{{end}}
+
+{{define "reading_draft_warnings"}}<ul id="draft-warnings" class="draft-warnings"{{if .OOB}} hx-swap-oob="true"{{end}}>{{range .Warnings}}<li role="alert">{{.}}</li>{{end}}</ul>{{end}}
+
+{{define "reading_draft_send"}}<button id="draft-send" type="submit" class="btn"{{if .OOB}} hx-swap-oob="true"{{end}}{{if .SendDisabled}} disabled{{end}}>この内容で送る</button>{{end}}
+
+{{define "reading_draft_oob"}}{{template "reading_draft_summary" .}}{{template "reading_draft_warnings" .}}{{template "reading_draft_send" .}}{{end}}

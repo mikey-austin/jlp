@@ -169,6 +169,10 @@ func requiredScope(r *http.Request) (string, bool) {
 		return apitoken.ScopeReadingWrite, true
 	case r.Method == http.MethodPost && strings.HasPrefix(p, "/api/v1/reading/editions/") && strings.HasSuffix(p, "/deliver") && strings.Count(p, "/") == 6:
 		return apitoken.ScopeReadingWrite, true
+	case r.Method == http.MethodPost && p == "/api/v1/reading/drafts/active/parts":
+		return apitoken.ScopeReadingWrite, true
+	case (r.Method == http.MethodGet || r.Method == http.MethodDelete) && p == "/api/v1/reading/drafts/active":
+		return apitoken.ScopeReadingWrite, true
 	case strings.HasPrefix(p, "/a2a"):
 		return apitoken.ScopeA2AUse, true
 	}

@@ -1,0 +1,8 @@
+{{/* One block of a draft under review. The text is clamped to two lines
+     (Alpine's tap-to-expand); the toggle button is the htmx action, and
+     its response swaps this whole row. */}}
+{{define "reading_draft_block"}}<li id="draft-block-{{.Seq}}" class="draft-block{{if .Excluded}} draft-block--excluded{{end}}{{if .IsImage}} draft-block--image{{end}}" x-data="{open:false}">
+  {{if .IsImage}}<img class="draft-block__img" src="/reading/drafts/{{.DraftID}}/images/{{.Seq}}" alt="{{.Alt}}" loading="lazy">
+  {{else}}<p class="draft-block__text" lang="ja" :class="{'is-open':open}" @click="open=!open">{{.Text}}</p>{{end}}
+  <button type="button" class="btn btn--secondary btn--sm draft-block__toggle" hx-post="/reading/drafts/{{.DraftID}}/blocks/{{.Seq}}/toggle" hx-target="#draft-block-{{.Seq}}" hx-swap="outerHTML" aria-pressed="{{if .Excluded}}true{{else}}false{{end}}">{{if .Excluded}}戻す{{else}}除外{{end}}</button>
+</li>{{end}}

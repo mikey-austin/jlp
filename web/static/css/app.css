@@ -1532,3 +1532,103 @@ p.empty {
 .reading-figure { margin: 1.25rem 0; }
 .reading-figure img { display: block; max-width: 100%; height: auto; margin: 0 auto; border-radius: 8px; }
 .reading-figure figcaption { font-size: .85rem; color: var(--fg-muted); text-align: center; margin-top: .4rem; }
+
+/* 読解 drafts: /reading/drafts/{id}. Phone-first — one column, rows tall
+   enough to tap, the send button at the thumb end. */
+.draft-summary {
+  margin: var(--space-2) 0;
+  font-weight: 600;
+}
+.draft-warnings {
+  list-style: none;
+  margin: 0 0 var(--space-3);
+  padding: 0;
+}
+.draft-warnings li {
+  background: var(--warning-soft);
+  color: var(--warning-ink);
+  border-radius: 8px;
+  padding: var(--space-2) var(--space-3);
+  margin-bottom: var(--space-2);
+}
+.draft-page__title {
+  margin: var(--space-5) 0 var(--space-1);
+  font-size: var(--text-base);
+}
+.draft-blocks {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.draft-block {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.draft-block__text {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.draft-block__text.is-open {
+  display: block;
+  -webkit-line-clamp: unset;
+  line-clamp: unset;
+}
+.draft-block__img {
+  flex: 1;
+  min-width: 0;
+  max-width: 12rem;
+  max-height: 8rem;
+  object-fit: cover;
+  border-radius: 6px;
+}
+.draft-block__toggle {
+  flex: none;
+  min-height: 2.5rem;
+  min-width: 3.5rem;
+}
+.draft-block--excluded .draft-block__text,
+.draft-block--excluded .draft-block__img {
+  opacity: 0.45;
+}
+.draft-block--excluded .draft-block__text {
+  text-decoration: line-through;
+}
+.draft-footer {
+  margin-top: var(--space-5);
+  display: grid;
+  gap: var(--space-4);
+}
+.draft-send {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+.draft-send .btn {
+  flex: 1;
+  min-height: 2.75rem;
+}
+.draft-send .btn[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.draft-discard form {
+  margin-top: var(--space-2);
+}
+.draft-send .field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: var(--space-2);
+  white-space: nowrap;
+}

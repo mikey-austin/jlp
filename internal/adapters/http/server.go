@@ -440,6 +440,13 @@ func (s *Server) routes() http.Handler {
 			r.Get("/reading/capture", s.readingCapturePage)
 			r.Get("/reading/share", s.readingSharePage)
 			r.Post("/reading/share", s.readingSharePage)
+			// Before /reading/{id}, for the same reason.
+			r.Get("/reading/drafts/{id}", s.readingDraft)
+			r.Post("/reading/drafts/{id}/blocks/{seq}/toggle", s.readingDraftToggle)
+			r.Post("/reading/drafts/{id}/title", s.readingDraftTitle)
+			r.Post("/reading/drafts/{id}/send", s.readingDraftSend)
+			r.Post("/reading/drafts/{id}/discard", s.readingDraftDiscard)
+			r.Get("/reading/drafts/{id}/images/{seq}", s.readingDraftImage)
 			r.Get("/reading/{id}", s.readingDetail)
 			r.Get("/reading/{id}/epub", s.readingEpub)
 			r.Post("/reading/{id}/deliver", s.readingAction(s.readingDeliver))
@@ -501,6 +508,9 @@ func (s *Server) routes() http.Handler {
 				r.Post("/reading/articles", s.apiReadingSubmit)
 				r.Get("/reading/editions/{id}", s.apiReadingEdition)
 				r.Post("/reading/editions/{id}/deliver", s.apiReadingDeliver)
+				r.Post("/reading/drafts/active/parts", s.apiDraftAddPart)
+				r.Get("/reading/drafts/active", s.apiDraftActive)
+				r.Delete("/reading/drafts/active", s.apiDraftDiscard)
 			}
 		})
 

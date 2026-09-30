@@ -1,0 +1,41 @@
+{{define "content"}}<section class="reading-draft">
+  <p class="reading-kicker"><a href="/reading">← 読解</a></p>
+  {{if .Gone}}
+  <h1>下書き</h1>
+  <div class="card" role="alert"><p>この下書きはありません</p></div>
+  {{else}}
+  <h1>下書き</h1>
+  {{if .FormError}}<p class="error" role="alert">{{.FormError}}</p>{{end}}
+
+  <label class="field">タイトル
+    <input class="input" type="text" name="title" value="{{.DraftTitle}}" placeholder="空欄なら本文の冒頭" lang="ja"
+           hx-post="/reading/drafts/{{.Draft.ID}}/title" hx-trigger="change" hx-swap="none">
+  </label>
+
+  {{template "reading_draft_summary" .Status}}
+  {{template "reading_draft_warnings" .Status}}
+  <p class="hint">段落をタップすると全文が開きます。いらない段落は「除外」で外します。</p>
+
+  {{range .Pages}}
+  <h2 class="draft-page__title">{{.Number}}ページ目</h2>
+  {{if .URL}}<p class="reading-url hint">{{.URL}}</p>{{end}}
+  <ul class="draft-blocks">
+    {{range .Blocks}}{{template "reading_draft_block" .}}{{end}}
+  </ul>
+  {{end}}
+
+  <div class="draft-footer">
+    <form method="post" action="/reading/drafts/{{.Draft.ID}}/send" class="draft-send">
+      {{if .DeliveryEnabled}}<label class="field field--inline"><input type="checkbox" name="deliver" checked> Kindleに送る</label>{{end}}
+      {{template "reading_draft_send" .Status}}
+    </form>
+    <details class="draft-discard">
+      <summary class="btn btn--ghost btn--sm">下書きを破棄</summary>
+      <form method="post" action="/reading/drafts/{{.Draft.ID}}/discard">
+        <p>本当に破棄しますか？</p>
+        <button type="submit" class="btn btn--danger btn--sm">破棄する</button>
+      </form>
+    </details>
+  </div>
+  {{end}}
+</section>{{end}}

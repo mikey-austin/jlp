@@ -8,8 +8,7 @@ section for how it works.
 
 Every call takes either the learner's browser session or
 `Authorization: Bearer <token>` for a token minted under 設定 → APIトークン
-with the **`reading:write`** scope. That scope covers exactly the three
-routes below and nothing else — it cannot read correction history,
+with the **`reading:write`** scope. That scope covers exactly the routes below and nothing else — it cannot read correction history,
 sessions or statistics. It is separate from `sessions:write` because
 every submission queues a model call.
 
@@ -107,6 +106,38 @@ Queue a Send-to-Kindle delivery of a ready edition.
 | `404` | no such edition for this learner |
 | `409` | the edition is not ready yet |
 | `503` | Kindle delivery is not configured on this server |
+
+## Drafts: one article from several pages
+
+A draft collects an article page by page, server-side, so it can be
+reviewed before one send. A learner has at most one active draft, of up to
+10 pages; drafts untouched for 7 days are swept.
+
+### `POST /api/v1/reading/drafts/active/parts`
+
+Append one captured page. The body is exactly the article body above (JSON,
+or multipart with images); `url` identifies the page, so sending the same
+`url` again **replaces** that page rather than adding a second copy, and
+`selection` wins over `content`.
+
+```json
+{"draft_id": "…", "pages": 2, "paragraphs": 14, "kept_paragraphs": 14,
+ "images": 3, "kept_images": 3, "chars": 5210, "figures_rejected": 0,
+ "review_url": "/reading/drafts/…"}
+```
+
+The counts are totals for the whole draft. `400` with `{"error": …}`:
+`下書きは10ページまでです` for an 11th distinct page, or the usual message
+for an empty body. `review_url` is a page route (session cookie), where
+blocks are dropped and the draft is sent.
+
+### `GET /api/v1/reading/drafts/active`
+
+The same counts for the current draft; `404` when there is none.
+
+### `DELETE /api/v1/reading/drafts/active`
+
+Discard the current draft. `204`, or `404` when there is none.
 
 ## Submitting with images
 
