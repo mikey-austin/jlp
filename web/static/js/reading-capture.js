@@ -43,11 +43,14 @@
     document.getElementById("capture-meta").textContent =
       `${article.source || ""}　${Array.from(article.content).length}字　画像 ${figs.length}枚`;
     status.textContent = "";
+    help.hidden = true; // a late article can arrive after the give-up message
     card.hidden = false;
   });
 
   document.getElementById("capture-send").addEventListener("click", async (e) => {
-    e.currentTarget.disabled = true;
+    // currentTarget is null once dispatch ends, i.e. after the first await.
+    const btn = e.currentTarget;
+    btn.disabled = true;
     try {
       status.textContent = "画像を準備中…";
       const fields = {
@@ -82,7 +85,7 @@
       location.href = `/reading/${encodeURIComponent(out.edition.id)}`;
     } catch (err) {
       status.textContent = `エラー: ${err.message}`;
-      e.currentTarget.disabled = false;
+      btn.disabled = false;
     }
   });
 })();
