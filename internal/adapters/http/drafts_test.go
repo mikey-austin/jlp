@@ -229,7 +229,7 @@ func TestDraftImageRoute(t *testing.T) {
 		t.Fatal("no image in review page")
 	}
 	img := get(h, out.ReviewURL+"/images/"+m[1])
-	if img.Code != 200 || img.Header().Get("Content-Type") != "image/jpeg" || img.Header().Get("X-Content-Type-Options") != "nosniff" || !strings.HasPrefix(img.Header().Get("Cache-Control"), "private") {
+	if img.Code != 200 || img.Header().Get("Content-Type") != "image/jpeg" || img.Header().Get("X-Content-Type-Options") != "nosniff" || img.Header().Get("Cache-Control") != "private, no-cache" {
 		t.Fatalf("image: %d %v", img.Code, img.Header())
 	}
 	if r := get(h, out.ReviewURL+"/images/x"); r.Code != 404 {
@@ -257,5 +257,58 @@ func TestDraftOtherIdentity(t *testing.T) {
 	}
 	if _, err := svc.ActiveDraft(context.Background(), "someone-else"); err != nil {
 		t.Fatalf("foreign draft was touched: %v", err)
+	}
+}
+
+func TestDraftSendUsesPostedTitle(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	a := addPart(t, h, "https://x.jp/1", "政府は新たな経済対策をまとめた。")
+	if !strings.Contains(get(h, a.ReviewURL).Body.String(), `name="title" form="draft-send-form"`) {
+		t.Fatal("title input is not attached to the send form")
+	}
+	rec := readingPostForm(h, a.ReviewURL+"/send", url.Values{"title": {"  送信時の題\n"}})
+	if rec.Code != 303 {
+		t.Fatalf("send: %d %s", rec.Code, rec.Body)
+	}
+	if page := get(h, rec.Header().Get("Location")).Body.String(); !strings.Contains(page, "送信時の題") {
+		t.Fatalf("edition lacks the posted title: %s", page)
+	}
+}
+
+func TestDraftTitleIsClipped(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	a := addPart(t, h, "https://x.jp/1", "政府は新たな経済対策をまとめた。")
+	readingPostForm(h, a.ReviewURL+"/title", url.Values{"title": {"a\nb" + strings.Repeat("あ", 1000)}})
+	body := get(h, a.ReviewURL).Body.String()
+	if strings.Contains(body, strings.Repeat("あ", 400)) || !strings.Contains(body, `value="a b`) {
+		t.Fatal("title not clipped to one short line")
+	}
+}
+
+func TestDraftHTMXOnGoneDraftRedirects(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	a := addPart(t, h, "https://x.jp/1", "政府は新たな経済対策をまとめた。")
+	seq := firstSeq(t, get(h, a.ReviewURL).Body.String(), 0)
+	readingPostForm(h, a.ReviewURL+"/discard", nil)
+	for _, p := range []string{"/blocks/" + seq + "/toggle", "/title"} {
+		req := httptest.NewRequest(http.MethodPost, a.ReviewURL+p, nil)
+		req.Header.Set("HX-Request", "true")
+		rec := serve(h, req)
+		if rec.Header().Get("HX-Redirect") != a.ReviewURL || rec.Code >= 400 {
+			t.Errorf("%s: %d %v", p, rec.Code, rec.Header())
+		}
+		if plain := readingPostForm(h, a.ReviewURL+p, nil); plain.Code != 404 {
+			t.Errorf("plain %s = %d", p, plain.Code)
+		}
+	}
+}
+
+func TestDraftReviewOverCapDisablesSend(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	long := strings.Repeat("あ", 10001) + "。\n\n" + strings.Repeat("い", 10000) + "。"
+	a := addPart(t, h, "https://x.jp/1", long)
+	body := get(h, a.ReviewURL).Body.String()
+	if !strings.Contains(body, "長すぎます") || !regexp.MustCompile(`<button[^>]*disabled`).MatchString(body) {
+		t.Fatalf("over-cap review lacks the warning or the disabled send: %s", body)
 	}
 }

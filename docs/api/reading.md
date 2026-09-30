@@ -8,8 +8,9 @@ section for how it works.
 
 Every call takes either the learner's browser session or
 `Authorization: Bearer <token>` for a token minted under 設定 → APIトークン
-with the **`reading:write`** scope. That scope covers exactly the routes below and nothing else — it cannot read correction history,
-sessions or statistics. It is separate from `sessions:write` because
+with the **`reading:write`** scope. That scope covers exactly the routes
+below and nothing else — it cannot read correction history, sessions or
+statistics. It is separate from `sessions:write` because
 every submission queues a model call.
 
 ## `POST /api/v1/reading/articles`

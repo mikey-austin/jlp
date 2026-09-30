@@ -8,7 +8,7 @@
   {{if .FormError}}<p class="error" role="alert">{{.FormError}}</p>{{end}}
 
   <label class="field">タイトル
-    <input class="input" type="text" name="title" value="{{.DraftTitle}}" placeholder="空欄なら本文の冒頭" lang="ja"
+    <input class="input" type="text" name="title" form="draft-send-form" value="{{.DraftTitle}}" placeholder="空欄なら本文の冒頭" lang="ja"
            hx-post="/reading/drafts/{{.Draft.ID}}/title" hx-trigger="change" hx-swap="none">
   </label>
 
@@ -25,7 +25,7 @@
   {{end}}
 
   <div class="draft-footer">
-    <form method="post" action="/reading/drafts/{{.Draft.ID}}/send" class="draft-send">
+    <form method="post" action="/reading/drafts/{{.Draft.ID}}/send" class="draft-send" id="draft-send-form">
       {{if .DeliveryEnabled}}<label class="field field--inline"><input type="checkbox" name="deliver" checked> Kindleに送る</label>{{end}}
       {{template "reading_draft_send" .Status}}
     </form>

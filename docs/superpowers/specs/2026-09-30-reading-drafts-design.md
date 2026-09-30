@@ -69,9 +69,12 @@ paragraphs. Image blocks are validated exactly as article figures are
 - `POST /reading/drafts/{id}/title` — set the title.
 - `POST /reading/drafts/{id}/send` — build a `reading.Draft` from the
   kept blocks (paragraphs in order, joined with blank lines; each kept
-  image a `FigureDraft` anchored by `AfterText` to the kept paragraph
-  before it, `InText: true`, the first kept image the lead) plus the
-  draft's metadata and title, and call the existing `Service.Submit`
+  image a `FigureDraft` anchored by the exact index of the kept
+  paragraph before it (no `AfterText`: repeated credit lines across
+  pages would match the first page's copy), `InText: true`, the first
+  kept image the lead) plus the draft's metadata and title (the title
+  input is part of the send form; a non-empty posted title is saved
+  first, clipped to 300 runes on one line), and call the existing `Service.Submit`
   with `Deliver` from the form's checkbox (default on). Then delete the
   draft and redirect to `/reading/{edition}`. Validation, dedupe, the
   lesson, EPUB and Kindle are unchanged.

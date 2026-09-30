@@ -123,7 +123,7 @@ func NewArticle(id string, identity learner.IdentityID, d Draft, maxRunes int, n
 		u.Fragment = ""
 		src = u.String()
 	}
-	title := clip(oneLine(d.Title), maxTitleRunes)
+	title := ClipTitle(d.Title)
 	if title == "" {
 		title = clip(paras[0], 60)
 	}
@@ -246,6 +246,11 @@ func looksJapanese(paras []string) bool {
 	}
 	return letters > 0 && ja*5 >= letters
 }
+
+// ClipTitle is the title as NewArticle stores it: one line, at most
+// maxTitleRunes. Drafts apply it on the way in so a stored title is
+// never larger than what a send would keep.
+func ClipTitle(s string) string { return clip(oneLine(s), maxTitleRunes) }
 
 func oneLine(s string) string { return collapseSpace(strings.TrimSpace(s)) }
 

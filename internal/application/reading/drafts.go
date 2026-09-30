@@ -58,7 +58,9 @@ func (s *Service) AddDraftPage(ctx context.Context, identity learner.IdentityID,
 	if len(blocks) == 0 {
 		return DraftStatus{}, reading.ErrEmptyContent
 	}
-	info, err := s.d.Repo.AddDraftPage(ctx, identity, p.Meta, p.PageURL, blocks, s.now())
+	meta := p.Meta
+	meta.Title = reading.ClipTitle(meta.Title)
+	info, err := s.d.Repo.AddDraftPage(ctx, identity, meta, p.PageURL, blocks, s.now())
 	if err != nil {
 		return DraftStatus{}, err
 	}
@@ -118,7 +120,7 @@ func (s *Service) SetDraftBlockExcluded(ctx context.Context, identity learner.Id
 }
 
 func (s *Service) SetDraftTitle(ctx context.Context, identity learner.IdentityID, id, title string) error {
-	return s.d.Repo.SetDraftTitle(ctx, identity, id, strings.TrimSpace(title), s.now())
+	return s.d.Repo.SetDraftTitle(ctx, identity, id, reading.ClipTitle(title), s.now())
 }
 
 // SendDraft turns the kept blocks into one article through Submit, so a

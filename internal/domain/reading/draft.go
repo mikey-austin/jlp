@@ -50,10 +50,6 @@ const MaxDraftPages = 10
 
 var ErrDraftFull = errors.New("reading: a draft holds at most 10 pages")
 
-// afterTextRunes is how much of the preceding paragraph anchors a figure
-// on send — the same prefix NewFigures matches against.
-const afterTextRunes = 40
-
 // PageBlocks turns one captured page into ordered blocks: paragraphs from
 // NormaliseParagraphs(text), each followed by the figures NewFigures
 // anchored after it (figures anchored -1 first). Seq/Page are left 0 for
@@ -112,13 +108,15 @@ func Summarise(blocks []DraftBlock) DraftSummary {
 // Submission builds the article Draft from the kept blocks, in order:
 // paragraphs joined by blank lines; each kept image anchored to the
 // kept paragraph before it (-1 when none precedes), the first the lead.
+// The anchor is the exact paragraph index, not a text prefix: pages
+// repeat credit lines and short paragraphs, which a prefix match would
+// resolve to the first page's copy.
 func Submission(meta DraftMeta, blocks []DraftBlock) Draft {
 	d := Draft{
 		SourceURL: meta.SourceURL, SourceName: meta.SourceName, Title: meta.Title,
 		Author: meta.Author, PublishedAt: meta.PublishedAt,
 	}
 	paras := 0
-	prev := ""
 	for _, b := range blocks {
 		if b.Excluded {
 			continue
@@ -129,15 +127,11 @@ func Submission(meta DraftMeta, blocks []DraftBlock) Draft {
 				d.Content += "\n\n"
 			}
 			d.Content += b.Text
-			prev = b.Text
 			paras++
 		case BlockImage:
 			f := FigureDraft{
 				Caption: b.Figure.Caption, Alt: b.Figure.Alt, InText: true,
 				Lead: len(d.Figures) == 0, Data: b.Figure.Data, AfterParagraph: paras - 1,
-			}
-			if prev != "" {
-				f.AfterText = string([]rune(prev)[:min(afterTextRunes, utf8.RuneCountInString(prev))])
 			}
 			d.Figures = append(d.Figures, f)
 		}

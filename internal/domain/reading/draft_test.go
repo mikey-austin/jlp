@@ -3,6 +3,8 @@ package reading
 import (
 	"strings"
 	"testing"
+	"time"
+	"unicode/utf8"
 )
 
 func para(s string) DraftBlock { return DraftBlock{Kind: BlockParagraph, Text: s} }
@@ -73,10 +75,44 @@ func TestSubmissionAnchorsKeptImagesToKeptParagraphs(t *testing.T) {
 	if top.AfterParagraph != -1 || top.AfterText != "" || !top.Lead {
 		t.Errorf("top = %+v", top)
 	}
-	if mid.AfterText != strings.Repeat("あ", 40) || mid.Lead || !mid.InText || mid.Caption != "mid" {
+	if mid.AfterParagraph != 0 || mid.AfterText != "" || mid.Lead || !mid.InText || mid.Caption != "mid" {
 		t.Errorf("mid = %+v", mid)
 	}
-	if end.AfterText != "次" || end.AfterParagraph != 1 {
+	if end.AfterText != "" || end.AfterParagraph != 1 {
 		t.Errorf("end = %+v", end)
+	}
+}
+
+func TestSubmitAnchorsByIndexWhenParagraphsRepeatAPrefix(t *testing.T) {
+	credit := "写真：共同通信"
+	pic := DraftBlock{Kind: BlockImage, Figure: Figure{Caption: "pic", Data: testPNG(t, 2, 2)}}
+	meta := DraftMeta{SourceURL: "https://x/1"}
+	d := Submission(meta, []DraftBlock{
+		para("一ページ目の本文です。"), para(credit),
+		para("二ページ目の本文です。"), para(credit + "（提供）"), pic,
+	})
+	a, err := NewArticle("id", "me", d, 0, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	figs, _ := NewFigures(d.Figures, a.Paragraphs)
+	if len(figs) != 1 || figs[0].AfterParagraph != 3 {
+		t.Fatalf("figures = %+v", figs)
+	}
+	// Same text twice: a prefix match would land on the first.
+	d = Submission(meta, []DraftBlock{para(credit), para("本文です。"), para(credit), pic})
+	a, _ = NewArticle("id", "me", d, 0, time.Now())
+	figs, _ = NewFigures(d.Figures, a.Paragraphs)
+	if len(figs) != 1 || figs[0].AfterParagraph != 2 {
+		t.Fatalf("figures = %+v", figs)
+	}
+}
+
+func TestClipTitle(t *testing.T) {
+	if got := ClipTitle("  a\n b  "); got != "a b" {
+		t.Errorf("got %q", got)
+	}
+	if n := utf8.RuneCountInString(ClipTitle(strings.Repeat("あ", 1000))); n != 300 {
+		t.Errorf("runes = %d", n)
 	}
 }

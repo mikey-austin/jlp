@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 
@@ -198,6 +199,13 @@ func (s *Server) draftGone(w http.ResponseWriter, r *http.Request) {
 // else's or a gone draft is the 404 page, anything else a 500.
 func (s *Server) draftFailed(w http.ResponseWriter, r *http.Request, err error) {
 	if errors.Is(err, storage.ErrNotFound) {
+		// htmx does not swap a 4xx, so a tap on a gone draft would do
+		// nothing; send the browser to the page that says so.
+		if r.Header.Get("HX-Request") != "" {
+			w.Header().Set("HX-Redirect", "/reading/drafts/"+chi.URLParam(r, "id"))
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
 		s.draftGone(w, r)
 		return
 	}
@@ -277,6 +285,14 @@ func (s *Server) readingDraftTitle(w http.ResponseWriter, r *http.Request) {
 func (s *Server) readingDraftSend(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	id := chi.URLParam(r, "id")
+	// The title input rides in the send form, so a title typed a moment
+	// before the tap (or without script) is applied before building.
+	if t := strings.TrimSpace(r.FormValue("title")); t != "" {
+		if err := s.opts.Reading.SetDraftTitle(r.Context(), ident.ID, id, t); err != nil {
+			s.draftFailed(w, r, err)
+			return
+		}
+	}
 	res, err := s.opts.Reading.SendDraft(r.Context(), ident.ID, id, r.FormValue("deliver") != "")
 	if err == nil {
 		http.Redirect(w, r, "/reading/"+res.Edition.ID, http.StatusSeeOther)
@@ -305,7 +321,7 @@ func (s *Server) readingDraftDiscard(w http.ResponseWriter, r *http.Request) {
 
 // readingDraftImage serves one draft image. Unlike an article's figures
 // these are not immutable: re-capturing a page renumbers its blocks, so
-// the cache is private and short, revalidated by the content hash.
+// the cache is private and always revalidated by the content hash.
 func (s *Server) readingDraftImage(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	seq, err := strconv.Atoi(chi.URLParam(r, "seq"))
@@ -324,12 +340,12 @@ func (s *Server) readingDraftImage(w http.ResponseWriter, r *http.Request) {
 	}
 	etag := `"` + f.SHA256 + `"`
 	w.Header().Set("ETag", etag)
-	w.Header().Set("Cache-Control", "private, max-age=3600")
+	w.Header().Set("Cache-Control", "private, no-cache")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
 	w.Header().Set("Content-Type", f.MediaType)
-	w.Header().Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(f.Data)
 }
