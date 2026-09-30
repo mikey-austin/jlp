@@ -619,6 +619,18 @@ authenticate or to be mistaken for getting around a paywall. Without the
 extension, paste the text on `/reading`. See
 **[`docs/api/reading.md`](docs/api/reading.md)** for the API contract.
 
+### 複数ページの記事
+
+To collect an article spread over multiple pages (like National Geographic 日本版
+with its `?P=2` pagination), tick 「複数ページ（下書きに集める）」 in the extension
+popup (or tap 「下書きに追加（複数ページ）」 on the phone). The button then reads
+「このページを下書きに追加」; add each page — a text selection is used when present,
+else the full page — and open 「確認して送信」 to review. Every paragraph and image
+is listed; tap 「除外」 to drop ads and subscription notices, then 「作成してKindleに送る」
+to build a single study edition. Limits: up to 10 pages per draft; adding the same
+page again replaces it; drafts untouched for 7 days are removed; 「下書きを破棄」
+deletes one.
+
 **How it runs.** The pipeline is staged and durable, with every stage's
 state in Postgres (migration `00030_reading`): submitting only records the
 article and queues a *study edition*; a background worker in the app
@@ -677,7 +689,9 @@ vocabulary list through the ordinary lookup path (idempotent per edition
 and word), so they join the lookup → production tracking — and
 「Ankiカード作成」 queues one draft card per word in `/anki`'s review
 queue. Deleting an article soft-deletes it and every edition of it;
-`jlp restore reading <identity> <article-id>` brings it back.
+`jlp restore reading <identity> <article-id>` brings it back. Deleting an
+article and importing it again now creates a fresh lesson — the old one
+does not come back.
 
 ## Design system
 
