@@ -88,6 +88,7 @@ var knownPromptNames = append([]string{
 	"drill.evaluate",
 	"summary.generate",
 	"reading.analyse",
+	"reading.translate",
 	// teacher.agentic is never sent to GenerateStructured (it's the
 	// ONLY entry in knownToolPromptNames below, sent to CallWithTools
 	// instead) — listed here too purely so warnForUnknownPromptNames

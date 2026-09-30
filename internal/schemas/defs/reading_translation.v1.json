@@ -1,0 +1,17 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ReadingTranslationV1",
+  "description": "A natural written-Japanese translation of an article in another language, paragraph for paragraph.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_language", "title", "paragraphs"],
+  "properties": {
+    "source_language": { "type": "string", "minLength": 1, "description": "The article's original language as a Japanese language name, e.g. 英語 or フランス語." },
+    "title": { "type": "string", "description": "The article's title in Japanese." },
+    "paragraphs": {
+      "type": "array",
+      "description": "One Japanese paragraph per input paragraph, in the same order, never merged or split.",
+      "items": { "type": "string", "minLength": 1 }
+    }
+  }
+}

@@ -1,0 +1,123 @@
+package reading
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/mikeyaustin/jlp/internal/agent/aiutil"
+	"github.com/mikeyaustin/jlp/internal/domain/learner"
+	domain "github.com/mikeyaustin/jlp/internal/domain/reading"
+	"github.com/mikeyaustin/jlp/internal/ports/ai"
+	"github.com/mikeyaustin/jlp/internal/prompts"
+	"github.com/mikeyaustin/jlp/internal/schemas"
+)
+
+const (
+	// TranslatePromptName is also the APP_AI_ROUTES key, e.g.
+	// APP_AI_ROUTES=reading.translate=gemini.
+	TranslatePromptName    = "reading.translate"
+	TranslatePromptVersion = "v1"
+	TranslateSchemaName    = "reading_translation.v1"
+	// translateMaxTokens: Japanese runs to more tokens than most source
+	// languages, and an article can be 20k characters; a translation
+	// that stops short is truncated JSON, which fails validation and is
+	// retried rather than stored.
+	translateMaxTokens = 16384
+	// unknownLanguage stands in when the model leaves source_language
+	// blank; an empty value would read as "not translated yet".
+	unknownLanguage = "外国語"
+)
+
+// Translator turns a non-Japanese article into Japanese, paragraph for
+// paragraph, so the lesson agent can work from Japanese text.
+type Translator struct {
+	gen ai.StructuredGenerator
+}
+
+// NewTranslator returns a translator backed by gen.
+func NewTranslator(gen ai.StructuredGenerator) *Translator { return &Translator{gen: gen} }
+
+type translatePromptData struct {
+	Title    string
+	Count    int
+	Numbered string
+}
+
+type translationDoc struct {
+	SourceLanguage string   `json:"source_language"`
+	Title          string   `json:"title"`
+	Paragraphs     []string `json:"paragraphs"`
+}
+
+// Translate renders reading.translate, asks gen for a
+// reading_translation.v1 document (Rule 4 repair and retry), and checks
+// the paragraph count, which the schema cannot express. A wrong count is
+// a failed attempt like invalid JSON: the request is sent once more, and
+// if the retry is still wrong the error is returned. The translation
+// must line up with the original paragraph for paragraph because the
+// reader shows them side by side.
+func (t *Translator) Translate(ctx context.Context, identity learner.IdentityID, a domain.Article) (domain.Translation, ai.StructuredResponse, error) {
+	var numbered strings.Builder
+	for i, p := range a.Paragraphs {
+		if i > 0 {
+			numbered.WriteString("\n\n")
+		}
+		fmt.Fprintf(&numbered, "[%d] %s", i+1, articleMarkers.Replace(p))
+	}
+	rendered, err := prompts.Render(TranslatePromptName, TranslatePromptVersion, translatePromptData{
+		Title:    articleMarkers.Replace(a.Title),
+		Count:    len(a.Paragraphs),
+		Numbered: numbered.String(),
+	})
+	if err != nil {
+		return domain.Translation{}, ai.StructuredResponse{}, fmt.Errorf("reading: render translate prompt: %w", err)
+	}
+	schema, err := schemas.Get(TranslateSchemaName)
+	if err != nil {
+		return domain.Translation{}, ai.StructuredResponse{}, fmt.Errorf("reading: get translate schema: %w", err)
+	}
+	req := ai.StructuredRequest{
+		PromptName:    TranslatePromptName,
+		PromptVersion: TranslatePromptVersion,
+		System:        rendered.System,
+		User:          rendered.User,
+		SchemaName:    TranslateSchemaName,
+		Schema:        schema,
+		MaxTokens:     translateMaxTokens,
+		IdentityID:    identity,
+		Agent:         agentName,
+	}
+
+	var (
+		resp    ai.StructuredResponse
+		lastErr error
+	)
+	for attempt := 0; attempt < 2; attempt++ {
+		resp, err = t.gen.GenerateStructured(ctx, req)
+		if err != nil {
+			return domain.Translation{}, resp, fmt.Errorf("reading: translate: %w", err)
+		}
+		resp, err = aiutil.ValidateWithRepairAndRetry(ctx, t.gen, TranslateSchemaName, req, resp)
+		if err != nil {
+			return domain.Translation{}, resp, fmt.Errorf("reading: translate: %w", err)
+		}
+		var doc translationDoc
+		if err := json.Unmarshal(resp.JSON, &doc); err != nil {
+			return domain.Translation{}, resp, fmt.Errorf("reading: decode validated translation: %w", err)
+		}
+		tr := domain.Translation{
+			SourceLanguage: strings.TrimSpace(doc.SourceLanguage),
+			Title:          strings.TrimSpace(doc.Title),
+			Paragraphs:     doc.Paragraphs,
+		}
+		if tr.SourceLanguage == "" {
+			tr.SourceLanguage = unknownLanguage
+		}
+		if _, lastErr = a.WithTranslation(tr); lastErr == nil {
+			return tr, resp, nil
+		}
+	}
+	return domain.Translation{}, resp, fmt.Errorf("reading: translate: %w", lastErr)
+}
