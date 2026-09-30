@@ -30,7 +30,11 @@ import (
 )
 
 type Options struct {
-	Addr       string
+	Addr string
+	// PublicURL is where the learner's phone reaches this server (the
+	// configured base URL). The bookmarklet embeds it; empty means derive
+	// it from the request.
+	PublicURL  string
 	Auth       auth.Authenticator
 	Identities storage.IdentityRepository
 	// APITokens authenticates non-browser clients on /api/v1 and /a2a
@@ -283,6 +287,9 @@ func (s *Server) routes() http.Handler {
 	// that the fingerprinted asset URLs it precaches — and the cache name
 	// derived from them — change whenever an asset does. See assets.go.
 	r.Get("/static/sw.js", serviceWorker)
+	// The extension's shared capture files, for the phone pages. Exact
+	// route for the same reason: they come from the binary, not disk.
+	r.Get("/static/ext/{name}", s.extAsset)
 	// assetHandler translates /static/css/app.<hash>.css back to the file
 	// on disk and picks the cache policy: a year and immutable when the
 	// hash matches the bytes, revalidate otherwise.
@@ -381,6 +388,7 @@ func (s *Server) routes() http.Handler {
 		// never be able to mint another token.
 		r.Get("/settings/agents", s.agentsPage)
 		r.Post("/settings/agents/{prompt}", s.agentsSet)
+		r.Get("/settings/phone", s.settingsPhonePage)
 		r.Get("/settings/tokens", s.apiTokensPage)
 		r.Post("/settings/tokens", s.apiTokensCreate)
 		r.Post("/settings/tokens/{id}/revoke", s.apiTokensRevoke)

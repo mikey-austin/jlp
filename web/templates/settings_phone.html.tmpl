@@ -1,0 +1,16 @@
+{{define "content"}}<section class="settings">
+  <h1>スマホで読解</h1>
+  <p>スマホのChromeで読んでいる記事（ログイン中のWSJなども）から、Kindle用の学習版を作ります。記事の本文はそのページの中で読み取るので、JLPのサーバーが記事のサイトにアクセスすることはありません。</p>
+
+  <div class="card">
+    <h2>1. ブックマークレット（画像つき・おすすめ）</h2>
+    <p><a class="btn" href="{{.Bookmarklet}}">JLP 読解</a> ← このリンクをブックマークに保存します（パソコンではバーにドラッグ、スマホでは下のコードをコピーして新しいブックマークのURLに貼り付け）。名前は「jlp」など短くしておくと便利です。</p>
+    <details><summary>コードを表示（コピー用）</summary><textarea readonly rows="6" class="mono">{{.Bookmarklet}}</textarea></details>
+    <p>使い方：記事を開いてアドレスバーに「jlp」と入力し、候補のブックマークをタップ → JLPが開くので「作成してKindleに送る」をタップ。</p>
+  </div>
+
+  <div class="card">
+    <h2>2. 共有（テキストのみ・設定不要）</h2>
+    <p>JLPをホーム画面に追加（インストール）すると、共有メニューに「JLP」が表示されます。記事の本文を選択して「共有」→「JLP」で、そのままKindle版が作られます。画像は含まれません。</p>
+  </div>
+</section>{{end}}
