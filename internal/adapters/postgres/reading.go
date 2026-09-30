@@ -63,6 +63,10 @@ func (r *ReadingRepository) UpsertArticle(ctx context.Context, a reading.Article
 	if err != nil {
 		return reading.Article{}, false, err
 	}
+	origParas, err := marshalOriginal(a.OriginalParagraphs)
+	if err != nil {
+		return reading.Article{}, false, err
+	}
 	// One transaction: purging the deleted match and inserting its
 	// replacement must not be seen half-done (the unique index would
 	// otherwise resurrect the old row, or a failed insert lose both).
@@ -85,6 +89,10 @@ func (r *ReadingRepository) UpsertArticle(ctx context.Context, a reading.Article
 		Paragraphs:  paras,
 		ContentHash: a.ContentHash,
 		CreatedAt:   ts(a.CreatedAt),
+
+		OriginalLanguage:   origLang(a),
+		OriginalTitle:      a.OriginalTitle,
+		OriginalParagraphs: origParas,
 	})
 	if err != nil {
 		return reading.Article{}, false, err
@@ -92,7 +100,7 @@ func (r *ReadingRepository) UpsertArticle(ctx context.Context, a reading.Article
 	if err := tx.Commit(ctx); err != nil {
 		return reading.Article{}, false, err
 	}
-	stored, err := articleFrom(row.ID, row.IdentityID, row.SourceUrl, row.SourceName, row.Title, row.Author, row.PublishedAt, row.Paragraphs, row.ContentHash, row.CreatedAt)
+	stored, err := articleFrom(row.ID, row.IdentityID, row.SourceUrl, row.SourceName, row.Title, row.Author, row.PublishedAt, row.Paragraphs, row.ContentHash, row.CreatedAt, row.OriginalLanguage, row.OriginalTitle, row.OriginalParagraphs)
 	return stored, row.Inserted, err
 }
 
@@ -135,13 +143,19 @@ func (r *ReadingRepository) GetArticle(ctx context.Context, identity learner.Ide
 	if err != nil {
 		return reading.Article{}, err
 	}
-	return articleFrom(row.ID, row.IdentityID, row.SourceUrl, row.SourceName, row.Title, row.Author, row.PublishedAt, row.Paragraphs, row.ContentHash, row.CreatedAt)
+	return articleFrom(row.ID, row.IdentityID, row.SourceUrl, row.SourceName, row.Title, row.Author, row.PublishedAt, row.Paragraphs, row.ContentHash, row.CreatedAt, row.OriginalLanguage, row.OriginalTitle, row.OriginalParagraphs)
 }
 
-func articleFrom(id pgtype.UUID, identity, srcURL, srcName, title, author string, published pgtype.Timestamptz, paras []byte, hash string, created pgtype.Timestamptz) (reading.Article, error) {
+func articleFrom(id pgtype.UUID, identity, srcURL, srcName, title, author string, published pgtype.Timestamptz, paras []byte, hash string, created pgtype.Timestamptz, origLang, origTitle string, origParas []byte) (reading.Article, error) {
 	var ps []string
 	if err := json.Unmarshal(paras, &ps); err != nil {
 		return reading.Article{}, fmt.Errorf("article %s paragraphs: %w", uuidString(id), err)
+	}
+	var ops []string
+	if len(origParas) > 0 {
+		if err := json.Unmarshal(origParas, &ops); err != nil {
+			return reading.Article{}, fmt.Errorf("article %s original paragraphs: %w", uuidString(id), err)
+		}
 	}
 	return reading.Article{
 		ID:          uuidString(id),
@@ -154,7 +168,55 @@ func articleFrom(id pgtype.UUID, identity, srcURL, srcName, title, author string
 		Paragraphs:  ps,
 		ContentHash: hash,
 		CreatedAt:   created.Time,
+
+		OriginalLanguage:   origLang,
+		OriginalTitle:      origTitle,
+		OriginalParagraphs: ops,
 	}, nil
+}
+
+// marshalOriginal keeps "no original" as SQL NULL, which is what
+// distinguishes an untranslated article from a translated one.
+func marshalOriginal(ps []string) ([]byte, error) {
+	if len(ps) == 0 {
+		return nil, nil
+	}
+	return json.Marshal(ps)
+}
+
+// origLang defaults a hand-built Article to Japanese, the column default.
+func origLang(a reading.Article) string {
+	if a.OriginalLanguage == "" {
+		return reading.LanguageJapanese
+	}
+	return a.OriginalLanguage
+}
+
+// SaveTranslation writes a translated article's Japanese body and its
+// original.
+func (r *ReadingRepository) SaveTranslation(ctx context.Context, articleID string, a reading.Article) error {
+	id, err := parseUUID(articleID)
+	if err != nil {
+		return storage.ErrNotFound
+	}
+	paras, err := json.Marshal(a.Paragraphs)
+	if err != nil {
+		return err
+	}
+	orig, err := marshalOriginal(a.OriginalParagraphs)
+	if err != nil {
+		return err
+	}
+	n, err := r.q.SaveReadingTranslation(ctx, sqlcgen.SaveReadingTranslationParams{
+		ID: id, Title: a.Title, Paragraphs: paras, OriginalLanguage: origLang(a), OriginalTitle: a.OriginalTitle, OriginalParagraphs: orig,
+	})
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return storage.ErrNotFound
+	}
+	return nil
 }
 
 func (r *ReadingRepository) SoftDeleteArticle(ctx context.Context, identity learner.IdentityID, id string, at time.Time) error {

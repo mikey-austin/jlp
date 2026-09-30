@@ -108,6 +108,18 @@ func (m *memRepo) GetArticle(_ context.Context, id learner.IdentityID, aid strin
 	return *a, nil
 }
 
+func (m *memRepo) SaveTranslation(_ context.Context, id string, t reading.Article) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.articles[id]
+	if !ok {
+		return storage.ErrNotFound
+	}
+	a.Title, a.Paragraphs = t.Title, append([]string(nil), t.Paragraphs...)
+	a.OriginalLanguage, a.OriginalTitle, a.OriginalParagraphs = t.OriginalLanguage, t.OriginalTitle, append([]string(nil), t.OriginalParagraphs...)
+	return nil
+}
+
 func (m *memRepo) SoftDeleteArticle(_ context.Context, id learner.IdentityID, aid string, _ time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -566,9 +578,20 @@ func TestSubmitIsIdempotentOnContent(t *testing.T) {
 
 func TestSubmitValidation(t *testing.T) {
 	h := newHarness(t, false)
-	_, err := h.svc.Submit(context.Background(), me, reading.Draft{Content: "Only English here."}, appreading.SubmitOptions{})
-	if !errors.Is(err, reading.ErrNotJapanese) {
+	_, err := h.svc.Submit(context.Background(), me, reading.Draft{Content: " \n "}, appreading.SubmitOptions{})
+	if !errors.Is(err, reading.ErrEmptyContent) {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestSubmitAcceptsOtherLanguages(t *testing.T) {
+	h := newHarness(t, false)
+	res, err := h.svc.Submit(context.Background(), me, reading.Draft{Content: "Only English here."}, appreading.SubmitOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Article.OriginalLanguage != "und" || !res.Article.NeedsTranslation() {
+		t.Fatalf("article = %+v", res.Article)
 	}
 }
 

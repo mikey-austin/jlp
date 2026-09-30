@@ -58,7 +58,6 @@ func TestNewArticleRejects(t *testing.T) {
 		want error
 	}{
 		{"empty", Draft{Content: " \n　\n"}, 0, ErrEmptyContent},
-		{"english", Draft{Content: "The Federal Reserve raised rates again on Wednesday."}, 0, ErrNotJapanese},
 		{"too long", Draft{Content: strings.Repeat("あ", 101)}, 100, ErrArticleTooLarge},
 		{"bad scheme", Draft{Content: sampleJA, SourceURL: "javascript:alert(1)"}, 0, ErrInvalidURL},
 		{"relative url", Draft{Content: sampleJA, SourceURL: "/articles/1"}, 0, ErrInvalidURL},
@@ -216,5 +215,44 @@ func TestLessonNormaliseCapsSections(t *testing.T) {
 	// sentence", so a long sentence keeps all of them.
 	if len(l.SentenceAnalyses[0].Chunks) != 20 {
 		t.Fatalf("chunks = %d, want all 20", len(l.SentenceAnalyses[0].Chunks))
+	}
+}
+
+func TestNewArticleLanguage(t *testing.T) {
+	ja, err := NewArticle("x", "me", Draft{Content: sampleJA}, 0, now)
+	if err != nil || ja.OriginalLanguage != "ja" || ja.NeedsTranslation() {
+		t.Fatalf("japanese: %v %+v", err, ja)
+	}
+	en, err := NewArticle("x", "me", Draft{Content: "The Federal Reserve raised rates again on Wednesday."}, 0, now)
+	if err != nil || en.OriginalLanguage != "und" || !en.NeedsTranslation() {
+		t.Fatalf("english: %v %+v", err, en)
+	}
+}
+
+func TestWithTranslation(t *testing.T) {
+	en, err := NewArticle("x", "me", Draft{Title: "Rates", Content: "First paragraph here.\n\nSecond paragraph here."}, 0, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := en.WithTranslation(Translation{SourceLanguage: "英語", Title: "金利", Paragraphs: []string{"最初の段落。", "二番目の段落。"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "金利" || got.Paragraphs[1] != "二番目の段落。" || got.OriginalTitle != "Rates" ||
+		len(got.OriginalParagraphs) != 2 || got.OriginalParagraphs[0] != "First paragraph here." ||
+		got.OriginalLanguage != "英語" || got.ContentHash != en.ContentHash || got.NeedsTranslation() {
+		t.Fatalf("translated = %+v", got)
+	}
+	if en.Title != "Rates" || !en.NeedsTranslation() {
+		t.Fatal("WithTranslation mutated its receiver")
+	}
+	for name, tr := range map[string]Translation{
+		"short": {SourceLanguage: "英語", Title: "t", Paragraphs: []string{"一つだけ。"}},
+		"long":  {SourceLanguage: "英語", Title: "t", Paragraphs: []string{"a", "b", "c"}},
+		"empty": {SourceLanguage: "英語", Title: "t", Paragraphs: []string{"あ", " "}},
+	} {
+		if _, err := en.WithTranslation(tr); !errors.Is(err, ErrTranslationMismatch) {
+			t.Errorf("%s: err = %v", name, err)
+		}
 	}
 }

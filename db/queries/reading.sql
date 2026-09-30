@@ -6,15 +6,21 @@
 -- article starts fresh instead of resurrecting the old one. inserted is
 -- true only for a genuinely new row (xmax = 0 is postgres' marker for
 -- "this row version was inserted, not updated").
-INSERT INTO reading_articles (id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO reading_articles (id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, original_language, original_title, original_paragraphs)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (identity_id, content_hash) DO UPDATE SET identity_id = EXCLUDED.identity_id
-RETURNING id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, (xmax = 0)::boolean AS inserted;
+RETURNING id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, original_language, original_title, original_paragraphs, (xmax = 0)::boolean AS inserted;
 
 -- name: GetReadingArticle :one
-SELECT id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at
+SELECT id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, original_language, original_title, original_paragraphs
 FROM reading_articles
 WHERE id = $1 AND identity_id = $2 AND deleted_at IS NULL;
+
+-- name: SaveReadingTranslation :execrows
+-- The worker's write after translating: not identity-scoped, like the
+-- edition claim it runs under.
+UPDATE reading_articles SET title = $2, paragraphs = $3, original_language = $4, original_title = $5, original_paragraphs = $6
+WHERE id = $1;
 
 -- name: InsertReadingEdition :exec
 INSERT INTO reading_editions (id, article_id, identity_id, status, prompt_name, prompt_version, schema_name, deliver_when_ready, next_attempt_at, created_at, updated_at)

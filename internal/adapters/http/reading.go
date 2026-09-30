@@ -59,7 +59,7 @@ func deliveryStatusLabel(s reading.DeliveryStatus) string {
 // isReadingInputError reports whether err is the learner's to fix (a
 // 400), not the server's (a 500).
 func isReadingInputError(err error) bool {
-	for _, e := range []error{reading.ErrEmptyContent, reading.ErrNotJapanese, reading.ErrArticleTooLarge, reading.ErrInvalidURL} {
+	for _, e := range []error{reading.ErrEmptyContent, reading.ErrArticleTooLarge, reading.ErrInvalidURL} {
 		if errors.Is(err, e) {
 			return true
 		}
@@ -448,8 +448,6 @@ func readingErrorMessage(err error) string {
 	switch {
 	case errors.Is(err, reading.ErrEmptyContent):
 		return "本文が空です。記事の本文を貼り付けてください。"
-	case errors.Is(err, reading.ErrNotJapanese):
-		return "日本語の文章ではないようです。"
 	case errors.Is(err, reading.ErrArticleTooLarge):
 		return "本文が長すぎます。読みたい部分だけを貼り付けてください。"
 	case errors.Is(err, reading.ErrInvalidURL):

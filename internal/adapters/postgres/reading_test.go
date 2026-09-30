@@ -433,3 +433,46 @@ func TestReadingFiguresRacingAttachLandsOneSet(t *testing.T) {
 		}
 	}
 }
+
+func TestReadingArticleSaveTranslationRoundTrip(t *testing.T) {
+	r, me, other := readingTestSetup(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	en, err := reading.NewArticle(uuid.NewString(), me, reading.Draft{Title: "Rates", Content: "The Fed raised rates " + uuid.NewString() + ".\n\nMarkets fell."}, 0, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stored, _, err := r.UpsertArticle(ctx, en)
+	if err != nil || stored.OriginalLanguage != "und" || !stored.NeedsTranslation() {
+		t.Fatalf("untranslated upsert: %v %+v", err, stored)
+	}
+	tr, err := stored.WithTranslation(reading.Translation{SourceLanguage: "英語", Title: "金利", Paragraphs: []string{"連邦準備制度は利上げした。", "市場は下落した。"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.SaveTranslation(ctx, stored.ID, tr); err != nil {
+		t.Fatal(err)
+	}
+	got, err := r.GetArticle(ctx, me, stored.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Title != "金利" || got.Paragraphs[1] != "市場は下落した。" || got.OriginalLanguage != "英語" ||
+		got.OriginalTitle != "Rates" || len(got.OriginalParagraphs) != 2 || got.NeedsTranslation() {
+		t.Fatalf("round trip = %+v", got)
+	}
+	// Resubmitting the source finds the translated article, not a new one.
+	again, created, err := r.UpsertArticle(ctx, en)
+	if err != nil || created || again.ID != stored.ID || again.OriginalLanguage != "英語" {
+		t.Fatalf("resubmit: created=%v err=%v %+v", created, err, again)
+	}
+	if err := r.SaveTranslation(ctx, uuid.NewString(), tr); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("missing article: %v", err)
+	}
+	_ = other
+	// A Japanese article keeps NULL originals and reads back as ja.
+	ja, _, err := r.UpsertArticle(ctx, testArticle(t, me, "政府が発表した新たな経済対策。"+uuid.NewString(), now))
+	if err != nil || ja.OriginalLanguage != "ja" || ja.OriginalParagraphs != nil || ja.NeedsTranslation() {
+		t.Fatalf("japanese: %v %+v", err, ja)
+	}
+}

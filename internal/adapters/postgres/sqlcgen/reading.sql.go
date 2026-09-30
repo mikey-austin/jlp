@@ -217,7 +217,7 @@ func (q *Queries) FailReadingEditionAttempt(ctx context.Context, arg FailReading
 }
 
 const getReadingArticle = `-- name: GetReadingArticle :one
-SELECT id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at
+SELECT id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, original_language, original_title, original_paragraphs
 FROM reading_articles
 WHERE id = $1 AND identity_id = $2 AND deleted_at IS NULL
 `
@@ -228,16 +228,19 @@ type GetReadingArticleParams struct {
 }
 
 type GetReadingArticleRow struct {
-	ID          pgtype.UUID
-	IdentityID  string
-	SourceUrl   string
-	SourceName  string
-	Title       string
-	Author      string
-	PublishedAt pgtype.Timestamptz
-	Paragraphs  []byte
-	ContentHash string
-	CreatedAt   pgtype.Timestamptz
+	ID                 pgtype.UUID
+	IdentityID         string
+	SourceUrl          string
+	SourceName         string
+	Title              string
+	Author             string
+	PublishedAt        pgtype.Timestamptz
+	Paragraphs         []byte
+	ContentHash        string
+	CreatedAt          pgtype.Timestamptz
+	OriginalLanguage   string
+	OriginalTitle      string
+	OriginalParagraphs []byte
 }
 
 func (q *Queries) GetReadingArticle(ctx context.Context, arg GetReadingArticleParams) (GetReadingArticleRow, error) {
@@ -254,6 +257,9 @@ func (q *Queries) GetReadingArticle(ctx context.Context, arg GetReadingArticlePa
 		&i.Paragraphs,
 		&i.ContentHash,
 		&i.CreatedAt,
+		&i.OriginalLanguage,
+		&i.OriginalTitle,
+		&i.OriginalParagraphs,
 	)
 	return i, err
 }
@@ -757,6 +763,37 @@ func (q *Queries) RestoreReadingArticle(ctx context.Context, arg RestoreReadingA
 	return result.RowsAffected(), nil
 }
 
+const saveReadingTranslation = `-- name: SaveReadingTranslation :execrows
+UPDATE reading_articles SET title = $2, paragraphs = $3, original_language = $4, original_title = $5, original_paragraphs = $6
+WHERE id = $1
+`
+
+type SaveReadingTranslationParams struct {
+	ID                 pgtype.UUID
+	Title              string
+	Paragraphs         []byte
+	OriginalLanguage   string
+	OriginalTitle      string
+	OriginalParagraphs []byte
+}
+
+// The worker's write after translating: not identity-scoped, like the
+// edition claim it runs under.
+func (q *Queries) SaveReadingTranslation(ctx context.Context, arg SaveReadingTranslationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, saveReadingTranslation,
+		arg.ID,
+		arg.Title,
+		arg.Paragraphs,
+		arg.OriginalLanguage,
+		arg.OriginalTitle,
+		arg.OriginalParagraphs,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const softDeleteReadingArticle = `-- name: SoftDeleteReadingArticle :execrows
 UPDATE reading_articles SET deleted_at = COALESCE(deleted_at, $3::timestamptz)
 WHERE id = $1 AND identity_id = $2
@@ -779,37 +816,43 @@ func (q *Queries) SoftDeleteReadingArticle(ctx context.Context, arg SoftDeleteRe
 }
 
 const upsertReadingArticle = `-- name: UpsertReadingArticle :one
-INSERT INTO reading_articles (id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO reading_articles (id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, original_language, original_title, original_paragraphs)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 ON CONFLICT (identity_id, content_hash) DO UPDATE SET identity_id = EXCLUDED.identity_id
-RETURNING id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, (xmax = 0)::boolean AS inserted
+RETURNING id, identity_id, source_url, source_name, title, author, published_at, paragraphs, content_hash, created_at, original_language, original_title, original_paragraphs, (xmax = 0)::boolean AS inserted
 `
 
 type UpsertReadingArticleParams struct {
-	ID          pgtype.UUID
-	IdentityID  string
-	SourceUrl   string
-	SourceName  string
-	Title       string
-	Author      string
-	PublishedAt pgtype.Timestamptz
-	Paragraphs  []byte
-	ContentHash string
-	CreatedAt   pgtype.Timestamptz
+	ID                 pgtype.UUID
+	IdentityID         string
+	SourceUrl          string
+	SourceName         string
+	Title              string
+	Author             string
+	PublishedAt        pgtype.Timestamptz
+	Paragraphs         []byte
+	ContentHash        string
+	CreatedAt          pgtype.Timestamptz
+	OriginalLanguage   string
+	OriginalTitle      string
+	OriginalParagraphs []byte
 }
 
 type UpsertReadingArticleRow struct {
-	ID          pgtype.UUID
-	IdentityID  string
-	SourceUrl   string
-	SourceName  string
-	Title       string
-	Author      string
-	PublishedAt pgtype.Timestamptz
-	Paragraphs  []byte
-	ContentHash string
-	CreatedAt   pgtype.Timestamptz
-	Inserted    bool
+	ID                 pgtype.UUID
+	IdentityID         string
+	SourceUrl          string
+	SourceName         string
+	Title              string
+	Author             string
+	PublishedAt        pgtype.Timestamptz
+	Paragraphs         []byte
+	ContentHash        string
+	CreatedAt          pgtype.Timestamptz
+	OriginalLanguage   string
+	OriginalTitle      string
+	OriginalParagraphs []byte
+	Inserted           bool
 }
 
 // Idempotent ingestion keyed on (identity_id, content_hash). A repeat
@@ -831,6 +874,9 @@ func (q *Queries) UpsertReadingArticle(ctx context.Context, arg UpsertReadingArt
 		arg.Paragraphs,
 		arg.ContentHash,
 		arg.CreatedAt,
+		arg.OriginalLanguage,
+		arg.OriginalTitle,
+		arg.OriginalParagraphs,
 	)
 	var i UpsertReadingArticleRow
 	err := row.Scan(
@@ -844,6 +890,9 @@ func (q *Queries) UpsertReadingArticle(ctx context.Context, arg UpsertReadingArt
 		&i.Paragraphs,
 		&i.ContentHash,
 		&i.CreatedAt,
+		&i.OriginalLanguage,
+		&i.OriginalTitle,
+		&i.OriginalParagraphs,
 		&i.Inserted,
 	)
 	return i, err

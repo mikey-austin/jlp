@@ -63,6 +63,18 @@ func newFakeReadingRepo() *fakeReadingRepo {
 	return &fakeReadingRepo{articles: map[string]*reading.Article{}, deleted: map[string]bool{}, figures: map[string][]reading.Figure{}, editions: map[string]*fakeEditionRow{}, deliveries: map[string]*fakeDeliveryRow{}}
 }
 
+func (m *fakeReadingRepo) SaveTranslation(_ context.Context, id string, t reading.Article) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	a, ok := m.articles[id]
+	if !ok {
+		return storage.ErrNotFound
+	}
+	a.Title, a.Paragraphs = t.Title, append([]string(nil), t.Paragraphs...)
+	a.OriginalLanguage, a.OriginalTitle, a.OriginalParagraphs = t.OriginalLanguage, t.OriginalTitle, append([]string(nil), t.OriginalParagraphs...)
+	return nil
+}
+
 func (m *fakeReadingRepo) UpsertArticle(_ context.Context, a reading.Article) (reading.Article, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -481,7 +493,6 @@ func TestAPIReadingSubmitPollDeliver(t *testing.T) {
 func TestAPIReadingSubmitValidation(t *testing.T) {
 	h, _, _ := readingTestServer(t, false)
 	for _, c := range []struct{ body, want string }{
-		{`{"content":"Only English text on this page."}`, "Japanese"},
 		{`{"content":"   "}`, "empty"},
 		{`{"content":"日本語の本文です。","url":"ftp://x"}`, "url"},
 		{`not json`, "invalid request body"},
@@ -577,8 +588,8 @@ func TestReadingPages(t *testing.T) {
 
 func TestReadingPasteFormShowsValidationError(t *testing.T) {
 	h, _, _ := readingTestServer(t, false)
-	rec := readingPostForm(h, "/reading", url.Values{"content": {"English only, sorry."}, "title": {"keep me"}})
-	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "日本語の文章ではない") || !strings.Contains(rec.Body.String(), "keep me") {
+	rec := readingPostForm(h, "/reading", url.Values{"content": {"  "}, "title": {"keep me"}})
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "本文が空です") || !strings.Contains(rec.Body.String(), "keep me") {
 		t.Fatalf("form error = %d", rec.Code)
 	}
 	if strings.Contains(rec.Body.String(), "Kindleに送信") {

@@ -256,17 +256,20 @@ type LessonObservation struct {
 }
 
 type ReadingArticle struct {
-	ID          pgtype.UUID
-	IdentityID  string
-	SourceUrl   string
-	SourceName  string
-	Title       string
-	Author      string
-	PublishedAt pgtype.Timestamptz
-	Paragraphs  []byte
-	ContentHash string
-	CreatedAt   pgtype.Timestamptz
-	DeletedAt   pgtype.Timestamptz
+	ID                 pgtype.UUID
+	IdentityID         string
+	SourceUrl          string
+	SourceName         string
+	Title              string
+	Author             string
+	PublishedAt        pgtype.Timestamptz
+	Paragraphs         []byte
+	ContentHash        string
+	CreatedAt          pgtype.Timestamptz
+	DeletedAt          pgtype.Timestamptz
+	OriginalLanguage   string
+	OriginalTitle      string
+	OriginalParagraphs []byte
 }
 
 type ReadingArticleFigure struct {
@@ -296,6 +299,35 @@ type ReadingDelivery struct {
 	ClaimedAt     pgtype.Timestamptz
 	CreatedAt     pgtype.Timestamptz
 	SentAt        pgtype.Timestamptz
+}
+
+type ReadingDraft struct {
+	ID          pgtype.UUID
+	IdentityID  string
+	Title       string
+	SourceName  string
+	SourceUrl   string
+	Author      string
+	PublishedAt pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
+type ReadingDraftBlock struct {
+	DraftID   pgtype.UUID
+	Seq       int32
+	Page      int32
+	PageUrl   string
+	Kind      string
+	Text      string
+	Caption   string
+	Alt       string
+	MediaType string
+	Width     int32
+	Height    int32
+	Sha256    string
+	Data      []byte
+	Excluded  bool
 }
 
 type ReadingEdition struct {

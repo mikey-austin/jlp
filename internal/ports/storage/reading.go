@@ -55,6 +55,10 @@ type ReadingRepository interface {
 	UpsertArticle(ctx context.Context, a reading.Article) (stored reading.Article, created bool, err error)
 	// GetArticle reads one visible (not soft-deleted) article.
 	GetArticle(ctx context.Context, identity learner.IdentityID, id string) (reading.Article, error)
+	// SaveTranslation stores a translated article's Japanese title and
+	// paragraphs and the original beside them. The worker's path, so not
+	// identity-scoped (like CompleteEdition).
+	SaveTranslation(ctx context.Context, articleID string, a reading.Article) error
 	// SoftDeleteArticle hides an article and every edition of it from
 	// every read. Idempotent; ErrNotFound for someone else's article.
 	SoftDeleteArticle(ctx context.Context, identity learner.IdentityID, id string, at time.Time) error

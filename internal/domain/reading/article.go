@@ -49,9 +49,11 @@ const (
 // with err.Error() as the message, so each says what to fix.
 var (
 	ErrEmptyContent    = errors.New("reading: article content is empty")
-	ErrNotJapanese     = errors.New("reading: article content does not look like Japanese text")
 	ErrArticleTooLarge = errors.New("reading: article content is too long")
 	ErrInvalidURL      = errors.New("reading: source url must be an absolute http(s) url")
+	// ErrTranslationMismatch is a translation that cannot stand in for its
+	// original: the paragraph counts differ, or a paragraph came back empty.
+	ErrTranslationMismatch = errors.New("reading: translation does not match the original paragraphs")
 )
 
 // Article is one piece of Japanese text the learner chose to study.
@@ -71,6 +73,57 @@ type Article struct {
 	Paragraphs  []string
 	ContentHash string
 	CreatedAt   time.Time
+
+	// OriginalLanguage is "ja" for an article written in Japanese, "und"
+	// for one in another language that is not yet translated, and, once
+	// translated, the model's name for the source language (英語). Title
+	// and Paragraphs then hold the Japanese and Original* the source.
+	OriginalLanguage   string
+	OriginalTitle      string
+	OriginalParagraphs []string
+}
+
+// Translation is a Japanese rendering of an article, as the translate
+// agent returns it.
+type Translation struct {
+	SourceLanguage string
+	Title          string
+	Paragraphs     []string
+}
+
+// LanguageJapanese and LanguageUndetermined are the two OriginalLanguage
+// values that are not a language name.
+const (
+	LanguageJapanese     = "ja"
+	LanguageUndetermined = "und"
+)
+
+// NeedsTranslation reports whether the article is in another language and
+// has not been translated yet. A translated article keeps its original,
+// so regenerating a lesson never translates twice.
+func (a Article) NeedsTranslation() bool {
+	return a.OriginalLanguage != LanguageJapanese && len(a.OriginalParagraphs) == 0
+}
+
+// WithTranslation moves the article's current text into Original* and
+// makes the Japanese the body to study. ContentHash stays the hash of the
+// source text, so submitting the same source again is still a duplicate.
+func (a Article) WithTranslation(t Translation) (Article, error) {
+	if len(t.Paragraphs) != len(a.Paragraphs) {
+		return Article{}, fmt.Errorf("%w: %d paragraphs, want %d", ErrTranslationMismatch, len(t.Paragraphs), len(a.Paragraphs))
+	}
+	for i, p := range t.Paragraphs {
+		if strings.TrimSpace(p) == "" {
+			return Article{}, fmt.Errorf("%w: paragraph %d is empty", ErrTranslationMismatch, i+1)
+		}
+	}
+	a.OriginalTitle, a.OriginalParagraphs = a.Title, a.Paragraphs
+	a.Title, a.Paragraphs = ClipTitle(t.Title), append([]string(nil), t.Paragraphs...)
+	if a.Title == "" {
+		a.Title = a.OriginalTitle
+	}
+	a.OriginalLanguage = t.SourceLanguage
+	return a, nil
 }
 
 // Draft is an article as submitted, before validation.
@@ -106,8 +159,9 @@ func NewArticle(id string, identity learner.IdentityID, d Draft, maxRunes int, n
 	if total > maxRunes {
 		return Article{}, fmt.Errorf("%w (%d characters; the limit is %d — select the part you want to study)", ErrArticleTooLarge, total, maxRunes)
 	}
+	lang := LanguageJapanese
 	if !looksJapanese(paras) {
-		return Article{}, ErrNotJapanese
+		lang = LanguageUndetermined
 	}
 	src := strings.TrimSpace(d.SourceURL)
 	if src != "" {
@@ -138,6 +192,8 @@ func NewArticle(id string, identity learner.IdentityID, d Draft, maxRunes int, n
 		Paragraphs:  paras,
 		ContentHash: ContentHash(paras),
 		CreatedAt:   now.UTC(),
+
+		OriginalLanguage: lang,
 	}
 	return a, nil
 }
@@ -228,9 +284,8 @@ func collapseSpace(s string) string {
 }
 
 // looksJapanese requires at least a fifth of the letters to be kana or
-// kanji. It is a guard against sending an English page (the extension
-// run on the wrong tab) to a Japanese study prompt, not a language
-// detector: mixed articles full of English company names pass easily.
+// kanji. It decides whether an article is studied as it is or translated
+// first, and is not a language detector: mixed articles full of English company names pass easily.
 func looksJapanese(paras []string) bool {
 	ja, letters := 0, 0
 	for _, p := range paras {
