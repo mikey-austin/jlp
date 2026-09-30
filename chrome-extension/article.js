@@ -191,10 +191,21 @@
     if (ogSrc) figures = [{ src: ogSrc, caption: "", alt: "", after_paragraph: -1, after_text: "", lead: true, in_text: false }];
   }
 
+  // The site's name when the page does not declare one: the last segment
+  // of the document title ("記事 | サイト名"), if it is name-sized and not
+  // the headline itself.
+  const siteFromTitle = (articleTitle) => {
+    const parts = (document.title || "").split(/ \| | – | - | ｜ |：/);
+    if (parts.length < 2) return "";
+    const last = parts[parts.length - 1].trim();
+    return last.length >= 2 && last.length <= 40 && last !== (articleTitle || "").trim() ? last : "";
+  };
+  const articleTitle = meta("meta[property='og:title']") || text(document.querySelector("h1")) || document.title;
+
   return {
     url: (canonical && canonical.href) || location.href,
-    title: meta("meta[property='og:title']") || text(document.querySelector("h1")) || document.title,
-    source: meta("meta[property='og:site_name']") || location.hostname,
+    title: articleTitle,
+    source: meta("meta[property='og:site_name']") || meta("meta[name='application-name']") || siteFromTitle(articleTitle) || location.hostname,
     author: meta("meta[name='author']") || meta("meta[property='article:author']"),
     published_at: meta("meta[property='article:published_time']") || meta("meta[itemprop='datePublished']") || (timeEl ? timeEl.getAttribute("datetime") : ""),
     selection: window.getSelection().toString(),
