@@ -1,9 +1,11 @@
 package httpx
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"testing"
 
@@ -86,5 +88,56 @@ func TestReadingCapturePageIsNotAnEdition(t *testing.T) {
 	body := rec.Body.String()
 	if rec.Code != 200 || !strings.Contains(body, "/static/js/reading-capture.") || !strings.Contains(body, "imaging.js") {
 		t.Fatalf("reading/capture: %d", rec.Code)
+	}
+}
+
+func TestManifestDeclaresShareTarget(t *testing.T) {
+	b, err := os.ReadFile(repoPath("web", "static", "manifest.webmanifest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m struct {
+		ShareTarget struct {
+			Action, Method, Enctype string
+			Params                  map[string]string
+		} `json:"share_target"`
+	}
+	if err := json.Unmarshal(b, &m); err != nil {
+		t.Fatal(err)
+	}
+	st := m.ShareTarget
+	if st.Action != "/reading/share" || st.Method != "POST" || st.Enctype != "application/x-www-form-urlencoded" ||
+		st.Params["title"] != "title" || st.Params["text"] != "text" || st.Params["url"] != "url" {
+		t.Fatalf("share_target = %+v", st)
+	}
+}
+
+func TestServiceWorkerHandlesSharesAndKeepsTheirCache(t *testing.T) {
+	h := NewServer(testOptions()).HandlerForTest()
+	body := get(h, "/static/sw.js").Body.String()
+	for _, want := range []string{`"/reading/share"`, `"jlp-share"`, "303", "name !== SHARE_CACHE"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("sw.js missing %s", want)
+		}
+	}
+}
+
+func TestReadingSharePages(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	if rec := get(h, "/reading/share?pending=x"); rec.Code != 200 || !strings.Contains(rec.Body.String(), "reading-share.") {
+		t.Fatalf("GET /reading/share: %d", rec.Code)
+	}
+
+	form := url.Values{"title": {"共有記事"}, "text": {"本文です。"}, "url": {"https://example.test/a"}}
+	req := httptest.NewRequest(http.MethodPost, "/reading/share", strings.NewReader(form.Encode()))
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "もう一度共有") || strings.Contains(rec.Body.String(), "reading-share.") {
+		t.Fatalf("POST /reading/share: %d", rec.Code)
+	}
+	if list := get(h, "/reading"); strings.Contains(list.Body.String(), "共有記事") {
+		t.Fatal("a share POST the worker missed must create nothing")
 	}
 }

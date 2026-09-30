@@ -90,3 +90,17 @@ func (s *Server) readingCapturePage(w http.ResponseWriter, r *http.Request) {
 	ident, _ := IdentityFrom(r.Context())
 	s.render(w, r, "reading_capture", map[string]any{"Title": "読解に送る", "Identity": ident})
 }
+
+// readingSharePage serves both verbs. The installed app's service worker
+// answers the share-target POST itself (redirecting to the GET with the
+// fields parked in Cache Storage), so a POST that reaches the server means
+// no worker was in control — the page says so and, deliberately, does
+// nothing with the body.
+func (s *Server) readingSharePage(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	s.render(w, r, "reading_share", map[string]any{
+		"Title":         "読解に送る",
+		"Identity":      ident,
+		"WorkerMissing": r.Method == http.MethodPost,
+	})
+}

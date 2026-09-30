@@ -14,6 +14,11 @@
 // is the hardest audience to test against.
 const CACHE_NAME = "{{.CacheName}}";
 
+// Holds shared fields between the worker's POST interception and the
+// /reading/share page that submits them. Not a shell cache: the activate
+// cleanup below must leave it alone.
+const SHARE_CACHE = "jlp-share";
+
 const PRECACHE_URLS = [
 {{- range .URLs}}
   "{{.}}",
@@ -34,7 +39,7 @@ self.addEventListener("activate", (event) => {
       .then((names) =>
         Promise.all(
           names
-            .filter((name) => name !== CACHE_NAME)
+            .filter((name) => name !== CACHE_NAME && name !== SHARE_CACHE)
             .map((name) => caches.delete(name))
         )
       )
@@ -44,6 +49,24 @@ self.addEventListener("activate", (event) => {
 
 self.addEventListener("fetch", (event) => {
   const { request } = event;
+
+  // Android share target (manifest share_target). A share arrives as a
+  // POST navigation launched by the OS; whether that carries the
+  // SameSite=Lax session cookie or passes the CSRF check is not ours to
+  // rely on. So the worker keeps the fields and redirects to a GET page,
+  // which submits them from JLP's own origin with the session.
+  const shareURL = new URL(request.url);
+  if (request.method === "POST" && shareURL.pathname === "/reading/share") {
+    event.respondWith((async () => {
+      const form = await request.formData();
+      const id = crypto.randomUUID();
+      const entry = { title: form.get("title") || "", text: form.get("text") || "", url: form.get("url") || "" };
+      const cache = await caches.open(SHARE_CACHE);
+      await cache.put(`/reading/share/pending/${id}`, new Response(JSON.stringify(entry), { headers: { "Content-Type": "application/json" } }));
+      return Response.redirect(`/reading/share?pending=${id}`, 303);
+    })());
+    return;
+  }
 
   // Network-first for navigations, falling back to the cached offline
   // shell when the network is unavailable.

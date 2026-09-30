@@ -1,0 +1,6 @@
+{{define "content"}}<section class="reading-capture">
+  <h1>読解に送る</h1>
+  {{if .WorkerMissing}}<p class="card">共有を受け取れませんでした。JLPアプリを一度開いてから、もう一度共有してください。</p>
+  {{else}}<p id="share-status" class="hint">共有された記事を送信しています…</p>{{end}}
+</section>
+{{if not .WorkerMissing}}<script src="{{asset "/static/js/reading-share.js"}}"></script>{{end}}{{end}}

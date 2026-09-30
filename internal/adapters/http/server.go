@@ -442,6 +442,8 @@ func (s *Server) routes() http.Handler {
 			r.Post("/reading", s.readingCreate)
 			// Before /reading/{id}, which would otherwise read "capture" as an id.
 			r.Get("/reading/capture", s.readingCapturePage)
+			r.Get("/reading/share", s.readingSharePage)
+			r.Post("/reading/share", s.readingSharePage)
 			r.Get("/reading/{id}", s.readingDetail)
 			r.Get("/reading/{id}/epub", s.readingEpub)
 			r.Post("/reading/{id}/deliver", s.readingAction(s.readingDeliver))
