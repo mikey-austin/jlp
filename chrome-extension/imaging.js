@@ -95,8 +95,45 @@
     return { ok, failed };
   }
 
+  // sendWithImages is the one "prepare the images, POST multipart, retry as
+  // JSON" flow, shared by the one-shot submit and the draft add (they differ
+  // only in the endpoint, which post() closes over). post(init) performs the
+  // request and returns a Response; it may throw (a reset) — only an error
+  // with .auth set (the extension's bad-token signal) is final, as is a
+  // 401/403 response. Anything else retries once without images; the server
+  // dedupes by content hash. opts: allowed (false = text only, no fetches),
+  // fetchInit, onStatus(text). Resolves {res, notAllowed, fellBack}.
+  async function sendWithImages(post, fields, figures, opts = {}) {
+    const list = figures || [];
+    const postJSON = () => post({ headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields) });
+    let images = { ok: [], failed: 0 };
+    let notAllowed = false;
+    if (list.length) {
+      if (opts.allowed === false) {
+        notAllowed = true;
+      } else {
+        if (opts.onStatus) opts.onStatus("画像を準備中…");
+        images = await prepareImages(list, { fetchInit: opts.fetchInit });
+      }
+    }
+    if (opts.onStatus) opts.onStatus("送信中…");
+    if (!images.ok.length) return { res: await postJSON(), notAllowed, fellBack: false };
+    const form = new FormData();
+    form.append("metadata", JSON.stringify({ ...fields, figures: images.ok.map((x) => x.meta) }));
+    images.ok.forEach((x, i) => form.append(`image-${i}`, x.blob, `image-${i}`));
+    let res = null;
+    try {
+      res = await post({ body: form });
+    } catch (err) {
+      if (err.auth) throw err; // retrying cannot fix a bad token
+      console.warn("[JLP] image upload failed", String(err));
+    }
+    if (res && (res.ok || res.status === 401 || res.status === 403)) return { res, notAllowed, fellBack: false };
+    return { res: await postJSON(), notAllowed, fellBack: true };
+  }
+
   global.JLPImaging = {
     MAX_EDGE, MIN_EDGE, MAX_IMAGE_BYTES, PNG_KEEP_BYTES, UPLOAD_BUDGET,
-    fetchWithTimeout, downscale, withinBudget, prepareImages,
+    fetchWithTimeout, downscale, withinBudget, prepareImages, sendWithImages,
   };
 })(globalThis);

@@ -36,6 +36,41 @@
   status.textContent = "";
   card.hidden = false;
 
+  // An open draft is known on load; adding to it still takes the tap.
+  const draftStatus = document.getElementById("share-draft-status");
+  const draftBtn = document.getElementById("share-draft");
+  const reviewLink = document.getElementById("share-review");
+  function showDraft(d) {
+    draftStatus.textContent = `下書き：${d.pages}ページ・段落${d.paragraphs}・画像${d.images}`;
+    draftStatus.hidden = false;
+    draftBtn.textContent = "下書きに追加";
+    reviewLink.href = d.review_url;
+    reviewLink.hidden = false;
+  }
+  fetch("/api/v1/reading/drafts/active", { credentials: "same-origin" })
+    .then((r) => (r.ok ? r.json() : null)).then((d) => { if (d) showDraft(d); }).catch(() => {});
+
+  draftBtn.addEventListener("click", async () => {
+    draftBtn.disabled = true;
+    status.textContent = "追加しています…";
+    try {
+      const res = await fetch("/api/v1/reading/drafts/active/parts", {
+        method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title, url, content: text }),
+      });
+      if (!res.ok) {
+        let msg = `送信に失敗しました (${res.status})`;
+        try { msg = (await res.json()).error || msg; } catch (_) { /* not JSON */ }
+        throw new Error(msg);
+      }
+      showDraft(await res.json());
+      status.textContent = "追加しました。";
+    } catch (err) {
+      status.textContent = `エラー: ${err.message}`;
+    }
+    draftBtn.disabled = false;
+  });
+
   document.getElementById("share-send").addEventListener("click", async (e) => {
     // currentTarget is null once dispatch ends, i.e. after the first await.
     const btn = e.currentTarget;

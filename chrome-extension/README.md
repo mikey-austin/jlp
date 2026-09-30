@@ -83,6 +83,21 @@ sent without the click. Sending the same article twice returns the
 existing edition; the server decides that, not the extension. See
 `docs/api/reading.md` for the contract.
 
+**Multi-page drafts.** Tick 「複数ページ（下書きに集める）」 in the popup
+(remembered) and the button reads 「このページを下書きに追加」; it posts the
+same capture — images prepared and uploaded the same way, via
+`JLPImaging.sendWithImages` — to `POST /api/v1/reading/drafts/active/parts`
+and shows 「下書き：Nページ・段落N・画像N」 instead of following an edition. While a draft is open
+(`GET /api/v1/reading/drafts/active` on popup open) the popup shows that
+status with 「このページを追加」, 「確認して送信」 (opens the review page in a
+tab) and 「破棄」 (two taps: the first arms 「本当に破棄」, the second
+`DELETE`s the draft), and the page context menu reads
+「JLPの下書きにこのページを追加」 and adds instead of submitting.
+`background.js` re-words the item (`chrome.contextMenus.update`, same id) on
+browser start and on each click; the popup does so after it changes the
+state. The shim has no `contextMenus`/`tabs`, so the title update is a no-op
+there; drive `jlpPopup.addToDraft(article)` / `showStart()` / `discardDraft()`.
+
 **Note:** `article.js` and `imaging.js` are also embedded by the Go server
 (via the `extension` package in this directory) and served to JLP's
 `/reading/capture` page on the phone, so edits to either file change desktop

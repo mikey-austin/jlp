@@ -18,6 +18,37 @@ const MENU_READING = "jlp-reading";
 // a tab straight at the deployed chat and needs no UI of ours.
 const POPUP_MENUS = { [MENU_FEEDBACK]: "feedback", [MENU_VOCAB]: "vocab", [MENU_SESSION]: "session" };
 
+const TITLE_ONESHOT = "JLPでKindle版を作成";
+const TITLE_DRAFT = "JLPの下書きにこのページを追加";
+
+// draftOpen asks the API whether a draft is open. A menu item must never
+// fail because the server is unreachable or no token is set, so any
+// trouble reads as "no draft" and the one-shot wording stays.
+async function draftOpen() {
+  try {
+    const [{ baseUrl }, { apiToken }] = await Promise.all([
+      chrome.storage.sync.get({ baseUrl: "http://localhost:8080" }),
+      chrome.storage.local.get({ apiToken: "" }),
+    ]);
+    if (!apiToken) return false;
+    const res = await fetch(`${baseUrl}/api/v1/reading/drafts/active`, { headers: { Authorization: `Bearer ${apiToken}` } });
+    return res.status === 200;
+  } catch (_) {
+    return false;
+  }
+}
+
+// syncReadingTitle re-words the reading item to match the draft state. The
+// popup does the same after it changes the state; this covers browser
+// start and drafts changed elsewhere (phone, review page).
+async function syncReadingTitle() {
+  const open = await draftOpen();
+  chrome.contextMenus.update(MENU_READING, { title: open ? TITLE_DRAFT : TITLE_ONESHOT }, () => void chrome.runtime.lastError);
+  return open;
+}
+
+chrome.runtime.onStartup.addListener(syncReadingTitle);
+
 chrome.runtime.onInstalled.addListener(() => {
   // removeAll first: contextMenus items persist across service-worker
   // restarts (they're tied to the extension install, not the worker's
@@ -39,6 +70,7 @@ chrome.runtime.onInstalled.addListener(() => {
         chrome.contextMenus.create({ id: MENU_CHAT, title: "JLPでチャット", contexts: ["selection"] });
       }
     });
+    syncReadingTitle();
   });
 });
 
@@ -62,9 +94,12 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (!article) {
       article = { url: tab.url || "", title: tab.title || "", selection: info.selectionText || "", content: "" };
     }
-    await chrome.storage.session.set({ article, mode: "reading" });
+    // Asked again now, not trusted from the title: the draft may have been
+    // sent or discarded on another device since the title was last set.
+    const mode = (await syncReadingTitle()) ? "draft" : "reading";
+    await chrome.storage.session.set({ article, mode });
     await chrome.windows.create({
-      url: chrome.runtime.getURL("popup.html?mode=reading"),
+      url: chrome.runtime.getURL(`popup.html?mode=${mode}`),
       type: "popup",
       width: 420,
       height: 620,

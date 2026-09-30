@@ -5,7 +5,10 @@
   <div id="share-card" class="card" hidden>
     <p class="reading-title" id="share-title"></p>
     <p class="hint" id="share-meta"></p>
+    <p class="hint" id="share-draft-status" hidden></p>
     <button type="button" class="btn" id="share-send">作成してKindleに送る</button>
+    <button type="button" class="btn" id="share-draft">下書きに追加（複数ページ）</button>
+    <a id="share-review" href="#" hidden>確認して送信</a>
   </div>{{end}}
 </section>
 {{if not .WorkerMissing}}<script src="{{asset "/static/js/reading-share.js"}}"></script>{{end}}{{end}}

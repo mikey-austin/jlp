@@ -294,6 +294,34 @@ async function imagesAllowed() {
 // The "画像 n/m枚" line submitArticle records for renderEdition to append.
 let readingImageNote = "";
 
+// apiErrorMessage is the server's own {"error": …} text when it sent one.
+async function apiErrorMessage(res) {
+  let msg = `送信に失敗しました (${res.status})`;
+  try { msg = (await res.json()).error || msg; } catch (_) { /* not JSON */ }
+  return msg;
+}
+
+// postArticle sends a captured article to `path` — the one-shot submit and
+// the draft add take the same body (images prepared by JLPImaging, the
+// multipart upload retried as JSON), only the endpoint differs. Resolves
+// {res, imageNote}: imageNote is set when the images did not make it.
+async function postArticle(cfg, path, article, { deliver, onStatus } = {}) {
+  const fields = {
+    url: article.url || "", title: article.title || "", source: article.source || "",
+    author: article.author || "", published_at: article.published_at || "",
+    content: article.content || "", selection: article.selection || "",
+  };
+  if (deliver !== undefined) fields.deliver = deliver;
+  const { res, notAllowed, fellBack } = await JLPImaging.sendWithImages(
+    (init) => jlpFetch(cfg, path, { method: "POST", ...init }),
+    fields, article.figures, { allowed: await imagesAllowed(), onStatus },
+  );
+  let imageNote = "";
+  if (notAllowed) imageNote = "画像は取り込まれません（オプションで許可してください）";
+  else if (fellBack) imageNote = "画像を送れなかったため、本文のみで作成しました";
+  return { res, imageNote };
+}
+
 // submitArticle runs 「JLPでKindle版を作成」 end to end: POST the captured
 // article, then follow the edition until it is finished. The server
 // decides everything — whether this text is a duplicate, when the edition
@@ -307,50 +335,12 @@ async function submitArticle(article) {
   readingImageNote = "";
   try {
     const cfg = await loadConfig();
-    const fields = {
-      url: article.url || "", title: article.title || "", source: article.source || "",
-      author: article.author || "", published_at: article.published_at || "",
-      content: article.content || "", selection: article.selection || "", deliver: !!cfg.autoDeliver,
-    };
-    let images = { ok: [], failed: 0 };
-    let imageNote = "";
-    if ((article.figures || []).length) {
-      if (await imagesAllowed()) {
-        statusEl.textContent = "画像を準備中…";
-        images = await JLPImaging.prepareImages(article.figures);
-      } else {
-        imageNote = "画像は取り込まれません（オプションで許可してください）";
-      }
-    }
-    const postJSON = () => jlpFetch(cfg, `/api/v1/reading/articles`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields),
+    const { res, imageNote } = await postArticle(cfg, "/api/v1/reading/articles", article, {
+      deliver: !!cfg.autoDeliver,
+      onStatus: (t) => { statusEl.textContent = t; },
     });
-    let res;
-    if (images.ok.length) {
-      const form = new FormData();
-      form.append("metadata", JSON.stringify({ ...fields, figures: images.ok.map((x) => x.meta) }));
-      images.ok.forEach((x, i) => form.append(`image-${i}`, x.blob, `image-${i}`));
-      // Anything that goes wrong with the upload — a reset, a gateway
-      // timeout, a rejection — retries once without images (the server
-      // dedupes by content hash). Only a bad token is the user's to see.
-      try {
-        res = await jlpFetch(cfg, `/api/v1/reading/articles`, { method: "POST", body: form });
-      } catch (err) {
-        if (err.auth) throw err; // jlpFetch's 401/403: retrying cannot help
-        console.warn("[JLP] image upload failed", String(err));
-        res = null;
-      }
-      if (!res || !res.ok) {
-        imageNote = "画像を送れなかったため、本文のみで作成しました";
-        res = await postJSON();
-      }
-    } else {
-      res = await postJSON();
-    }
     if (!res.ok) {
-      let msg = `送信に失敗しました (${res.status})`;
-      try { msg = (await res.json()).error || msg; } catch (_) { /* not JSON */ }
-      throw new Error(msg);
+      throw new Error(await apiErrorMessage(res));
     }
     const out = await res.json();
     const total = (article.figures || []).length;
@@ -446,6 +436,154 @@ async function captureActiveTab() {
   return result;
 }
 
+// --- drafts (multi-page articles) -------------------------------------------
+
+const DRAFT_API = "/api/v1/reading/drafts/active";
+const MENU_TITLE_ONESHOT = "JLPでKindle版を作成";
+const MENU_TITLE_DRAFT = "JLPの下書きにこのページを追加";
+
+// setReadingMenuTitle keeps the context menu's wording in step with whether
+// a draft is open. background.js's MENU_READING id never changes; only the
+// title does. Absent (the shim) or failing, it is a no-op.
+function setReadingMenuTitle(open) {
+  try {
+    if (!chrome.contextMenus || !chrome.contextMenus.update) return;
+    chrome.contextMenus.update("jlp-reading", { title: open ? MENU_TITLE_DRAFT : MENU_TITLE_ONESHOT }, () => void chrome.runtime.lastError);
+  } catch (_) { /* a stale title is harmless */ }
+}
+
+// fetchDraft resolves the open draft's summary, or null when there is none.
+async function fetchDraft(cfg) {
+  const res = await jlpFetch(cfg, DRAFT_API);
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(`下書きの取得に失敗しました (${res.status})`);
+  return res.json();
+}
+
+function draftStatusLine(d) {
+  return `下書き：${d.pages}ページ・段落${d.paragraphs}・画像${d.images}`;
+}
+
+// renderDraft shows the draft view for a draft summary (or the empty state
+// for null), and re-arms the discard button's two-tap confirm.
+function renderDraft(cfg, d, message) {
+  setReadingMenuTitle(!!d);
+  if (!d) {
+    showView("empty-state");
+    return;
+  }
+  showView("draft-view");
+  document.getElementById("draft-status").textContent = draftStatusLine(d);
+  const msg = document.getElementById("draft-message");
+  msg.textContent = message || "";
+  msg.classList.remove("error-banner");
+  const review = document.getElementById("draft-review");
+  review.dataset.url = cfg.baseUrl.replace(/\/+$/, "") + d.review_url;
+  resetDiscard();
+}
+
+function resetDiscard() {
+  const btn = document.getElementById("draft-discard");
+  btn.textContent = "破棄";
+  btn.dataset.armed = "";
+}
+
+function showDraftError(err) {
+  const msg = document.getElementById("draft-message");
+  msg.textContent = `エラー: ${err.message}`;
+  msg.classList.add("error-banner");
+}
+
+// addToDraft adds the captured page to the open draft (the server opens
+// one if there is none) and shows the new totals; it never navigates away.
+async function addToDraft(article) {
+  showView("draft-view");
+  const statusEl = document.getElementById("draft-status");
+  const msg = document.getElementById("draft-message");
+  msg.classList.remove("error-banner");
+  msg.textContent = "";
+  statusEl.textContent = article.title || "";
+  try {
+    const cfg = await loadConfig();
+    const { res, imageNote } = await postArticle(cfg, `${DRAFT_API}/parts`, article, {
+      onStatus: (t) => { msg.textContent = t; },
+    });
+    if (!res.ok) throw new Error(await apiErrorMessage(res));
+    const d = await res.json();
+    renderDraft(cfg, d, imageNote ? `追加しました。${imageNote}` : "追加しました。");
+    return d;
+  } catch (err) {
+    // The status line would otherwise be stuck on the page title.
+    try { const d = await fetchDraft(await loadConfig()); if (d) statusEl.textContent = draftStatusLine(d); } catch (_) { /* keep the title */ }
+    showDraftError(err);
+    throw err;
+  }
+}
+
+// discardDraft is the second tap of 「破棄」: delete the open draft.
+async function discardDraft() {
+  try {
+    const cfg = await loadConfig();
+    const res = await jlpFetch(cfg, DRAFT_API, { method: "DELETE" });
+    if (!res.ok && res.status !== 404) throw new Error(`破棄に失敗しました (${res.status})`);
+    renderDraft(cfg, null);
+    return true;
+  } catch (err) {
+    resetDiscard();
+    showDraftError(err);
+    return false;
+  }
+}
+
+function wireDraft() {
+  document.getElementById("draft-add").addEventListener("click", async () => {
+    try {
+      await addToDraft(await captureActiveTab());
+    } catch (err) {
+      showView("draft-view");
+      showDraftError(err);
+    }
+  });
+  document.getElementById("draft-review").addEventListener("click", (e) => {
+    const url = e.currentTarget.dataset.url;
+    if (url) chrome.tabs.create({ url });
+  });
+  document.getElementById("draft-discard").addEventListener("click", (e) => {
+    const btn = e.currentTarget;
+    if (!btn.dataset.armed) {
+      btn.dataset.armed = "1";
+      btn.textContent = "本当に破棄";
+      return;
+    }
+    discardDraft();
+  });
+  const box = document.getElementById("collect-mode");
+  box.addEventListener("change", () => {
+    setCollectLabel();
+    chrome.storage.sync.set({ collectMode: box.checked });
+  });
+}
+
+function setCollectLabel() {
+  document.getElementById("reading-start").textContent =
+    document.getElementById("collect-mode").checked ? "このページを下書きに追加" : "このページのKindle版を作成";
+}
+
+// showStart is the popup's resting state: the draft view when a draft is
+// open, else the empty state with the remembered 複数ページ choice. No
+// token or an unreachable server just leaves the one-shot default.
+async function showStart() {
+  const { collectMode } = await chrome.storage.sync.get({ collectMode: false });
+  document.getElementById("collect-mode").checked = !!collectMode;
+  setCollectLabel();
+  try {
+    const cfg = await loadConfig();
+    renderDraft(cfg, await fetchDraft(cfg));
+  } catch (_) {
+    showView("empty-state");
+  }
+}
+
 function wireReading() {
   document.getElementById("reading-deliver").addEventListener("click", (e) => {
     const id = e.currentTarget.dataset.editionId;
@@ -453,7 +591,9 @@ function wireReading() {
   });
   document.getElementById("reading-start").addEventListener("click", async () => {
     try {
-      submitArticle(await captureActiveTab());
+      const article = await captureActiveTab();
+      if (document.getElementById("collect-mode").checked) addToDraft(article).catch(() => {});
+      else submitArticle(article);
     } catch (err) {
       showView("reading-view");
       const statusEl = document.getElementById("reading-status");
@@ -559,6 +699,7 @@ function renderCreatedSession(cfg, sess, text) {
 async function init() {
   wireVocabForm();
   wireReading();
+  wireDraft();
   const stored = await chrome.storage.session.get({ selection: "", title: "", mode: "", article: null });
   await chrome.storage.session.remove(["selection", "title", "mode", "article"]);
   const params = new URLSearchParams(location.search);
@@ -568,6 +709,8 @@ async function init() {
 
   if (mode === "reading" && stored.article) {
     await submitArticle(stored.article);
+  } else if (mode === "draft" && stored.article) {
+    await addToDraft(stored.article).catch(() => {});
   } else if (mode === "vocab" && text) {
     await saveVocabulary(text, title);
   } else if (mode === "session" && text) {
@@ -575,7 +718,7 @@ async function init() {
   } else if (text) {
     await requestFeedback(text);
   } else {
-    showView("empty-state");
+    await showStart();
   }
 }
 
@@ -600,4 +743,8 @@ window.jlpPopup = {
   prepareImages: JLPImaging.prepareImages,
   downscale: JLPImaging.downscale,
   renderEdition,
+  addToDraft,
+  fetchDraft,
+  discardDraft,
+  showStart,
 };

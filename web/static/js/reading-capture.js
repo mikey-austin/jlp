@@ -47,35 +47,61 @@
     card.hidden = false;
   });
 
+  // send posts the article to `path` with its images (one-shot submit and
+  // draft add share this), resolving the response.
+  function send(path, fields) {
+    const post = (init) => fetch(path, { method: "POST", credentials: "same-origin", ...init });
+    return JLPImaging.sendWithImages(post, fields, article.figures || [], {
+      fetchInit: { credentials: "omit", mode: "cors" },
+      onStatus: (t) => { status.textContent = t; },
+    });
+  }
+  function articleFields() {
+    return {
+      url: article.url || "", title: article.title || "", source: article.source || "",
+      author: article.author || "", published_at: article.published_at || "",
+      content: article.content || "", selection: article.selection || "",
+    };
+  }
+
+  // The open draft, if any, is known on load (the session cookie rides
+  // along); adding to it still takes the tap.
+  const draftStatus = document.getElementById("capture-draft-status");
+  const draftBtn = document.getElementById("capture-draft");
+  const reviewLink = document.getElementById("capture-review");
+  function showDraft(d) {
+    draftStatus.textContent = `下書き：${d.pages}ページ・段落${d.paragraphs}・画像${d.images}`;
+    draftStatus.hidden = false;
+    draftBtn.textContent = "下書きに追加";
+    reviewLink.href = d.review_url;
+    reviewLink.hidden = false;
+  }
+  fetch("/api/v1/reading/drafts/active", { credentials: "same-origin" })
+    .then((r) => (r.ok ? r.json() : null)).then((d) => { if (d) showDraft(d); }).catch(() => {});
+
+  draftBtn.addEventListener("click", async () => {
+    draftBtn.disabled = true;
+    try {
+      const { res } = await send("/api/v1/reading/drafts/active/parts", articleFields());
+      if (!res.ok) {
+        let msg = `送信に失敗しました (${res.status})`;
+        try { msg = (await res.json()).error || msg; } catch (_) { /* not JSON */ }
+        throw new Error(msg);
+      }
+      showDraft(await res.json());
+      status.textContent = "追加しました。";
+    } catch (err) {
+      status.textContent = `エラー: ${err.message}`;
+    }
+    draftBtn.disabled = false;
+  });
+
   document.getElementById("capture-send").addEventListener("click", async (e) => {
     // currentTarget is null once dispatch ends, i.e. after the first await.
     const btn = e.currentTarget;
     btn.disabled = true;
     try {
-      status.textContent = "画像を準備中…";
-      const fields = {
-        url: article.url || "", title: article.title || "", source: article.source || "",
-        author: article.author || "", published_at: article.published_at || "",
-        content: article.content || "", selection: article.selection || "", deliver: true,
-      };
-      const images = await JLPImaging.prepareImages(article.figures || [], { fetchInit: { credentials: "omit", mode: "cors" } });
-      status.textContent = "送信中…";
-      const post = (init) => fetch("/api/v1/reading/articles", { method: "POST", credentials: "same-origin", ...init });
-      const postJSON = () => post({ headers: { "Content-Type": "application/json" }, body: JSON.stringify(fields) });
-      let res;
-      if (images.ok.length) {
-        const form = new FormData();
-        form.append("metadata", JSON.stringify({ ...fields, figures: images.ok.map((x) => x.meta) }));
-        images.ok.forEach((x, i) => form.append(`image-${i}`, x.blob, `image-${i}`));
-        try {
-          res = await post({ body: form });
-        } catch (_) {
-          res = null;
-        }
-        if (!res || (!res.ok && res.status !== 401 && res.status !== 403)) res = await postJSON();
-      } else {
-        res = await postJSON();
-      }
+      const { res } = await send("/api/v1/reading/articles", { ...articleFields(), deliver: true });
       if (!res.ok) {
         let msg = `送信に失敗しました (${res.status})`;
         try { msg = (await res.json()).error || msg; } catch (_) { /* not JSON */ }

@@ -49,8 +49,19 @@
     </div>
   </section>
 
+  <section id="draft-view" hidden>
+    <p id="draft-status" class="reading-title"></p>
+    <p id="draft-message" class="hint"></p>
+    <div class="reading-actions">
+      <button type="button" id="draft-add" class="primary">このページを追加</button>
+      <button type="button" id="draft-review" class="primary">確認して送信</button>
+      <button type="button" id="draft-discard" class="secondary">破棄</button>
+    </div>
+  </section>
+
   <div id="empty-state">
     <p class="hint">日本語テキストを選択して右クリックしてください。</p>
+    <label class="inline-check"><input type="checkbox" id="collect-mode"> 複数ページ（下書きに集める）</label>
     <button type="button" id="reading-start">このページのKindle版を作成</button>
   </div>
 </main>

@@ -70,7 +70,7 @@ form.jlp-form button {
 .reading-title { font-weight: 700; margin: 0 0 .4rem; }
 #reading-progress { width: 100%; margin: .2rem 0 .6rem; }
 .reading-actions { display: flex; flex-direction: column; gap: .5rem; align-items: flex-start; }
-#reading-deliver, #reading-start {
+#reading-deliver, #reading-start, #draft-view button {
   padding: .35rem 1rem;
   border: 1px solid var(--accent);
   background: var(--accent);
@@ -80,3 +80,5 @@ form.jlp-form button {
 }
 #reading-deliver:disabled { opacity: .6; cursor: default; }
 form.jlp-form label.inline { flex-direction: row; }
+#draft-view button.secondary { background: #fff; color: var(--accent); }
+.inline-check { display: flex; align-items: center; gap: .4rem; font-size: .9rem; margin: 0 0 .6rem; }
