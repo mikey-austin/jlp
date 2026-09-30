@@ -106,4 +106,23 @@ type ReadingRepository interface {
 	MarkDeliverySent(ctx context.Context, c ClaimedDelivery, at time.Time) error
 	// FailDeliveryAttempt is FailEditionAttempt for deliveries.
 	FailDeliveryAttempt(ctx context.Context, c ClaimedDelivery, msg string, retry bool, retryAt time.Time) error
+
+	// AddDraftPage appends (or, when pageURL is already in the draft, replaces)
+	// one page of blocks in identity's active draft, creating it with meta if
+	// none exists, in one transaction. ErrDraftFull past MaxDraftPages new pages.
+	// Seq is page*10000 + index within the page, so a replaced page keeps its
+	// place in reading order.
+	AddDraftPage(ctx context.Context, identity learner.IdentityID, meta reading.DraftMeta, pageURL string, blocks []reading.DraftBlock, now time.Time) (reading.DraftInfo, error)
+	ActiveDraft(ctx context.Context, identity learner.IdentityID) (reading.DraftInfo, error) // ErrNotFound
+	GetDraft(ctx context.Context, identity learner.IdentityID, id string) (reading.DraftInfo, error)
+	// ListDraftBlocks returns the draft's blocks in reading order; image
+	// bytes only when withData.
+	ListDraftBlocks(ctx context.Context, identity learner.IdentityID, id string, withData bool) ([]reading.DraftBlock, error)
+	// DraftImage returns one image block's figure with its bytes, or ErrNotFound.
+	DraftImage(ctx context.Context, identity learner.IdentityID, id string, seq int) (reading.Figure, error)
+	SetDraftBlockExcluded(ctx context.Context, identity learner.IdentityID, id string, seq int, excluded bool, now time.Time) error
+	SetDraftTitle(ctx context.Context, identity learner.IdentityID, id, title string, now time.Time) error
+	DeleteDraft(ctx context.Context, identity learner.IdentityID, id string) error
+	// SweepDrafts deletes drafts untouched since before, blocks with them.
+	SweepDrafts(ctx context.Context, before time.Time) (int, error)
 }

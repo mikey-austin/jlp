@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"image"
 	"image/jpeg"
 	"sort"
@@ -46,6 +47,8 @@ type memRepo struct {
 	figures    map[string][]reading.Figure
 	editions   map[string]*editionRow
 	deliveries map[string]*deliveryRow
+	drafts     map[learner.IdentityID]*memDraft
+	nextDraft  int
 }
 
 type editionRow struct {
@@ -1014,4 +1017,165 @@ func TestRenderSurvivesACoverPanic(t *testing.T) {
 	if h.render.last.Cover != nil || len(h.cover.calls) != 2 {
 		t.Fatalf("cover=%q calls=%d, want no cover after photo and no-photo attempts", h.render.last.Cover, len(h.cover.calls))
 	}
+}
+
+// --- drafts: pages of blocks, seq = page*10000 + index, one per identity ---
+
+type memDraft struct {
+	reading.DraftInfo
+	blocks []reading.DraftBlock
+}
+
+func (m *memRepo) draftFor(id learner.IdentityID, did string) (*memDraft, bool) {
+	d, ok := m.drafts[id]
+	if !ok || d.ID != did {
+		return nil, false
+	}
+	return d, true
+}
+
+func (m *memRepo) AddDraftPage(_ context.Context, id learner.IdentityID, meta reading.DraftMeta, pageURL string, blocks []reading.DraftBlock, now time.Time) (reading.DraftInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(blocks) >= 10000 {
+		return reading.DraftInfo{}, fmt.Errorf("draft page has %d blocks", len(blocks))
+	}
+	if m.drafts == nil {
+		m.drafts = map[learner.IdentityID]*memDraft{}
+	}
+	d, existed := m.drafts[id]
+	if !existed {
+		m.nextDraft++
+		d = &memDraft{DraftInfo: reading.DraftInfo{ID: fmt.Sprintf("00000000-0000-4000-8000-%012d", m.nextDraft), Identity: id, Meta: meta, CreatedAt: now}}
+	}
+	page, replacing := 0, false
+	pages, maxPage := map[int]bool{}, 0
+	for _, b := range d.blocks {
+		pages[b.Page] = true
+		maxPage = max(maxPage, b.Page)
+		if !replacing && pageURL != "" && b.PageURL == pageURL {
+			page, replacing = b.Page, true
+		}
+	}
+	if !replacing {
+		if len(pages) >= reading.MaxDraftPages {
+			return reading.DraftInfo{}, reading.ErrDraftFull
+		}
+		page = maxPage + 1
+	}
+	kept := d.blocks[:0:0]
+	for _, b := range d.blocks {
+		if !replacing || b.Page != page {
+			kept = append(kept, b)
+		}
+	}
+	for i, b := range blocks {
+		b.Page, b.Seq, b.PageURL = page, page*10000+i, pageURL
+		if b.Kind != reading.BlockImage {
+			b.Figure = reading.Figure{}
+		}
+		kept = append(kept, b)
+	}
+	sort.Slice(kept, func(i, j int) bool { return kept[i].Seq < kept[j].Seq })
+	d.blocks, d.UpdatedAt = kept, now
+	m.drafts[id] = d
+	return d.DraftInfo, nil
+}
+
+func (m *memRepo) ActiveDraft(_ context.Context, id learner.IdentityID) (reading.DraftInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.drafts[id]
+	if !ok {
+		return reading.DraftInfo{}, storage.ErrNotFound
+	}
+	return d.DraftInfo, nil
+}
+
+func (m *memRepo) GetDraft(_ context.Context, id learner.IdentityID, did string) (reading.DraftInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.draftFor(id, did)
+	if !ok {
+		return reading.DraftInfo{}, storage.ErrNotFound
+	}
+	return d.DraftInfo, nil
+}
+
+func (m *memRepo) ListDraftBlocks(_ context.Context, id learner.IdentityID, did string, withData bool) ([]reading.DraftBlock, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.draftFor(id, did)
+	if !ok {
+		return nil, nil
+	}
+	out := make([]reading.DraftBlock, 0, len(d.blocks))
+	for _, b := range d.blocks {
+		if !withData {
+			b.Figure.Data = nil
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+func (m *memRepo) DraftImage(_ context.Context, id learner.IdentityID, did string, seq int) (reading.Figure, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d, ok := m.draftFor(id, did); ok {
+		for _, b := range d.blocks {
+			if b.Seq == seq && b.Kind == reading.BlockImage && b.Figure.Data != nil {
+				return b.Figure, nil
+			}
+		}
+	}
+	return reading.Figure{}, storage.ErrNotFound
+}
+
+func (m *memRepo) SetDraftBlockExcluded(_ context.Context, id learner.IdentityID, did string, seq int, excluded bool, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if d, ok := m.draftFor(id, did); ok {
+		for i := range d.blocks {
+			if d.blocks[i].Seq == seq {
+				d.blocks[i].Excluded, d.UpdatedAt = excluded, now
+				return nil
+			}
+		}
+	}
+	return storage.ErrNotFound
+}
+
+func (m *memRepo) SetDraftTitle(_ context.Context, id learner.IdentityID, did, title string, now time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.draftFor(id, did)
+	if !ok {
+		return storage.ErrNotFound
+	}
+	d.Meta.Title, d.UpdatedAt = title, now
+	return nil
+}
+
+func (m *memRepo) DeleteDraft(_ context.Context, id learner.IdentityID, did string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if _, ok := m.draftFor(id, did); !ok {
+		return storage.ErrNotFound
+	}
+	delete(m.drafts, id)
+	return nil
+}
+
+func (m *memRepo) SweepDrafts(_ context.Context, before time.Time) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	n := 0
+	for id, d := range m.drafts {
+		if d.UpdatedAt.Before(before) {
+			delete(m.drafts, id)
+			n++
+		}
+	}
+	return n, nil
 }

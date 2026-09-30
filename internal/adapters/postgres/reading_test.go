@@ -48,6 +48,10 @@ func readingTestSetup(t *testing.T) (*ReadingRepository, learner.IdentityID, lea
 		if _, err := pool.Exec(context.Background(), "DELETE FROM reading_article_figures WHERE article_id IN (SELECT id FROM reading_articles WHERE identity_id = ANY($1))", []string{string(a.ID), string(b.ID)}); err != nil {
 			t.Errorf("cleanup reading_article_figures: %v", err)
 		}
+		// Blocks cascade with their draft.
+		if _, err := pool.Exec(context.Background(), "DELETE FROM reading_drafts WHERE identity_id = ANY($1)", []string{string(a.ID), string(b.ID)}); err != nil {
+			t.Errorf("cleanup reading_drafts: %v", err)
+		}
 		for _, table := range []string{"reading_deliveries", "reading_editions", "reading_articles"} {
 			if _, err := pool.Exec(context.Background(), "DELETE FROM "+table+" WHERE identity_id = ANY($1)", []string{string(a.ID), string(b.ID)}); err != nil {
 				t.Errorf("cleanup %s: %v", table, err)
