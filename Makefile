@@ -182,7 +182,7 @@ vendor-cover-fonts: ## Vendor pinned M PLUS 1p (OFL) into internal/adapters/cove
 # tmp/ is root-owned (the tools container runs as root), so every write
 # below happens inside a container; the host only mounts it read-only.
 EPUBCHECK_VERSION := 5.2.1
-epubcheck-sample: ## Render a sample edition with figures + cover and run EPUBCheck on it (needs docker)
+epubcheck-sample: ## Render a sample edition with figures, cover, and translated 原文 chapter, then run EPUBCheck on it (needs docker)
 	$(TOOLS) sh -c "mkdir -p tmp && EPUB_SAMPLE_OUT=/src/tmp/sample.epub go test ./internal/adapters/epub -run TestRenderWithFiguresIsDeterministic -count=1"
 	$(TOOLS) sh -c "test -f tmp/epubcheck-$(EPUBCHECK_VERSION)/epubcheck.jar || (curl -fsSL https://github.com/w3c/epubcheck/releases/download/v$(EPUBCHECK_VERSION)/epubcheck-$(EPUBCHECK_VERSION).zip -o tmp/epubcheck.zip && cd tmp && unzip -qo epubcheck.zip)"
 	docker run --rm -v "$(CURDIR)/tmp:/w:ro" -w /w eclipse-temurin:21-jre java -jar epubcheck-$(EPUBCHECK_VERSION)/epubcheck.jar sample.epub

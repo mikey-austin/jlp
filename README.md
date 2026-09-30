@@ -693,6 +693,14 @@ queue. Deleting an article soft-deletes it and every edition of it;
 article and importing it again now creates a fresh lesson — the old one
 does not come back.
 
+### 日本語以外の記事
+
+Articles in other languages (English, etc.) are accepted and automatically
+translated into natural written Japanese before the lesson is made. The book's
+byline identifies the source language (「英語から翻訳」) and the original text
+is included at the back in a 「原文」 chapter after the answers. The translation
+is made once and reused when a lesson is regenerated.
+
 ## Design system
 
 `web/static/css/tokens.css` (colors, shadows, `--ring`), `components.css`
