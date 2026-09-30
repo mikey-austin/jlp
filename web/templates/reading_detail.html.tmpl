@@ -7,7 +7,7 @@
   <p class="reading-kicker"><a href="/reading">← 読解</a></p>
   <h1 lang="ja">{{.Article.Title}} <span class="badge badge--type reading-status reading-status--{{.Edition.Status}}">{{.StatusLabel}}</span></h1>
   <p class="description">
-    {{if .Article.SourceName}}{{.Article.SourceName}}{{end}}{{if .Article.Author}} ・ {{.Article.Author}}{{end}}{{if .Published}} ・ {{.Published}}{{end}}
+    {{if .Article.SourceName}}{{.Article.SourceName}}{{end}}{{if .Article.Author}} ・ {{.Article.Author}}{{end}}{{if .Published}} ・ {{.Published}}{{end}}{{if .Article.OriginalParagraphs}} ・ {{.Article.OriginalLanguage}}から翻訳{{end}}
     {{if .Article.SourceURL}}<br><a class="reading-url" href="{{.Article.SourceURL}}" rel="noopener noreferrer" target="_blank">{{.Article.SourceURL}}</a>{{end}}
   </p>
 
@@ -61,6 +61,16 @@
       {{range .Blocks}}{{if .Figure}}<figure class="reading-figure"><img src="/reading/articles/{{$.Article.ID}}/figures/{{.Figure.Ordinal}}" alt="{{if .Figure.Alt}}{{.Figure.Alt}}{{else}}{{.Figure.Caption}}{{end}}" width="{{.Figure.Width}}" height="{{.Figure.Height}}" loading="lazy">{{if .Caption}}<figcaption lang="ja">{{range .Caption}}{{template "ruby_segment" .}}{{end}}</figcaption>{{end}}</figure>{{else}}<p>{{range .Paragraph}}{{template "ruby_segment" .}}{{end}}</p>{{end}}{{end}}
     </div>
   </details>
+
+  {{if .Article.OriginalParagraphs}}
+  <details class="panel">
+    <summary class="panel__summary"><span class="panel__title">原文</span></summary>
+    <div class="reading-body">
+      <h2>{{.Article.OriginalTitle}}</h2>
+      {{range .Article.OriginalParagraphs}}<p>{{.}}</p>{{end}}
+    </div>
+  </details>
+  {{end}}
 
   {{if .Ready}}{{with .Lesson}}
   <details class="panel" open>

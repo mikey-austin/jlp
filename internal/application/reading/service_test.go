@@ -386,6 +386,32 @@ func (f *failingAnalyser) Analyse(ctx context.Context, in agentreading.Input) (r
 	return f.inner.Analyse(ctx, in)
 }
 
+// countingTranslator wraps the real translation agent (over the fake
+// provider) and counts calls; it fails its first n.
+type countingTranslator struct {
+	n, calls int
+	inner    appreading.Translator
+}
+
+func (c *countingTranslator) Translate(ctx context.Context, id learner.IdentityID, a reading.Article) (reading.Translation, ai.StructuredResponse, error) {
+	c.calls++
+	if c.calls <= c.n {
+		return reading.Translation{}, ai.StructuredResponse{}, errors.New("translator unavailable")
+	}
+	return c.inner.Translate(ctx, id, a)
+}
+
+// textRecordingAnalyser remembers what the analyser was given.
+type textRecordingAnalyser struct {
+	appreading.Analyser
+	inputs []agentreading.Input
+}
+
+func (r *textRecordingAnalyser) Analyse(ctx context.Context, in agentreading.Input) (reading.Lesson, ai.StructuredResponse, error) {
+	r.inputs = append(r.inputs, in)
+	return r.Analyser.Analyse(ctx, in)
+}
+
 type fakeRenderer struct {
 	calls int
 	last  publishing.Ebook
@@ -515,6 +541,35 @@ func newHarness(t *testing.T, kindle bool) *harness {
 	h.svc = appreading.NewService(deps, cfg)
 	appreading.SetClock(h.svc, func() time.Time { return *h.clock })
 	return h
+}
+
+// withTranslator swaps in a counting translator and a recording analyser
+// over the same fake provider the harness already uses.
+func (h *harness) withTranslator(t *testing.T, failFirst int) (*countingTranslator, *textRecordingAnalyser) {
+	t.Helper()
+	tr := &countingTranslator{n: failFirst, inner: agentreading.NewTranslator(fakeai.New())}
+	rec := &textRecordingAnalyser{Analyser: h.analyser}
+	h.svc = appreading.NewService(appreading.Deps{
+		Repo:       h.repo,
+		Recorder:   learning.NewRecorder(h.events, inprocbus.New()),
+		Analyser:   rec,
+		Translator: tr,
+		Renderer:   h.render,
+		Cover:      h.cover,
+		Vocabulary: h.vocab,
+		Anki:       h.anki,
+	}, appreading.Config{})
+	appreading.SetClock(h.svc, func() time.Time { return *h.clock })
+	return tr, rec
+}
+
+func (h *harness) submitEnglish(t *testing.T) appreading.SubmitResult {
+	t.Helper()
+	res, err := h.svc.Submit(context.Background(), me, reading.Draft{Title: "Central bank", Content: "The bank held rates.\n\nMarkets were calm."}, appreading.SubmitOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return res
 }
 
 func (h *harness) advance(d time.Duration) { *h.clock = h.clock.Add(d) }
@@ -1201,4 +1256,70 @@ func (m *memRepo) SweepDrafts(_ context.Context, before time.Time) (int, error) 
 		}
 	}
 	return n, nil
+}
+
+func TestEnglishArticleIsTranslatedOnceThenAnalysedInJapanese(t *testing.T) {
+	h := newHarness(t, false)
+	tr, rec := h.withTranslator(t, 0)
+	res := h.submitEnglish(t)
+	h.svc.Drain(context.Background())
+	if e := h.edition(t, res.Edition.ID); e.Status != reading.EditionReady {
+		t.Fatalf("edition = %+v", e)
+	}
+	if tr.calls != 1 || len(rec.inputs) != 1 {
+		t.Fatalf("translator calls = %d, analyser calls = %d", tr.calls, len(rec.inputs))
+	}
+	if got := rec.inputs[0].Text; !strings.Contains(got, "（訳）1段落目") || strings.Contains(got, "bank held") {
+		t.Fatalf("analyser got %q, want the Japanese translation", got)
+	}
+	a, _ := h.repo.GetArticle(context.Background(), me, res.Article.ID)
+	if a.OriginalLanguage != "英語" || a.OriginalTitle != "Central bank" || len(a.OriginalParagraphs) != 2 || a.NeedsTranslation() {
+		t.Fatalf("stored article = %+v", a)
+	}
+
+	// A regenerated edition reuses the stored translation.
+	h.advance(time.Second)
+	if _, err := h.svc.Regenerate(context.Background(), me, res.Edition.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.svc.Drain(context.Background())
+	if tr.calls != 1 || len(rec.inputs) != 2 {
+		t.Fatalf("after regenerate: translator calls = %d, analyser calls = %d", tr.calls, len(rec.inputs))
+	}
+}
+
+func TestJapaneseArticleIsNeverTranslated(t *testing.T) {
+	h := newHarness(t, false)
+	tr, _ := h.withTranslator(t, 0)
+	res := h.submit(t, appreading.SubmitOptions{})
+	h.svc.Drain(context.Background())
+	if e := h.edition(t, res.Edition.ID); e.Status != reading.EditionReady || tr.calls != 0 {
+		t.Fatalf("edition = %+v, translator calls = %d", e, tr.calls)
+	}
+}
+
+func TestTranslationFailureIsRetriedWithoutAnalysing(t *testing.T) {
+	h := newHarness(t, false)
+	tr, rec := h.withTranslator(t, 1)
+	res := h.submitEnglish(t)
+	h.svc.Drain(context.Background())
+	e := h.edition(t, res.Edition.ID)
+	if e.Status != reading.EditionPending || e.Attempts != 1 || !strings.Contains(e.LastError, "translator unavailable") || len(rec.inputs) != 0 {
+		t.Fatalf("after failed attempt: %+v (analyser calls %d)", e, len(rec.inputs))
+	}
+	h.advance(reading.RetryDelay(1) + time.Second)
+	h.svc.Drain(context.Background())
+	if e := h.edition(t, res.Edition.ID); e.Status != reading.EditionReady || tr.calls != 2 {
+		t.Fatalf("after retry: %+v (translator calls %d)", e, tr.calls)
+	}
+}
+
+func TestForeignArticleWithoutTranslatorFailsForGood(t *testing.T) {
+	h := newHarness(t, false) // no Translator configured
+	res := h.submitEnglish(t)
+	h.svc.Drain(context.Background())
+	e := h.edition(t, res.Edition.ID)
+	if e.Status != reading.EditionFailed || !strings.Contains(e.LastError, "no translator") || h.analyser.calls != 0 {
+		t.Fatalf("edition = %+v, analyser calls = %d", e, h.analyser.calls)
+	}
 }

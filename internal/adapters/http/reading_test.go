@@ -400,6 +400,7 @@ func readingTestServer(t *testing.T, kindle bool) (http.Handler, *appreading.Ser
 		Repo:       newFakeReadingRepo(),
 		Recorder:   learning.NewRecorder(newFakeEventRepo(), inprocbus.New()),
 		Analyser:   agentreading.New(fakeai.New()),
+		Translator: agentreading.NewTranslator(fakeai.New()),
 		Renderer:   epub.New(),
 		Vocabulary: &stubReadingVocab{},
 		Anki:       stubReadingAnki{},
@@ -768,6 +769,27 @@ func TestReadingFigureRoute(t *testing.T) {
 	}
 	if r := get(h, "/reading/articles/"+res.Article.ID+"/figures/0"); r.Code != http.StatusNotFound {
 		t.Fatalf("foreign figure = %d, want 404", r.Code)
+	}
+}
+
+func TestReadingDetailShowsTheOriginalOfATranslatedArticle(t *testing.T) {
+	h, svc, _ := readingTestServer(t, false)
+	rec := readingPostJSON(h, "/api/v1/reading/articles", `{"title":"Central <bank>","content":"The bank held rates.\n\nMarkets were calm."}`)
+	var out struct {
+		Edition struct{ ID string }
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	svc.Drain(context.Background())
+	page := get(h, "/reading/"+out.Edition.ID).Body.String()
+	for _, want := range []string{"英語から翻訳", "<span class=\"panel__title\">原文</span>", "Central &lt;bank&gt;", "Markets were calm."} {
+		if !strings.Contains(page, want) {
+			t.Errorf("page lacks %q", want)
+		}
+	}
+	if epubRec := get(h, "/reading/"+out.Edition.ID+"/epub"); epubRec.Code != http.StatusOK {
+		t.Fatalf("epub = %d", epubRec.Code)
 	}
 }
 

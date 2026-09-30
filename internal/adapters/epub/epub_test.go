@@ -209,7 +209,50 @@ func bookWithFigures(t *testing.T) publishing.Ebook {
 		{Ordinal: 2, AfterParagraph: 0, InText: false, MediaType: "image/jpeg", Data: jb.Bytes()},
 	}
 	b.Cover = jb.Bytes()
+	// Translated too, so `make epubcheck-sample` validates the 原文
+	// chapter along with the figures and cover.
+	b.Article.OriginalLanguage = "英語"
+	b.Article.OriginalTitle = "Govt unveils <new> package & more"
+	b.Article.OriginalParagraphs = []string{"The government unveiled a package.", "Markets & analysts <stayed> cautious."}
 	return b
+}
+
+func TestRenderTranslatedArticleEndsWithTheOriginal(t *testing.T) {
+	out, err := epub.New().Render(context.Background(), bookWithFigures(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	files, _ := unzip(t, out)
+	orig, ok := files["OEBPS/original.xhtml"]
+	if !ok {
+		t.Fatal("no original.xhtml")
+	}
+	for _, want := range []string{"<h1>原文</h1>", "Govt unveils &lt;new&gt; package &amp; more", "Markets &amp; analysts &lt;stayed&gt; cautious."} {
+		if !strings.Contains(orig, want) {
+			t.Errorf("original.xhtml lacks %q:\n%s", want, orig)
+		}
+	}
+	if !strings.Contains(files["OEBPS/article.xhtml"], "英語から翻訳") {
+		t.Error("article byline does not say it was translated")
+	}
+	// Last in the spine, after the answers.
+	opf := files["OEBPS/content.opf"]
+	if a, o := strings.Index(opf, `<itemref idref="answers"/>`), strings.Index(opf, `<itemref idref="original"/>`); a < 0 || o < a {
+		t.Errorf("original is not after answers in the spine:\n%s", opf)
+	}
+	for _, f := range []string{"OEBPS/nav.xhtml", "OEBPS/toc.ncx"} {
+		if !strings.Contains(files[f], "original.xhtml") {
+			t.Errorf("%s does not list the original", f)
+		}
+	}
+}
+
+func TestRenderJapaneseArticleHasNoOriginalChapter(t *testing.T) {
+	out, _ := epub.New().Render(context.Background(), book())
+	files, _ := unzip(t, out)
+	if _, ok := files["OEBPS/original.xhtml"]; ok || strings.Contains(files["OEBPS/article.xhtml"], "から翻訳") {
+		t.Fatal("a Japanese article must not carry translation marks")
+	}
 }
 
 func TestRenderPlacesFiguresAndDeclaresCover(t *testing.T) {

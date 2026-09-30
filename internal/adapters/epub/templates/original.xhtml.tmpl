@@ -1,0 +1,7 @@
+{{define "original.xhtml.tmpl"}}{{template "head" .}}
+<section epub:type="appendix" class="original">
+<h1>原文</h1>
+<h2>{{.Original.OriginalTitle}}</h2>
+{{range .Original.OriginalParagraphs}}<p class="body">{{.}}</p>
+{{end}}</section>
+{{template "foot" .}}{{end}}

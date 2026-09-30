@@ -534,6 +534,7 @@ func main() {
 			Repo:       postgres.NewReadingRepository(pool),
 			Recorder:   recorder,
 			Analyser:   agentreading.New(aiGen),
+			Translator: agentreading.NewTranslator(aiGen),
 			Renderer:   epubadapter.New(),
 			Deliverer:  kindleSender,
 			Vocabulary: vocabSvc,

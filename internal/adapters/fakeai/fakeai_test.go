@@ -417,3 +417,25 @@ func TestFakeAdapterConversationTurnHistoryDoesNotDoubleCount(t *testing.T) {
 		t.Fatalf("Corrections = %+v, want none (the mistake belongs to the quoted history, not this turn's own message)", got.Corrections)
 	}
 }
+
+// TestFakeAdapterTranslationMatchesNumberedParagraphs pins the shape the
+// reading translator depends on: as many Japanese paragraphs as the
+// prompt numbers, however the paragraph text itself looks.
+func TestFakeAdapterTranslationMatchesNumberedParagraphs(t *testing.T) {
+	user := "Title: x\n\n[1] First.\nA line starting [2] mid-paragraph.\n\n[2] Second.\n\n[3] Third."
+	resp, err := New().GenerateStructured(context.Background(), ai.StructuredRequest{SchemaName: "reading_translation.v1", User: user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		SourceLanguage string   `json:"source_language"`
+		Title          string   `json:"title"`
+		Paragraphs     []string `json:"paragraphs"`
+	}
+	if err := json.Unmarshal(resp.JSON, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.SourceLanguage != "英語" || !strings.HasPrefix(got.Title, "（訳）") || len(got.Paragraphs) != 3 || got.Paragraphs[2] != "（訳）3段落目の本文です。" {
+		t.Fatalf("translation = %+v", got)
+	}
+}

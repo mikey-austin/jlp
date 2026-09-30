@@ -7,7 +7,8 @@
 //   - the article first, with furigana (<ruby>) on the first occurrence
 //     of each 重要語彙 word, then 重要語彙 / 表現・文法 / 精読 / 復習,
 //     then the review answers on their own page so reading a question
-//     does not show you its answer;
+//     does not show you its answer, and, for a translated article, the
+//     original text last;
 //   - an EPUB 3 nav document AND an NCX, because older Kindle firmware
 //     still builds its "Go To" menu from the NCX;
 //   - lang="ja" throughout, so the device picks a Japanese font and
@@ -107,6 +108,10 @@ type bookData struct {
 	Chapters   []chapter
 	Chapter    chapter
 	HasAnswers bool
+	// TranslatedFrom is the original's language name when the article
+	// was translated for study; empty for a Japanese original.
+	TranslatedFrom string
+	Original       reading.Article
 }
 
 // Render builds the EPUB.
@@ -125,6 +130,13 @@ func (Renderer) Render(_ context.Context, b publishing.Ebook) ([]byte, error) {
 		chapters = append(chapters,
 			chapter{ID: "review", File: "review.xhtml", Title: "復習"},
 			chapter{ID: "answers", File: "answers.xhtml", Title: "解答"})
+	}
+
+	translated := len(b.Article.OriginalParagraphs) > 0
+	if translated {
+		// Last, after 解答: the original is a reference to consult once
+		// the study is done, not part of the reading order.
+		chapters = append(chapters, chapter{ID: "original", File: "original.xhtml", Title: "原文"})
 	}
 
 	gen := b.GeneratedAt.UTC()
@@ -160,6 +172,10 @@ func (Renderer) Render(_ context.Context, b publishing.Ebook) ([]byte, error) {
 		HasCover:   len(b.Cover) > 0,
 		Chapters:   chapters,
 		HasAnswers: hasReview,
+	}
+	if translated {
+		d.TranslatedFrom = b.Article.OriginalLanguage
+		d.Original = b.Article
 	}
 	if b.Article.PublishedAt != nil {
 		d.Published = b.Article.PublishedAt.Format("2006年1月2日")

@@ -57,6 +57,12 @@ type Analyser interface {
 	Analyse(ctx context.Context, in agentreading.Input) (reading.Lesson, ai.StructuredResponse, error)
 }
 
+// Translator turns a non-Japanese article into Japanese, paragraph for
+// paragraph — the translation agent in production.
+type Translator interface {
+	Translate(ctx context.Context, identity learner.IdentityID, a reading.Article) (reading.Translation, ai.StructuredResponse, error)
+}
+
 // VocabularyService is the part of application/vocabulary this pipeline
 // uses: adding an edition's words to the learner's list, and seeing
 // which of them are already there.
@@ -91,6 +97,7 @@ type Deps struct {
 	Repo       storage.ReadingRepository
 	Recorder   *learning.Recorder
 	Analyser   Analyser
+	Translator Translator // nil: only Japanese articles can be analysed
 	Renderer   publishing.Renderer
 	Deliverer  publishing.Deliverer // nil: delivery not configured
 	Vocabulary VocabularyService

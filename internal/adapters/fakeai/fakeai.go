@@ -13,6 +13,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,6 +96,14 @@ const (
 	// annotation is exercised end to end through the fake.
 	schemaStudyEditionV1 = "study_edition.v1"
 
+	// schemaTranslationV1 backs internal/agent/reading's Translator. Not
+	// a fixed canned response: the agent rejects a translation whose
+	// paragraph count differs from the article's, so the fake reads the
+	// count from the numbered "[n] …" user prompt and answers with that
+	// many placeholder paragraphs. The text is not a translation — the
+	// fake cannot write prose — it only has the right shape.
+	schemaTranslationV1 = "reading_translation.v1"
+
 	// socraticMarker is the EXACT line internal/agent/teacher's
 	// teacher.feedback.v3 USER template renders when — and only when —
 	// the session's TeacherMode is "socratic" (that template's opening
@@ -130,6 +140,7 @@ var supportedSchemas = map[string]bool{
 	schemaPassageV1:          true,
 	schemaExampleV1:          true,
 	schemaStudyEditionV1:     true,
+	schemaTranslationV1:      true,
 }
 
 // cannedPassage mirrors schemas/defs/passage.v1.json field-for-field.
@@ -495,6 +506,8 @@ func (g *generator) GenerateStructured(_ context.Context, req ai.StructuredReque
 		return g.respond(start, req, cannedExample)
 	case schemaStudyEditionV1:
 		return g.respond(start, req, cannedStudyEdition)
+	case schemaTranslationV1:
+		return g.respond(start, req, fakeTranslation(req.User))
 	}
 
 	// socratic gates hint attachment on BOTH conditions schemaV2's own
@@ -544,6 +557,30 @@ func (g *generator) respond(start time.Time, req ai.StructuredRequest, payload a
 		OutputTokens: runeCount(string(raw)),
 		Latency:      time.Since(start),
 	}, nil
+}
+
+// numberedParagraph matches the "[n] " a numbered prompt puts at the
+// start of paragraph n.
+var numberedParagraph = regexp.MustCompile(`(?m)^\[(\d+)\] `)
+
+// fakeTranslation answers reading_translation.v1 with one Japanese
+// placeholder per numbered paragraph in the prompt.
+func fakeTranslation(user string) map[string]any {
+	n := 0
+	for _, m := range numberedParagraph.FindAllStringSubmatch(user, -1) {
+		if m[1] == strconv.Itoa(n+1) {
+			n++
+		}
+	}
+	paras := make([]string, n)
+	for i := range paras {
+		paras[i] = fmt.Sprintf("（訳）%d段落目の本文です。", i+1)
+	}
+	return map[string]any{
+		"source_language": "英語",
+		"title":           "（訳）記事のタイトル",
+		"paragraphs":      paras,
+	}
 }
 
 // matchedCorrections scans text (a rendered prompt's User half) for

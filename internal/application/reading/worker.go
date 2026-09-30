@@ -121,8 +121,34 @@ func (s *Service) analyse(ctx context.Context, c storage.ClaimedEdition) {
 		return
 	}
 
+	// One timeout covers translation and analysis: a slow provider is
+	// one failed attempt, not two budgets' worth of waiting.
 	actx, cancel := context.WithTimeout(ctx, s.cfg.AnalysisTimeout)
 	defer cancel()
+	if a.NeedsTranslation() {
+		if s.d.Translator == nil {
+			fail("this article is not in Japanese and no translator is configured", false)
+			return
+		}
+		t, _, err := s.d.Translator.Translate(actx, c.IdentityID, a)
+		if err != nil {
+			fail(err.Error(), true)
+			return
+		}
+		translated, err := a.WithTranslation(t)
+		if err != nil {
+			fail(err.Error(), true)
+			return
+		}
+		// Stored before the analysis so a failed analysis, a retry or a
+		// regenerated edition never pays for the translation again.
+		if err := s.d.Repo.SaveTranslation(ctx, a.ID, translated); err != nil {
+			fail("could not save the translation: "+err.Error(), !errors.Is(err, storage.ErrNotFound))
+			return
+		}
+		a = translated
+		log.Info("reading: article translated", "from", a.OriginalLanguage, "paragraphs", len(a.Paragraphs))
+	}
 	published := ""
 	if a.PublishedAt != nil {
 		published = a.PublishedAt.Format("2006-01-02")

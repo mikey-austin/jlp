@@ -2,7 +2,7 @@
 <section epub:type="bodymatter chapter" class="article">
 <p class="kicker">日本語読解</p>
 <h1>{{.Title}}</h1>
-<p class="byline">{{if .Source}}{{.Source}}{{end}}{{if .Author}}　{{.Author}}{{end}}{{if .Published}}<br/>{{.Published}}{{end}}</p>
+<p class="byline">{{if .Source}}{{.Source}}{{end}}{{if .Author}}　{{.Author}}{{end}}{{if .Published}}<br/>{{.Published}}{{end}}{{if .TranslatedFrom}}<br/>{{.TranslatedFrom}}から翻訳{{end}}</p>
 {{if .Lesson.SummaryJA}}<div class="summary">
 <p class="label">要旨{{if .Lesson.Level}}（{{.Lesson.Level}}）{{end}}</p>
 <p>{{.Lesson.SummaryJA}}</p>
