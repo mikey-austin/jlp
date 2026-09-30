@@ -40,6 +40,7 @@ func (s *Service) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			s.SweepDrafts(ctx)
 		case <-s.wake:
 		}
 	}
