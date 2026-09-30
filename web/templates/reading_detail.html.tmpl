@@ -17,6 +17,7 @@
   <div class="card reading-waiting" role="status" aria-live="polite">
     <p>学習版を作成しています（{{.Edition.Attempts}}回目）。このページは自動で更新されます。</p>
     {{if .Edition.LastError}}<p class="hint">前回の試行は失敗しました。自動で再試行します: {{.Edition.LastError}}</p>{{end}}
+    {{if eq .DeliveryState "auto"}}<p class="reading-delivery-state">完成したらKindleに自動で送ります</p>{{end}}
   </div>
   <script>setTimeout(function(){location.reload();}, 5000);</script>
   {{end}}
@@ -34,7 +35,7 @@
        page is a stop on the way to the Kindle, not the reading surface. */}}
   <div class="reading-actions no-print">
     <a class="btn" href="/reading/{{.Edition.ID}}/epub">EPUBをダウンロード</a>
-    {{if .DeliveryEnabled}}<form method="post" action="/reading/{{.Edition.ID}}/deliver"><button type="submit" class="btn">Kindleに送信</button></form>{{end}}
+    {{if .DeliveryEnabled}}<form method="post" action="/reading/{{.Edition.ID}}/deliver">{{if eq .DeliveryState "sending"}}<span class="reading-delivery-state">Kindleに送信中…</span> <button type="submit" class="btn" disabled>Kindleに送信</button>{{else if eq .DeliveryState "sent"}}<span class="reading-delivery-state">Kindleに送信済み{{if .DeliverySentAt}}（{{.DeliverySentAt}}）{{end}}</span> <button type="submit" class="btn btn--secondary">もう一度Kindleに送る</button>{{else}}<button type="submit" class="btn">Kindleに送信</button>{{end}}</form>{{end}}
     <form method="post" action="/reading/{{.Edition.ID}}/vocabulary"><button type="submit" class="btn btn--secondary">語彙リストに追加</button></form>
     <form method="post" action="/reading/{{.Edition.ID}}/anki"><button type="submit" class="btn btn--secondary">Ankiカード作成</button></form>
     <form method="post" action="/reading/{{.Edition.ID}}/regenerate"><button type="submit" class="btn btn--ghost">学習版を作り直す</button></form>

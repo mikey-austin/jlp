@@ -1008,3 +1008,65 @@ func (m *fakeReadingRepo) SweepDrafts(_ context.Context, before time.Time) (int,
 	}
 	return n, nil
 }
+
+func TestReadingDetailKindleDeliveryStates(t *testing.T) {
+	h, svc, _ := readingTestServer(t, true)
+	const (
+		auto    = "完成したらKindleに自動で送ります"
+		sending = "Kindleに送信中…"
+		sent    = "Kindleに送信済み（"
+		again   = "もう一度Kindleに送る"
+		button  = ">Kindleに送信</button>"
+	)
+	check := func(step, page string, want, dont []string) {
+		t.Helper()
+		for _, w := range want {
+			if !strings.Contains(page, w) {
+				t.Errorf("%s: page lacks %q", step, w)
+			}
+		}
+		for _, w := range dont {
+			if strings.Contains(page, w) {
+				t.Errorf("%s: page has %q", step, w)
+			}
+		}
+	}
+
+	// Auto-deliver, edition still being written: say so, no button.
+	rec := readingPostForm(h, "/reading", url.Values{"title": {"自動"}, "content": {readingArticle}, "deliver": {"on"}})
+	auto1 := rec.Header().Get("Location")
+	check("auto", get(h, auto1).Body.String(), []string{auto}, []string{button, again, sending, "/deliver"})
+	svc.Drain(context.Background())
+	// The auto delivery went out: sent, with the resend wording.
+	check("auto sent", get(h, auto1).Body.String(), []string{sent, again}, []string{auto, sending, button})
+
+	// Not auto, ready, never sent: the plain button.
+	rec = readingPostForm(h, "/reading", url.Values{"title": {"手動"}, "content": {readingArticle + "\n\nそれでも議論は続く。"}})
+	manual := rec.Header().Get("Location")
+	check("pending manual", get(h, manual).Body.String(), nil, []string{auto, button})
+	svc.Drain(context.Background())
+	check("ready", get(h, manual).Body.String(), []string{button}, []string{auto, sending, sent, again})
+
+	// Queued but not yet sent: in flight, the button disabled.
+	if rec := readingPostForm(h, manual+"/deliver", nil); rec.Code != http.StatusSeeOther {
+		t.Fatalf("deliver = %d", rec.Code)
+	}
+	check("sending", get(h, manual).Body.String(), []string{sending, "disabled"}, []string{auto, sent, again})
+	svc.Drain(context.Background())
+	check("sent", get(h, manual).Body.String(), []string{sent, again}, []string{sending, auto})
+}
+
+func TestAPIReadingEditionExposesDeliverWhenReady(t *testing.T) {
+	h, _, _ := readingTestServer(t, true)
+	for deliver, want := range map[bool]bool{true: true, false: false} {
+		body, _ := json.Marshal(map[string]any{"title": "t", "content": readingArticle + fmt.Sprint(deliver), "deliver": deliver})
+		rec := readingPostJSON(h, "/api/v1/reading/articles", string(body))
+		var sub submitArticleResponseDTO
+		if err := json.Unmarshal(rec.Body.Bytes(), &sub); err != nil {
+			t.Fatal(err)
+		}
+		if sub.Edition.DeliverWhenReady != want || !strings.Contains(rec.Body.String(), fmt.Sprintf(`"deliver_when_ready":%v`, want)) {
+			t.Errorf("deliver=%v: deliver_when_ready = %v in %s", deliver, sub.Edition.DeliverWhenReady, rec.Body)
+		}
+	}
+}

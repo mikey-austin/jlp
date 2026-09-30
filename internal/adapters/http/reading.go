@@ -118,21 +118,23 @@ type readingDeliveryDTO struct {
 }
 
 type readingEditionDTO struct {
-	ID              string               `json:"id"`
-	ArticleID       string               `json:"article_id"`
-	Status          string               `json:"status"`
-	StatusLabel     string               `json:"status_label"`
-	Terminal        bool                 `json:"terminal"`
-	Attempts        int                  `json:"attempts"`
-	LastError       string               `json:"last_error,omitempty"`
-	Vocabulary      int                  `json:"vocabulary"`
-	FigureCount     int                  `json:"figure_count"`
-	PageURL         string               `json:"page_url"`
-	EpubURL         string               `json:"epub_url,omitempty"`
-	DeliveryEnabled bool                 `json:"delivery_enabled"`
-	Deliveries      []readingDeliveryDTO `json:"deliveries"`
-	CreatedAt       time.Time            `json:"created_at"`
-	UpdatedAt       time.Time            `json:"updated_at"`
+	ID              string `json:"id"`
+	ArticleID       string `json:"article_id"`
+	Status          string `json:"status"`
+	StatusLabel     string `json:"status_label"`
+	Terminal        bool   `json:"terminal"`
+	Attempts        int    `json:"attempts"`
+	LastError       string `json:"last_error,omitempty"`
+	Vocabulary      int    `json:"vocabulary"`
+	FigureCount     int    `json:"figure_count"`
+	PageURL         string `json:"page_url"`
+	EpubURL         string `json:"epub_url,omitempty"`
+	DeliveryEnabled bool   `json:"delivery_enabled"`
+	// DeliverWhenReady: the pipeline sends the Kindle copy by itself.
+	DeliverWhenReady bool                 `json:"deliver_when_ready"`
+	Deliveries       []readingDeliveryDTO `json:"deliveries"`
+	CreatedAt        time.Time            `json:"created_at"`
+	UpdatedAt        time.Time            `json:"updated_at"`
 }
 
 type submitArticleResponseDTO struct {
@@ -158,11 +160,12 @@ func (s *Server) toReadingEditionDTO(e reading.StudyEdition, dls []reading.Deliv
 		Terminal: e.Terminal(), Attempts: e.Attempts, LastError: e.LastError,
 		// Relative on purpose: the extension joins it to the base URL the
 		// learner configured, which is the only URL it knows is right.
-		PageURL:         "/reading/" + e.ID,
-		DeliveryEnabled: s.opts.Reading.DeliveryEnabled(),
-		FigureCount:     figureCount,
-		Deliveries:      make([]readingDeliveryDTO, 0, len(dls)),
-		CreatedAt:       e.CreatedAt, UpdatedAt: e.UpdatedAt,
+		PageURL:          "/reading/" + e.ID,
+		DeliveryEnabled:  s.opts.Reading.DeliveryEnabled(),
+		DeliverWhenReady: e.DeliverWhenReady,
+		FigureCount:      figureCount,
+		Deliveries:       make([]readingDeliveryDTO, 0, len(dls)),
+		CreatedAt:        e.CreatedAt, UpdatedAt: e.UpdatedAt,
 	}
 	if e.Status == reading.EditionReady {
 		dto.EpubURL = "/reading/" + e.ID + "/epub"
@@ -502,6 +505,21 @@ func (s *Server) readingDetail(w http.ResponseWriter, r *http.Request) {
 		dls = append(dls, v)
 	}
 	data["Deliveries"] = dls
+	// The Kindle button's state, from the newest delivery (Deliveries is
+	// newest first): sending, sent, or none worth mentioning.
+	switch {
+	case len(d.Deliveries) == 0:
+		if s.opts.Reading.DeliveryEnabled() && d.Edition.DeliverWhenReady && !d.Edition.Terminal() {
+			data["DeliveryState"] = "auto"
+		}
+	case d.Deliveries[0].Status == reading.DeliveryPending || d.Deliveries[0].Status == reading.DeliverySending:
+		data["DeliveryState"] = "sending"
+	case d.Deliveries[0].Status == reading.DeliverySent:
+		data["DeliveryState"] = "sent"
+		if at := d.Deliveries[0].SentAt; at != nil {
+			data["DeliverySentAt"] = at.Format("2006-01-02 15:04")
+		}
+	}
 	if d.Edition.Lesson != nil {
 		l := d.Edition.Lesson
 		vocab := make([]readingVocabView, 0, len(l.Vocabulary))

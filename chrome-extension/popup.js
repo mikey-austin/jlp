@@ -391,6 +391,8 @@ function renderEdition(cfg, ed, duplicate) {
   } else if (ed.status === "failed") {
     line = `作成できませんでした: ${ed.last_error || ""}`;
   }
+  const autoPending = ed.deliver_when_ready && ed.delivery_enabled && !latest && ed.status !== "failed";
+  if (autoPending) line += " 完成したらKindleに自動で送ります";
   if (latest) line += ` ${latest.status_label}${latest.last_error ? `（${latest.last_error}）` : ""}`;
   if (readingImageNote) line += `　${readingImageNote}`;
   statusEl.textContent = line;
@@ -407,6 +409,7 @@ function renderEdition(cfg, ed, duplicate) {
   const inFlight = latest && (latest.status === "pending" || latest.status === "sending");
   deliver.hidden = !(ed.delivery_enabled && ed.status === "ready");
   deliver.disabled = !!inFlight;
+  deliver.textContent = latest && latest.status === "sent" ? "もう一度Kindleに送る" : "Kindleに送信";
   deliver.dataset.editionId = ed.id;
 }
 
