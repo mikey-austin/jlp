@@ -1,0 +1,12 @@
+{{define "content"}}<section class="reading-capture">
+  <h1>読解に送る</h1>
+  <p id="capture-status" class="hint">記事を待っています…</p>
+  <div id="capture-card" class="card" hidden>
+    <p class="reading-title" id="capture-title"></p>
+    <p class="hint" id="capture-meta"></p>
+    <button type="button" class="btn" id="capture-send">作成してKindleに送る</button>
+  </div>
+  <div id="capture-help" class="card" hidden></div>
+</section>
+<script src="{{extAsset "imaging.js"}}"></script>
+<script src="{{asset "/static/js/reading-capture.js"}}"></script>{{end}}

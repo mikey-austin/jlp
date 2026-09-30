@@ -85,3 +85,8 @@ func (s *Server) settingsPhonePage(w http.ResponseWriter, r *http.Request) {
 		"Bookmarklet": template.URL(bookmarklet(s.publicOrigin(r))),
 	})
 }
+
+func (s *Server) readingCapturePage(w http.ResponseWriter, r *http.Request) {
+	ident, _ := IdentityFrom(r.Context())
+	s.render(w, r, "reading_capture", map[string]any{"Title": "読解に送る", "Identity": ident})
+}

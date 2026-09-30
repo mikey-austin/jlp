@@ -78,3 +78,13 @@ func TestPublicOriginPrefersConfiguredURL(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+func TestReadingCapturePageIsNotAnEdition(t *testing.T) {
+	h, _, _ := readingTestServer(t, false)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/reading/capture", nil))
+	body := rec.Body.String()
+	if rec.Code != 200 || !strings.Contains(body, "/static/js/reading-capture.") || !strings.Contains(body, "imaging.js") {
+		t.Fatalf("reading/capture: %d", rec.Code)
+	}
+}
